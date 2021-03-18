@@ -42,6 +42,13 @@ public class HibernateReactiveTestEndpointFetchLazy {
     }
 
     @GET
+    @Path("/getReferenceBooksWithMutiny/{authorId}")
+    public Uni<Collection<Book>> getReferenceBooksWithMutiny(@PathParam("authorId") Integer authorId) {
+        return Mutiny.fetch(mutinySession.getReference(Author.class, authorId))
+                .chain(author -> Mutiny.fetch(author.getBooks())));
+    }
+
+    @GET
     @Path("/findBooksWithStage/{authorId}")
     public CompletionStage<Collection<Book>> findBooksWithStage(@PathParam("authorId") Integer authorId) {
         return stageSessionFactory.withTransaction((session, tx) -> session
