@@ -29,16 +29,17 @@ import io.smallrye.mutiny.Uni;
 public class HibernateReactiveTestEndpointJoinedSubclass {
 
     @Inject
-    Mutiny.Session session;
+    Uni<Mutiny.Session> uniSession;
 
     @DELETE
     @Path("/deleteBook/{bookId}")
     public Uni<Book> deleteBook(@PathParam("bookId") Integer bookId) {
-        return session.withTransaction(tx -> session
-                .createQuery("delete BookJS where id=:id")
-                .setParameter("id", bookId)
-                .executeUpdate())
-                .chain(() -> session.find(SpellBook.class, bookId));
+        return uniSession
+                .chain(session -> session.withTransaction(tx -> session
+                        .createQuery("delete BookJS where id=:id")
+                        .setParameter("id", bookId)
+                        .executeUpdate())
+                        .chain(() -> session.find(SpellBook.class, bookId)));
     }
 
     @POST
@@ -46,8 +47,9 @@ public class HibernateReactiveTestEndpointJoinedSubclass {
     public Uni<Void> prepareDb() {
         final SpellBook spells = new SpellBook(6, "Necronomicon", true);
 
-        return session.persist(spells)
-                .chain(session::flush);
+        return uniSession
+                .call(session -> session.persist(spells))
+                .chain(Mutiny.Session::flush);
     }
 
     @Entity(name = "SpellBookJS")

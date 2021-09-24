@@ -16,9 +16,9 @@ import io.vertx.mutiny.sqlclient.Tuple;
 public class HibernateReactiveDB2TestEndpoint {
 
     @Inject
-    Mutiny.Session mutinySession;
+    Uni<Mutiny.Session> uniSession;
 
-    // Injecting a Vert.x Pool is not required, it us only used to
+    // Injecting a Vert.x Pool is not required, it's only used to
     // independently validate the contents of the database for the test
     @Inject
     DB2Pool db2Pool;
@@ -27,15 +27,17 @@ public class HibernateReactiveDB2TestEndpoint {
     @Path("/reactiveFindMutiny")
     public Uni<GuineaPig> reactiveFindMutiny() {
         final GuineaPig expectedPig = new GuineaPig(5, "Aloi");
-        return populateDB()
-                .chain(() -> mutinySession.find(GuineaPig.class, expectedPig.getId()));
+        return populateDB().chain(() -> uniSession
+                .chain(mutinySession -> mutinySession
+                        .find(GuineaPig.class, expectedPig.getId())));
     }
 
     @GET
     @Path("/reactivePersist")
     public Uni<String> reactivePersist() {
-        return mutinySession.persist(new GuineaPig(10, "Tulip"))
-                .chain(() -> mutinySession.flush())
+        return uniSession
+                .chain(mutinySession -> mutinySession.persist(new GuineaPig(10, "Tulip"))
+                        .chain(mutinySession::flush))
                 .chain(() -> selectNameFromId(10));
     }
 
@@ -50,9 +52,10 @@ public class HibernateReactiveDB2TestEndpoint {
                     }
                     return name;
                 })
-                .chain(() -> mutinySession.merge(new GuineaPig(5, "Aloi")))
-                .chain(aloi -> mutinySession.remove(aloi))
-                .chain(() -> mutinySession.flush())
+                .chain(() -> uniSession.chain(mutinySession -> mutinySession
+                        .merge(new GuineaPig(5, "Aloi"))
+                        .chain(mutinySession::remove)
+                        .chain(mutinySession::flush)))
                 .chain(() -> selectNameFromId(5))
                 .onItem().ifNotNull().transform(result -> result)
                 .onItem().ifNull().continueWith("OK");
@@ -62,9 +65,11 @@ public class HibernateReactiveDB2TestEndpoint {
     @Path("/reactiveRemoveManagedEntity")
     public Uni<String> reactiveRemoveManagedEntity() {
         return populateDB()
-                .chain(() -> mutinySession.find(GuineaPig.class, 5))
-                .chain(aloi -> mutinySession.remove(aloi))
-                .chain(() -> mutinySession.flush())
+                .chain(() -> uniSession)
+                .chain(mutinySession -> mutinySession
+                        .find(GuineaPig.class, 5)
+                        .chain(mutinySession::remove)
+                        .chain(mutinySession::flush))
                 .chain(() -> selectNameFromId(5))
                 .onItem().ifNotNull().transform(result -> result)
                 .onItem().ifNull().continueWith("OK");
@@ -75,15 +80,16 @@ public class HibernateReactiveDB2TestEndpoint {
     public Uni<String> reactiveUpdate() {
         final String NEW_NAME = "Tina";
         return populateDB()
-                .chain(() -> mutinySession.find(GuineaPig.class, 5))
-                .map(pig -> {
-                    if (NEW_NAME.equals(pig.getName())) {
-                        throw new AssertionError("Pig already had name " + NEW_NAME);
-                    }
-                    pig.setName(NEW_NAME);
-                    return pig;
-                })
-                .chain(() -> mutinySession.flush())
+                .chain(() -> uniSession)
+                .chain(mutinySession -> mutinySession
+                        .find(GuineaPig.class, 5)
+                        .invoke(pig -> {
+                            if (NEW_NAME.equals(pig.getName())) {
+                                throw new AssertionError("Pig already had name " + NEW_NAME);
+                            }
+                            pig.setName(NEW_NAME);
+                        })
+                        .chain(mutinySession::flush))
                 .chain(() -> selectNameFromId(5));
     }
 

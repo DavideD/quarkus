@@ -18,9 +18,9 @@ import io.vertx.mutiny.sqlclient.Tuple;
 public class HibernateReactiveTestEndpoint {
 
     @Inject
-    Mutiny.Session mutinySession;
+    Uni<Mutiny.Session> sessionUni;
 
-    // Injecting a Vert.x Pool is not required, it us only used to
+    // Injecting a Vert.x Pool is not required, it's only used to
     // independently validate the contents of the database for the test
     @Inject
     PgPool pgPool;
@@ -29,16 +29,16 @@ public class HibernateReactiveTestEndpoint {
     @Path("/reactiveFindMutiny")
     public Uni<GuineaPig> reactiveFindMutiny() {
         final GuineaPig expectedPig = new GuineaPig(5, "Aloi");
-        return populateDB().chain(() -> mutinySession.find(GuineaPig.class, expectedPig.getId()));
+        return populateDB().chain(() -> sessionUni.chain(session -> session.find(GuineaPig.class, expectedPig.getId())));
     }
 
     @GET
     @Path("/reactivePersist")
     public Uni<String> reactivePersist() {
         final GuineaPig pig = new GuineaPig(10, "Tulip");
-        return mutinySession
-                .persist(pig)
-                .chain(() -> mutinySession.flush())
+        return sessionUni
+                .call(session -> session.persist(pig))
+                .chain(Mutiny.Session::flush)
                 .chain(() -> selectNameFromId(10));
     }
 
@@ -47,10 +47,10 @@ public class HibernateReactiveTestEndpoint {
     public Uni<FriesianCow> reactiveCowPersist() {
         final FriesianCow cow = new FriesianCow();
         cow.name = "Carolina";
-        return mutinySession
-                .persist(cow)
-                .chain(() -> mutinySession.flush())
-                .chain(s -> mutinySession.createQuery("from FriesianCow f where f.name = :name", FriesianCow.class)
+        return sessionUni
+                .call(session -> session.persist(cow))
+                .call(Mutiny.Session::flush)
+                .chain(s -> s.createQuery("from FriesianCow f where f.name = :name", FriesianCow.class)
                         .setParameter("name", cow.name).getSingleResult());
     }
 
@@ -63,16 +63,11 @@ public class HibernateReactiveTestEndpoint {
                     if (name == null)
                         throw new AssertionError("Database was not populated properly");
                 })
-                .chain(() -> mutinySession.merge(new GuineaPig(5, "Aloi")))
-                .chain(aloi -> mutinySession.remove(aloi))
-                .chain(() -> mutinySession.flush())
-                .chain(() -> selectNameFromId(5))
-                .map(result -> {
-                    if (result == null)
-                        return "OK";
-                    else
-                        return result;
-                });
+                .chain(() -> sessionUni.call(session -> session.merge(new GuineaPig(5, "Aloi"))
+                        .chain(session::remove))
+                        .call(Mutiny.Session::flush)
+                        .chain(() -> selectNameFromId(5))
+                        .map(result -> result == null ? "OK" : result));
     }
 
     @GET
@@ -84,16 +79,11 @@ public class HibernateReactiveTestEndpoint {
                     if (name == null)
                         throw new AssertionError("Database was not populated properly");
                 })
-                .chain(() -> mutinySession.find(GuineaPig.class, 5))
-                .chain(aloi -> mutinySession.remove(aloi))
-                .chain(() -> mutinySession.flush())
-                .chain(() -> selectNameFromId(5))
-                .map(result -> {
-                    if (result == null)
-                        return "OK";
-                    else
-                        return result;
-                });
+                .chain(() -> sessionUni.call(session -> session.find(GuineaPig.class, 5)
+                        .chain(session::remove))
+                        .call(Mutiny.Session::flush)
+                        .chain(() -> selectNameFromId(5))
+                        .map(result -> result == null ? "OK" : result));
     }
 
     @GET
@@ -101,14 +91,14 @@ public class HibernateReactiveTestEndpoint {
     public Uni<String> reactiveUpdate() {
         final String NEW_NAME = "Tina";
         return populateDB()
-                .chain(() -> mutinySession.find(GuineaPig.class, 5))
-                .invoke(pig -> {
-                    if (NEW_NAME.equals(pig.getName()))
-                        throw new AssertionError("Pig already had name " + NEW_NAME);
-                    pig.setName(NEW_NAME);
-                })
-                .chain(() -> mutinySession.flush())
-                .chain(() -> selectNameFromId(5));
+                .chain(() -> sessionUni.call(session -> session.find(GuineaPig.class, 5)
+                        .invoke(pig -> {
+                            if (NEW_NAME.equals(pig.getName()))
+                                throw new AssertionError("Pig already had name " + NEW_NAME);
+                            pig.setName(NEW_NAME);
+                        }))
+                        .call(Mutiny.Session::flush)
+                        .chain(() -> selectNameFromId(5)));
     }
 
     private Uni<RowSet<Row>> populateDB() {
