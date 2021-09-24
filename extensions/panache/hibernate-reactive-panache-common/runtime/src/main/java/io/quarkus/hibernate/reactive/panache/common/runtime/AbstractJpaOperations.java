@@ -22,6 +22,7 @@ import org.hibernate.reactive.mutiny.Mutiny;
 import org.hibernate.reactive.mutiny.Mutiny.Session;
 
 import io.quarkus.arc.Arc;
+import io.quarkus.hibernate.reactive.runtime.ReactiveSessionProducer;
 import io.quarkus.panache.common.Parameters;
 import io.quarkus.panache.common.Sort;
 import io.quarkus.panache.hibernate.common.runtime.PanacheJpaUtil;
@@ -33,6 +34,9 @@ public abstract class AbstractJpaOperations<PanacheQueryType> {
 
     // FIXME: make it configurable?
     static final long TIMEOUT_MS = 5000;
+
+    // Can't use it as we can't register a generic type to be unremovable
+    //private static final TypeLiteral<Uni<Session>> SESSION_UNI_LITERAL = new TypeLiteral<>() {};
 
     private static void executeInVertxEventLoop(Runnable runnable) {
         Vertx vertx = Arc.container().instance(Vertx.class).get();
@@ -53,8 +57,8 @@ public abstract class AbstractJpaOperations<PanacheQueryType> {
         }
     }
 
-    private static Session lookupSessionFromArc() {
-        return Arc.container().instance(Session.class).get();
+    private static Uni<Session> lookupSessionFromArc() {
+        return Arc.container().instance(ReactiveSessionProducer.class).get().createMutinySession();
     }
 
     protected abstract PanacheQueryType createPanacheQuery(Uni<Mutiny.Session> session, String query, String orderBy,
@@ -109,9 +113,8 @@ public abstract class AbstractJpaOperations<PanacheQueryType> {
 
     public boolean isPersistent(Object entity) {
         // only attempt to look up the request context session if it's already there: do not
-        // run the producer method otherwise, before we know which thread we're on
-        Session requestSession = isInRequestContext(Mutiny.Session.class) ? lookupSessionFromArc()
-                : null;
+        // try to open a new Session if it's not open already.
+        Session requestSession = getRequestSessionIfExists();
         if (requestSession != null) {
             return requestSession.contains(entity);
         } else {
@@ -119,8 +122,20 @@ public abstract class AbstractJpaOperations<PanacheQueryType> {
         }
     }
 
+    private static Session getRequestSessionIfExists() {
+        final ReactiveSessionProducer reactiveSessionProducer = Arc.container()
+                .instance(ReactiveSessionProducer.class)
+                .get();
+        return reactiveSessionProducer.getCurrentSessionIfOpen();
+    }
+
     public Uni<Void> flush() {
-        return getSession().chain(Session::flush);
+        final Session requestSessionIfExists = getRequestSessionIfExists();
+        if (requestSessionIfExists != null) {
+            return requestSessionIfExists.flush();
+        } else {
+            return Uni.createFrom().item(null);
+        }
     }
 
     //
@@ -130,11 +145,11 @@ public abstract class AbstractJpaOperations<PanacheQueryType> {
         // Always check if we're running on the event loop: if not,
         // we need to delegate the execution of all tasks on it.
         if (io.vertx.core.Context.isOnEventLoopThread()) {
-            return Uni.createFrom().item(lookupSessionFromArc());
+            return lookupSessionFromArc();
         } else {
             // FIXME: we may need context propagation
             final Executor executor = AbstractJpaOperations::executeInVertxEventLoop;
-            return Uni.createFrom().item(AbstractJpaOperations::lookupSessionFromArc)
+            return lookupSessionFromArc()
                     .runSubscriptionOn(executor);
         }
     }
