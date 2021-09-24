@@ -9,7 +9,6 @@ import java.util.stream.Collectors;
 import javax.persistence.Id;
 import javax.persistence.Transient;
 
-import org.hibernate.reactive.mutiny.Mutiny;
 import org.jboss.jandex.AnnotationInstance;
 import org.jboss.jandex.ClassInfo;
 import org.jboss.jandex.DotName;
@@ -31,6 +30,7 @@ import io.quarkus.hibernate.reactive.panache.PanacheEntity;
 import io.quarkus.hibernate.reactive.panache.PanacheEntityBase;
 import io.quarkus.hibernate.reactive.panache.PanacheRepository;
 import io.quarkus.hibernate.reactive.panache.PanacheRepositoryBase;
+import io.quarkus.hibernate.reactive.runtime.ReactiveSessionProducer;
 import io.quarkus.panache.common.deployment.HibernateEnhancersRegisteredBuildItem;
 import io.quarkus.panache.common.deployment.PanacheJpaEntityOperationsEnhancer;
 import io.quarkus.panache.common.deployment.PanacheMethodCustomizer;
@@ -43,7 +43,8 @@ public final class PanacheHibernateResourceProcessor {
     static final DotName DOTNAME_PANACHE_ENTITY_BASE = DotName.createSimple(PanacheEntityBase.class.getName());
     private static final DotName DOTNAME_PANACHE_ENTITY = DotName.createSimple(PanacheEntity.class.getName());
 
-    private static final DotName DOTNAME_REACTIVE_SESSION = DotName.createSimple(Mutiny.Session.class.getName());
+    private static final DotName DOTNAME_REACTIVE_SESSION_PRODUCER = DotName
+            .createSimple(ReactiveSessionProducer.class.getName());
 
     private static final DotName DOTNAME_ID = DotName.createSimple(Id.class.getName());
     protected static final String META_INF_PANACHE_ARCHIVE_MARKER = "META-INF/panache-archive.marker";
@@ -64,7 +65,7 @@ public final class PanacheHibernateResourceProcessor {
 
     @BuildStep
     UnremovableBeanBuildItem ensureBeanLookupAvailable() {
-        return UnremovableBeanBuildItem.beanTypes(DOTNAME_REACTIVE_SESSION);
+        return UnremovableBeanBuildItem.beanTypes(DOTNAME_REACTIVE_SESSION_PRODUCER);
     }
 
     @BuildStep
