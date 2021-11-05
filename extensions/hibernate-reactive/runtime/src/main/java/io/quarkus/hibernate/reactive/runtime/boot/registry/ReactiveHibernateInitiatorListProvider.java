@@ -20,6 +20,7 @@ import org.hibernate.reactive.provider.service.NoJtaPlatformInitiator;
 import org.hibernate.reactive.provider.service.ReactiveMarkerServiceInitiator;
 import org.hibernate.reactive.provider.service.ReactivePersisterClassResolverInitiator;
 import org.hibernate.reactive.provider.service.ReactiveQueryTranslatorFactoryInitiator;
+import org.hibernate.reactive.provider.service.ReactiveSchemaManagementToolInitiator;
 import org.hibernate.reactive.provider.service.ReactiveSessionFactoryBuilderInitiator;
 import org.hibernate.resource.transaction.internal.TransactionCoordinatorBuilderInitiator;
 import org.hibernate.service.internal.SessionFactoryServiceRegistryFactoryInitiator;
@@ -42,7 +43,7 @@ import io.quarkus.hibernate.reactive.runtime.customized.QuarkusNoJdbcConnectionP
  * ServiceRegistry of a new Hibernate Reactive instance.
  * This is similar to StandardHibernateORMInitiatorListProvider except it will enable the
  * specific customizations to make it Reactive.
- * 
+ *
  * @see StandardHibernateORMInitiatorListProvider
  */
 public final class ReactiveHibernateInitiatorListProvider implements InitialInitiatorListProvider {
@@ -80,6 +81,8 @@ public final class ReactiveHibernateInitiatorListProvider implements InitialInit
         serviceInitiators.add(PersisterFactoryInitiator.INSTANCE);
 
         //Custom for Hibernate Reactive:
+        serviceInitiators.add(ReactiveSchemaManagementToolInitiator.INSTANCE);
+
         serviceInitiators.add(QuarkusNoJdbcConnectionProviderInitiator.INSTANCE);
         serviceInitiators.add(MultiTenantConnectionProviderInitiator.INSTANCE);
         serviceInitiators.add(DialectResolverInitiator.INSTANCE);
