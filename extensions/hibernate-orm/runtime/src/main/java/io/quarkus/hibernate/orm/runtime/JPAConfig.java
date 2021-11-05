@@ -7,8 +7,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
+import java.util.concurrent.CompletionException;
 
 import javax.annotation.PreDestroy;
 import javax.enterprise.context.ApplicationScoped;
@@ -21,6 +20,11 @@ import javax.persistence.Persistence;
 
 import org.jboss.logging.Logger;
 
+import io.vertx.core.CompositeFuture;
+import io.vertx.core.Future;
+import io.vertx.core.Promise;
+import io.vertx.core.Vertx;
+
 @Singleton
 public class JPAConfig {
 
@@ -29,6 +33,9 @@ public class JPAConfig {
     private final Map<String, Set<String>> entityPersistenceUnitMapping;
 
     private final Map<String, LazyPersistenceUnit> persistenceUnits;
+
+    @Inject
+    private Vertx vertx;
 
     @Inject
     public JPAConfig(JPAConfigSupport jpaConfigSupport) {
@@ -42,35 +49,21 @@ public class JPAConfig {
     }
 
     void startAll() {
-        List<CompletableFuture<?>> start = new ArrayList<>();
+        List<Future> started = new ArrayList<>();
         //start PU's in parallel, for faster startup
         //also works around https://github.com/quarkusio/quarkus/issues/17304 to some extent
         //as the main thread is now no longer polluted with ThreadLocals by default
         //this is not a complete fix, but will help as long as the test methods
         //don't access the datasource directly, but only over HTTP calls
-        for (Map.Entry<String, LazyPersistenceUnit> i : persistenceUnits.entrySet()) {
-            CompletableFuture<Object> future = new CompletableFuture<>();
-            start.add(future);
-            new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        i.getValue().get();
-                        future.complete(null);
-                    } catch (Throwable t) {
-                        future.completeExceptionally(t);
-                    }
-                }
-            }, "JPA Startup Thread: " + i.getKey()).start();
+        for (LazyPersistenceUnit pu : persistenceUnits.values()) {
+            started.add(vertx.executeBlocking(pu::start));
         }
-        for (CompletableFuture<?> i : start) {
-            try {
-                i.get();
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            } catch (ExecutionException e) {
-                throw new RuntimeException(e.getCause());
-            }
+
+        try {
+            CompositeFuture.all(started)
+                    .toCompletionStage().toCompletableFuture().join();
+        } catch (CompletionException ce) {
+            throw new RuntimeException(ce.getCause());
         }
     }
 
@@ -153,7 +146,16 @@ public class JPAConfig {
             return value;
         }
 
-        public synchronized void close() {
+      public <T> void start(Promise<T> promise) {
+        try {
+          get();
+          promise.complete();
+        } catch (Throwable t) {
+          promise.fail(t);
+        }
+      }
+
+      public synchronized void close() {
             closed = true;
             EntityManagerFactory emf = this.value;
             this.value = null;
