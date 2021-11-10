@@ -108,13 +108,17 @@ public class JPAConfig {
      * @param event ignored
      */
     void destroy(@Observes @BeforeDestroyed(ApplicationScoped.class) Object event) {
-        for (LazyPersistenceUnit factory : persistenceUnits.values()) {
-            try {
-                factory.close();
-            } catch (Exception e) {
-                LOGGER.warn("Unable to close the EntityManagerFactory: " + factory, e);
-            }
-        }
+      List<Future> closed = new ArrayList<>();
+      for (LazyPersistenceUnit factory : persistenceUnits.values()) {
+        closed.add(vertx.executeBlocking(factory::close ));
+      }
+
+      try {
+        CompositeFuture.all(closed)
+          .toCompletionStage().toCompletableFuture().join();
+      } catch (CompletionException ce) {
+        throw new RuntimeException(ce.getCause());
+      }
     }
 
     @PreDestroy
@@ -152,6 +156,18 @@ public class JPAConfig {
           promise.complete();
         } catch (Throwable t) {
           promise.fail(t);
+        }
+      }
+
+      public <T> void close(Promise<T> promise) {
+        try {
+          close();
+          promise.complete();
+        } catch (Throwable t) {
+          LOGGER.warn("Unable to close the EntityManagerFactory: " + this, t);
+        }
+        finally {
+          promise.complete();
         }
       }
 
