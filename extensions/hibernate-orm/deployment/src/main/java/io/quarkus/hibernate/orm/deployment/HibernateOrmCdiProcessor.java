@@ -1,6 +1,5 @@
 package io.quarkus.hibernate.orm.deployment;
 
-import static io.quarkus.hibernate.orm.deployment.util.HibernateProcessorUtil.hasEntities;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
 import java.lang.reflect.Modifier;
@@ -265,7 +264,7 @@ public class HibernateOrmCdiProcessor {
             CombinedIndexBuildItem combinedIndex,
             List<PersistenceUnitDescriptorBuildItem> descriptors,
             JpaModelBuildItem jpaModel) {
-        if (!hasEntities(jpaModel)) {
+        if (!HibernateOrmProcessor.hasEntities(jpaModel)) {
             return;
         }
 
@@ -294,7 +293,7 @@ public class HibernateOrmCdiProcessor {
     void transformBeans(JpaModelBuildItem jpaModel, JpaModelIndexBuildItem indexBuildItem,
             BeanDiscoveryFinishedBuildItem beans,
             BuildProducer<BytecodeTransformerBuildItem> producer) {
-        if (!hasEntities(jpaModel)) {
+        if (!HibernateOrmProcessor.hasEntities(jpaModel)) {
             return;
         }
 
