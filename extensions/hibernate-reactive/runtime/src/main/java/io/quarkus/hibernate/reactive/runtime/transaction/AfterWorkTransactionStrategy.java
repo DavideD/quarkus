@@ -18,14 +18,11 @@ public class AfterWorkTransactionStrategy implements AfterWorkStrategy<Void> {
 
     @Override
     public Uni<Void> getAfterWorkActions(Context context) {
-        Uni<Void> voidUni = Uni.combine().all().unis(
+        return Uni.combine().all().unis(
                 HibernateReactiveRecorder.OPENED_SESSIONS_STATE.closeAllOpenedSessions(context),
                 HibernateReactiveRecorder.OPENED_SESSIONS_STATE_STATELESS.closeAllOpenedSessions(context))
-                .discardItems();
-        return voidUni.eventually(() -> {
-            // We want to make sure that we clear the state after the closing (and after the flushing) as well
-            context.removeLocal(TRANSACTIONAL_METHOD_KEY);
-        });
-
+                .discardItems()
+                // We want to make sure that we clear the state after the closing (and after the flushing) as well
+                .eventually(() -> context.removeLocal(TRANSACTIONAL_METHOD_KEY));
     }
 }

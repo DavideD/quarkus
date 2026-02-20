@@ -55,16 +55,14 @@ public class HibernateReactiveTransactionsTest {
 
         // Second update, make sure there's a rollback
         asserter.assertThat(
-                () -> sessionFactory.withTransaction(session -> {
-                    return updateHero(session, heroId, "this name won't appear")
-                            .onItem().invoke(h -> {
-                                throw new RuntimeException("Failing update");
-                            });
-                }).onFailure().recoverWithNull()
+                () -> sessionFactory
+                        .withTransaction(session -> updateHero(session, heroId, "this name won't appear")
+                                .onItem().invoke(h -> {
+                                    throw new RuntimeException("Failing update");
+                                }))
+                        .onFailure().recoverWithNull()
                         .chain(() -> sessionFactory.withTransaction(session -> session.find(Hero.class, heroId))),
-                h -> {
-                    assertThat(h.name).isEqualTo("updatedNameCommitted");
-                });
+                h -> assertThat(h.name).isEqualTo("updatedNameCommitted"));
 
         // Verify pool size is back to initial (connection returned)
         asserter.execute(() -> {

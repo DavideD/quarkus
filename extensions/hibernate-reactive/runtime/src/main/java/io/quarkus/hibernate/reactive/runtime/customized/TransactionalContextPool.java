@@ -80,7 +80,6 @@ public class TransactionalContextPool implements Pool {
     }
 
     private boolean shouldOpenTransaction() {
-
         Context context = Vertx.currentContext();
 
         // Vert.x context during DB Validation in startup is null
