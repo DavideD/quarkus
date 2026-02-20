@@ -69,7 +69,7 @@ public abstract class TransactionalInterceptorBase {
     }
 
     protected <T> Uni<T> defineReactiveTransactionalChain(Transactional annotation, Method method, Supplier<Uni<T>> work) {
-        Context context = vertxContext();
+        final Context context = vertxContext();
 
         // This is the parent method, responsible to commit, rollback or cancel the transaction
         if (context.getLocal(TRANSACTIONAL_METHOD_KEY) == null) {
@@ -83,24 +83,21 @@ public abstract class TransactionalInterceptorBase {
             context.putLocal(TRANSACTIONAL_METHOD_KEY, true);
 
             return work.get()
-                    .eventually(() -> {
-                        // Closing of Hibernate sessions is made here
-                        return Uni.combine().all().unis(afterWorkStrategy.getAfterWorkActions(context)).discardItems();
-                    })
-                    .onFailure().call(exception -> {
-                        return rollbackOrCommitBasedOnException(annotation, exception);
-                    })
-                    .onCancellation().call(() -> {
-                        return rollbackOnCancel();
-                    })
-                    .call(() -> { // Good path - commit
+                    .onFailure().call(exception -> rollbackOrCommitBasedOnException(annotation, exception))
+                    .onCancellation().call(this::rollbackOnCancel)
+                    .call(() -> {
+                        // Good path - commit
                         LOG.tracef("Calling commit from method %s", method);
                         return commit();
-                    });
-        } else {
-            // Nested methods should just propagate the reactive chain without transaction handling
-            return work.get();
+                    })
+                    .eventually(() -> Uni.combine().all()
+                            // Closing of Hibernate sessions is made here
+                            .unis(afterWorkStrategy.getAfterWorkActions(context))
+                            .discardItems());
         }
+
+        // Nested methods should just propagate the reactive chain without transaction handling
+        return work.get();
     }
 
     Transaction transactionFromContext() {
@@ -116,25 +113,27 @@ public abstract class TransactionalInterceptorBase {
             // We then avoid committing the transaction here, and we rely on Hibernate Reactive
             // committing the transaction after closing
             LOG.tracef("Transaction doesn't exist, so won't commit here %s");
-            return Uni.createFrom().nullItem();
+            return Uni.createFrom().voidItem();
         }
 
-        return Uni.createFrom().completionStage(transaction.commit()
-                .onSuccess(v -> LOG.tracef("Transaction committed: %s", transaction))
-                .onFailure(v -> LOG.tracef("Failed to commit transaction: %s", transaction))
-                .toCompletionStage());
+        return Uni.createFrom()
+                // In theory, .commit() could throw an exception before returning a future.
+                // We are using a supplier so that we can catch it. I don't know if it could actually happen.
+                .completionStage(() -> transaction.commit().toCompletionStage())
+                .invoke(() -> LOG.tracef("Transaction committed: %s", transaction))
+                .onFailure().invoke(t -> LOG.tracef("Failed to commit transaction: %s", transaction))
+                .replaceWithVoid();
     }
 
     Uni<Void> rollbackOnCancel() {
         Transaction transaction = transactionFromContext();
-        return Uni.createFrom().completionStage(transaction.rollback()
-                .onFailure(v -> {
-                    LOG.tracef("Failed to rollback transaction on cancellation: %s", transaction);
-                })
-                .onSuccess(ignored -> {
-                    LOG.tracef("Transaction rolled back due to cancellation: %s", transaction);
-                })
-                .toCompletionStage());
+        return Uni.createFrom()
+                // In theory, .rollback() could throw an exception before returning a future.
+                // We are using a supplier so that we can catch it. I don't know if it could actually happen.
+                .completionStage(() -> transaction.commit().toCompletionStage())
+                .invoke(() -> LOG.tracef("Transaction rolled back due to cancellation: %s", transaction))
+                .onFailure().invoke(t -> LOG.tracef("Failed to rollback transaction on cancellation: %s", transaction))
+                .replaceWithVoid();
     }
 
     // Based on org/hibernate/reactive/pool/impl/SqlClientConnection.java:314
@@ -177,15 +176,11 @@ public abstract class TransactionalInterceptorBase {
     }
 
     private Uni<Void> actualRollback(Transaction transaction, Throwable exception) {
-        return Uni.createFrom().completionStage(
-                transaction.rollback()
-                        .onFailure(v -> {
-                            LOG.tracef("Failed to rollback transaction: %s", transaction);
-                        })
-                        .onSuccess(ignored -> {
-                            LOG.tracef("Transaction rolled back: %s due to exception %s", transaction, exception);
-                        })
-                        .toCompletionStage());
+        return Uni.createFrom()
+                .completionStage(() -> transaction.rollback().toCompletionStage())
+                .invoke(() -> LOG.tracef("Transaction rolled back: %s due to exception %s", transaction, exception))
+                .onFailure().invoke(t -> LOG.tracef("Failed to rollback transaction: %s", transaction))
+                .replaceWithVoid();
     }
 
     @SuppressWarnings("unchecked")
