@@ -1,5 +1,7 @@
 package io.quarkus.hibernate.reactive.transaction;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 import jakarta.inject.Inject;
@@ -82,37 +84,18 @@ public class HibernateReactiveTransactionsTest {
     @Test
     @RunOnVertxContext
     public void testReactiveAnnotationTransaction(UniAsserter asserter) {
-        // initialTransactionData.sql
-        Long heroId = 50L;
+        // We want to insert a new hero, but an error occurs
+        asserter.assertFailedWith(
+                () -> transactionalPersistWithRollback( "Invincible" ),
+                t -> assertThat( t ).hasMessageContaining( "Oh NO!" )
+        );
 
-        int originalPoolSize = pool.size();
-
-        // First update, make sure it's committed
-        asserter.assertThat(
-                () -> updateWithCommit(heroId, "updatedNameCommitted")
-                        .chain(() -> findHero(heroId)),
-                h -> {
-                    assertThat(h.name).isEqualTo("updatedNameCommitted");
-                });
-
-        // Second update, make sure there's a rollback
-        asserter.assertThat(
-                () -> transactionalUpdateWithRollback(heroId, "this name won't appear")
-                        .onFailure().recoverWithNull()
-                        .chain(() -> findHero(heroId)),
-                h -> {
-                    assertThat(h.name).isEqualTo("updatedNameCommitted");
-                });
-
-        // Verify pool size is back to initial (connection returned)
-        // Actually with quarkus.datasource.reactive.max-size=1 specified in application-reactive-transaction.properties
-        // if we don't close the connections the test will hang while acquiring the new connection after the first update
-        // Better test it anyway
-        asserter.execute(() -> {
-            int nowSize = pool.size();
-            assertThat(originalPoolSize).isEqualTo(nowSize);
-        });
+        // Transaction should have been roll-backed, let's check the content of the db
+        asserter.assertThat( this::selectHeroes, heroes -> assertThat( heroes )
+                .extracting( Hero::getName )
+                .containsExactly( "initialName" ) );
     }
+
 
     @Test
     @RunOnVertxContext
@@ -151,6 +134,30 @@ public class HibernateReactiveTransactionsTest {
                 .onItem().invoke(h -> {
                     throw new RuntimeException("Failing update");
                 });
+    }
+
+    @Transactional
+    public Uni<Hero> transactionalPersistWithRollback(String newName) {
+        return persistHero( session, newName )
+                .onItem().invoke( h -> {
+                    throw new RuntimeException( "Oh NO! I cannot create the hero [" + h + "]" );
+                } );
+    }
+
+    @Transactional
+    public Uni<List<Hero>> selectHeroes() {
+        return session.createSelectionQuery( "from Hero", Hero.class ).getResultList();
+    }
+
+    public Uni<Hero> persistHero(Mutiny.Session session, String newName) {
+        Hero hero = new Hero();
+        hero.setName( newName );
+        return session
+                .persist( hero )
+                // In the real world, flushing is not required, but I want to run the query on the database
+                // before rolling back
+                .call( session::flush )
+                .replaceWith( hero );
     }
 
     public Uni<Hero> updateHero(Mutiny.Session session, Long id, String newName) {
