@@ -1,12 +1,14 @@
 package io.quarkus.hibernate.reactive.runtime;
 
 import static io.quarkus.hibernate.orm.runtime.PersistenceUnitUtil.DEFAULT_PERSISTENCE_UNIT_NAME;
+import static java.util.function.Function.identity;
 
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 
 import org.hibernate.reactive.common.spi.Implementor;
 import org.hibernate.reactive.context.Context.Key;
@@ -18,6 +20,7 @@ import io.quarkus.arc.Arc;
 import io.quarkus.arc.ClientProxy;
 import io.quarkus.arc.impl.ComputingCache;
 import io.quarkus.hibernate.orm.PersistenceUnit;
+import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.Uni;
 import io.vertx.core.Context;
 
@@ -63,17 +66,21 @@ public abstract class OpenedSessionsState<T extends Mutiny.Closeable> {
         if (onDemandSessionCreated.isEmpty()) {
             return Uni.createFrom().voidItem();
         }
-        List<Uni<Void>> closedSessionsUnis = new ArrayList<>();
-        for (String sessionName : onDemandSessionCreated) {
-
-            Uni<Void> closeSessionUni = getOpenedSession(context, sessionName)
-                    .map(session -> closeAndRemoveSession(context, session))
-                    .orElse(Uni.createFrom().voidItem());
-
-            closedSessionsUnis.add(closeSessionUni);
+        final List<Uni<Void>> closedSessionsUnis = new ArrayList<>();
+        for ( String sessionName : onDemandSessionCreated ) {
+            var uni = getOpenedSession( context, sessionName )
+                    .map( session -> closeAndRemoveSession( context, session ) )
+                    .orElse( Uni.createFrom().voidItem() );
+            closedSessionsUnis.add( uni );
         }
-        context.removeLocal(sessionOnDemandKey);
-        return Uni.combine().all().unis(closedSessionsUnis).discardItems();
+        // FIXME: I don't know if this approach is better than chaining the unis in a loop
+        return Multi
+                .createFrom().iterable( closedSessionsUnis )
+                .onItem().transformToUniAndConcatenate( identity() )
+                .collect().asList()
+                // FIXME: should we use .eventually here? (instead of .invoke)
+                .invoke( list -> context.removeLocal( sessionOnDemandKey ) )
+                .replaceWithVoid();
     }
 
     public T createNewSession(String persistenceUnitName, Context context) {
