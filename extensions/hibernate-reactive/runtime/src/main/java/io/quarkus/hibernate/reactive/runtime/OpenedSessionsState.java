@@ -104,19 +104,10 @@ public abstract class OpenedSessionsState<T extends Mutiny.Closeable> {
     }
 
     private Uni<Void> closeAndRemoveSession(Context context, SessionWithKey<T> openSession) {
-        // Force flushing in case there are pending operations in the session
-        return eventuallyFlush(openSession.session)
-                .chain(() -> openSession.session.close())
+        return Uni.createFrom()
+                // I'm using deferred  in case .close throws an exception before returning a value
+                .deferred( openSession.session::close )
                 .eventually(() -> context.removeLocal(openSession.key));
-    }
-
-    private static <T extends Mutiny.Closeable> Uni<Void> eventuallyFlush(T session) {
-        if (session instanceof Mutiny.Session) {
-            LOG.tracef("Flushing the session");
-            return ((Mutiny.Session) session).flush();
-        } else {
-            return Uni.createFrom().voidItem();
-        }
     }
 
     private Key<T> createKeyForSessionType(String persistenceUnitName) {
