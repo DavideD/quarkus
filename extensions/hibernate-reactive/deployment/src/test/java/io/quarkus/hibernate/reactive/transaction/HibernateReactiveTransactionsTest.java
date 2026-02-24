@@ -1,6 +1,7 @@
 package io.quarkus.hibernate.reactive.transaction;
 
 import java.util.List;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -83,10 +84,11 @@ public class HibernateReactiveTransactionsTest {
      */
     @Test
     @RunOnVertxContext
-    public void testReactiveAnnotationTransactionRollback(UniAsserter asserter) {
+    public void testRollbackWithTransactional(UniAsserter asserter) {
+        Hero invincible = new Hero(50L, "Invincible");
         // We want to insert a new hero, but an error occurs
         asserter.assertFailedWith(
-                () -> transactionalPersistWithFailure( "Invincible" ),
+                () -> transactional( session -> session.persist( new Hero( id) ) ),
                 t -> assertThat( t ).hasMessageContaining( "Oh NO!" )
         );
 
@@ -125,6 +127,11 @@ public class HibernateReactiveTransactionsTest {
                     assertThat(h.name).isEqualTo("updatedNameTwiceCommitted");
                 });
 
+    }
+
+    @Transactional
+    public <T> Uni<T> transactional(Function<Mutiny.Session, Uni<T>> fun) {
+        return fun.apply( session );
     }
 
     @Transactional
