@@ -83,10 +83,10 @@ public class HibernateReactiveTransactionsTest {
      */
     @Test
     @RunOnVertxContext
-    public void testReactiveAnnotationTransaction(UniAsserter asserter) {
+    public void testReactiveAnnotationTransactionRollback(UniAsserter asserter) {
         // We want to insert a new hero, but an error occurs
         asserter.assertFailedWith(
-                () -> transactionalPersistWithRollback( "Invincible" ),
+                () -> transactionalPersistWithFailure( "Invincible" ),
                 t -> assertThat( t ).hasMessageContaining( "Oh NO!" )
         );
 
@@ -96,6 +96,21 @@ public class HibernateReactiveTransactionsTest {
                 .containsExactly( "initialName" ) );
     }
 
+    /*
+     * This is the same test as #testReactiveManualTransaction but instead of manually calling sessionFactory.withTransaction
+     * We use the annotation @Transactional
+     */
+    @Test
+    @RunOnVertxContext
+    public void testReactiveAnnotationTransactionCommit(UniAsserter asserter) {
+        // We want to insert a new hero, but an error occurs
+        asserter.execute( () -> transactionalPersist( "Invincible" ) );
+
+        // Transaction should have been roll-backed, let's check the content of the db
+        asserter.assertThat( this::selectHeroes, heroes -> assertThat( heroes )
+                .extracting( Hero::getName )
+                .containsExactly( "Invincible" ) );
+    }
 
     @Test
     @RunOnVertxContext
@@ -137,11 +152,15 @@ public class HibernateReactiveTransactionsTest {
     }
 
     @Transactional
-    public Uni<Hero> transactionalPersistWithRollback(String newName) {
+    public Uni<Hero> transactionalPersistWithFailure(String newName) {
         return persistHero( session, newName )
                 .onItem().invoke( h -> {
                     throw new RuntimeException( "Oh NO! I cannot create the hero [" + h + "]" );
                 } );
+    }
+    @Transactional
+    public Uni<Hero> transactionalPersist(String newName) {
+        return persistHero( session, newName );
     }
 
     @Transactional
