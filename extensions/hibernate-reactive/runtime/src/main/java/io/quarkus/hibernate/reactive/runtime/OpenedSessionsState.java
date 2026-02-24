@@ -37,10 +37,10 @@ public abstract class OpenedSessionsState<T extends Mutiny.Closeable> {
     protected abstract boolean isSessionOpen(T session);
 
     private final ComputingCache<String, Key<T>> sessionKeys = new ComputingCache<>(
-            k -> createKeyForSessionType(k));
+            this::createKeyForSessionType);
 
     private final ComputingCache<String, Mutiny.SessionFactory> sessionFactories = new ComputingCache<>(
-            k -> createSessionFactory(k));
+            OpenedSessionsState::createSessionFactory);
 
     protected OpenedSessionsState() {
         sessionOnDemandKey = "hibernate.reactive.openedSessionState." + getSessionType().getName();
@@ -57,7 +57,7 @@ public abstract class OpenedSessionsState<T extends Mutiny.Closeable> {
     private Optional<SessionWithKey<T>> getOpenedSession(Context context, Key<T> sessionKey) {
         T current = context.getLocal(sessionKey);
         return Optional.ofNullable(current)
-                .filter(s -> isSessionOpen(s))
+                .filter(this::isSessionOpen)
                 .map(s -> new SessionWithKey<>(sessionKey, s));
     }
 
