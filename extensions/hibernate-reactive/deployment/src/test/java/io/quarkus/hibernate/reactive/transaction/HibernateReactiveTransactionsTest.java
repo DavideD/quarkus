@@ -3,12 +3,10 @@ package io.quarkus.hibernate.reactive.transaction;
 import java.util.List;
 import java.util.function.Function;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
-import jakarta.inject.Inject;
-import jakarta.transaction.Transactional;
-
 import org.hibernate.reactive.mutiny.Mutiny;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
@@ -18,6 +16,11 @@ import io.quarkus.test.vertx.RunOnVertxContext;
 import io.quarkus.test.vertx.UniAsserter;
 import io.smallrye.mutiny.Uni;
 import io.vertx.mutiny.sqlclient.Pool;
+import jakarta.inject.Inject;
+import jakarta.transaction.Transactional;
+import org.assertj.core.api.Assertions;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 public class HibernateReactiveTransactionsTest {
 
@@ -35,6 +38,18 @@ public class HibernateReactiveTransactionsTest {
     @Inject
     Pool pool;
 
+    int initialPoolSize;
+
+    @BeforeEach
+    public void savePoolSize() {
+        initialPoolSize = pool.size();
+    }
+
+    @AfterEach
+    public void checkPollSize() {
+        Assertions.assertThat(pool.size()).isEqualTo(initialPoolSize);
+    }
+
     /**
      * This test shows how to use hibernate reactive .withTransaction to set transactional boundaries
      * Below there's testReactiveAnnotationTransaction which is the same test but with @Transactional
@@ -46,8 +61,6 @@ public class HibernateReactiveTransactionsTest {
     public void testReactiveManualTransaction(UniAsserter asserter) {
         // initialTransactionData.sql
         Long heroId = 50L;
-
-        int originalPoolSize = pool.size();
 
         // First update, make sure it's committed
         asserter.assertThat(
@@ -66,52 +79,40 @@ public class HibernateReactiveTransactionsTest {
                         .onFailure().recoverWithNull()
                         .chain(() -> sessionFactory.withTransaction(session -> session.find(Hero.class, heroId))),
                 h -> assertThat(h.name).isEqualTo("updatedNameCommitted"));
-
-        // Verify pool size is back to initial (connection returned)
-        asserter.execute(() -> {
-            int nowSize = pool.size();
-            assertThat(originalPoolSize).isEqualTo(nowSize);
-        });
-
     }
 
     @Inject
     Mutiny.Session session;
 
-    /*
-     * This is the same test as #testReactiveManualTransaction but instead of manually calling sessionFactory.withTransaction
-     * We use the annotation @Transactional
-     */
     @Test
     @RunOnVertxContext
-    public void testRollbackWithTransactional(UniAsserter asserter) {
-        Hero invincible = new Hero(50L, "Invincible");
+    public void transactionalAnnotationRollback(UniAsserter asserter) {
         // We want to insert a new hero, but an error occurs
         asserter.assertFailedWith(
-                () -> transactional( session -> session.persist( new Hero( id) ) ),
-                t -> assertThat( t ).hasMessageContaining( "Oh NO!" )
-        );
+                () -> transactional(session -> session
+                        .persist(new Hero("Invincible"))
+                        .invoke(h -> {
+                            throw new RuntimeException("Oh NO! I cannot create the hero [" + h + "]");
+                        })),
+                t -> assertThat(t).hasMessageContaining("Oh NO!"));
 
         // Transaction should have been roll-backed, let's check the content of the db
-        asserter.assertThat( this::selectHeroes, heroes -> assertThat( heroes )
-                .extracting( Hero::getName )
-                .containsExactly( "initialName" ) );
+        asserter.assertThat(this::selectHeroes, heroes -> assertThat(heroes)
+                .extracting(Hero::getName)
+                .containsExactly("initialName"));
     }
 
-    /*
-     * This is the same test as #testReactiveManualTransaction but instead of manually calling sessionFactory.withTransaction
-     * We use the annotation @Transactional
-     */
     @Test
     @RunOnVertxContext
-    public void testReactiveAnnotationTransactionCommit(UniAsserter asserter) {
-        // We want to insert a new hero, but an error occurs
-        asserter.execute( () -> transactionalPersist( "Invincible" ) );
+    public void transactionalAnnotationCommit(UniAsserter asserter) {
+        Hero spalman = new Hero("Spalman");
+        // A regular persist
+        asserter.execute(() -> transactional(session -> session.persist(spalman)));
 
-        // Transaction should have been roll-backed, let's check the content of the db
-        asserter.assertThat( this::selectHeroes, heroes -> assertThat( heroes )
-                .extracting( Hero::getName )
-                .containsExactly( "Invincible" ) );
+        asserter.assertThat(
+                () -> transactional(s -> s.find(Hero.class, spalman.id)),
+                hero -> assertThat(hero).extracting(Hero::getName).isEqualTo(spalman.name)
+        );
     }
 
     @Test
@@ -129,9 +130,14 @@ public class HibernateReactiveTransactionsTest {
 
     }
 
+    /**
+     * Emulates the call to a method annotated with @{@link Transactional}
+     * that uses the {@link org.hibernate.reactive.mutiny.Mutiny.Session}.
+     * This way we don't have to create a new method everytime we want to add a test.
+     */
     @Transactional
     public <T> Uni<T> transactional(Function<Mutiny.Session, Uni<T>> fun) {
-        return fun.apply( session );
+        return fun.apply(session);
     }
 
     @Transactional
@@ -160,30 +166,31 @@ public class HibernateReactiveTransactionsTest {
 
     @Transactional
     public Uni<Hero> transactionalPersistWithFailure(String newName) {
-        return persistHero( session, newName )
-                .onItem().invoke( h -> {
-                    throw new RuntimeException( "Oh NO! I cannot create the hero [" + h + "]" );
-                } );
+        return persistHero(session, newName)
+                .onItem().invoke(h -> {
+                    throw new RuntimeException("Oh NO! I cannot create the hero [" + h + "]");
+                });
     }
+
     @Transactional
     public Uni<Hero> transactionalPersist(String newName) {
-        return persistHero( session, newName );
+        return persistHero(session, newName);
     }
 
     @Transactional
     public Uni<List<Hero>> selectHeroes() {
-        return session.createSelectionQuery( "from Hero", Hero.class ).getResultList();
+        return session.createSelectionQuery("from Hero", Hero.class).getResultList();
     }
 
     public Uni<Hero> persistHero(Mutiny.Session session, String newName) {
         Hero hero = new Hero();
-        hero.setName( newName );
+        hero.setName(newName);
         return session
-                .persist( hero )
+                .persist(hero)
                 // In the real world, flushing is not required, but I want to run the query on the database
                 // before rolling back
-                .call( session::flush )
-                .replaceWith( hero );
+                .call(session::flush)
+                .replaceWith(hero);
     }
 
     public Uni<Hero> updateHero(Mutiny.Session session, Long id, String newName) {
