@@ -8,7 +8,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
-import java.util.function.Function;
 
 import org.hibernate.reactive.common.spi.Implementor;
 import org.hibernate.reactive.context.Context.Key;
@@ -67,19 +66,19 @@ public abstract class OpenedSessionsState<T extends Mutiny.Closeable> {
             return Uni.createFrom().voidItem();
         }
         final List<Uni<Void>> closedSessionsUnis = new ArrayList<>();
-        for ( String sessionName : onDemandSessionCreated ) {
-            var uni = getOpenedSession( context, sessionName )
-                    .map( session -> closeAndRemoveSession( context, session ) )
-                    .orElse( Uni.createFrom().voidItem() );
-            closedSessionsUnis.add( uni );
+        for (String sessionName : onDemandSessionCreated) {
+            var uni = getOpenedSession(context, sessionName)
+                    .map(session -> closeAndRemoveSession(context, session))
+                    .orElse(Uni.createFrom().voidItem());
+            closedSessionsUnis.add(uni);
         }
         // FIXME: I don't know if this approach is better than chaining the unis in a loop
         return Multi
-                .createFrom().iterable( closedSessionsUnis )
-                .onItem().transformToUniAndConcatenate( identity() )
+                .createFrom().iterable(closedSessionsUnis)
+                .onItem().transformToUniAndConcatenate(identity())
                 .collect().asList()
                 // FIXME: should we use .eventually here? (instead of .invoke)
-                .invoke( list -> context.removeLocal( sessionOnDemandKey ) )
+                .invoke(list -> context.removeLocal(sessionOnDemandKey))
                 .replaceWithVoid();
     }
 
@@ -113,7 +112,7 @@ public abstract class OpenedSessionsState<T extends Mutiny.Closeable> {
     private Uni<Void> closeAndRemoveSession(Context context, SessionWithKey<T> openSession) {
         return Uni.createFrom()
                 // I'm using deferred  in case .close throws an exception before returning a value
-                .deferred( openSession.session::close )
+                .deferred(openSession.session::close)
                 .eventually(() -> context.removeLocal(openSession.key));
     }
 

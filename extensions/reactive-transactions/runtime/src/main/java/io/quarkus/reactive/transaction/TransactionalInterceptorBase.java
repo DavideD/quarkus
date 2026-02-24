@@ -52,7 +52,7 @@ public abstract class TransactionalInterceptorBase {
 
     public Object doIntercept(InvocationContext context, AfterWorkStrategy<?> afterWorkStrategy) throws Exception {
         Method method = context.getMethod();
-        LOG.tracef("Starting Transactional interceptor from method %s", method);
+        LOG.tracef("Starting Transactional for %s", method);
         this.afterWorkStrategy = afterWorkStrategy;
 
         if (reactiveInterceptorShouldRun()) {
@@ -60,9 +60,7 @@ public abstract class TransactionalInterceptorBase {
             validateLegacyPanacheAnnotations();
 
             Transactional annotation = getTransactionalAnnotation(context);
-            return defineReactiveTransactionalChain(annotation, method, () -> {
-                return proceedUni(context);
-            });
+            return defineReactiveTransactionalChain(annotation, method, () -> proceedUni(context));
         }
         LOG.tracef("Transactional interceptor end from method %s", method);
         return context.proceed();
@@ -85,11 +83,8 @@ public abstract class TransactionalInterceptorBase {
             return work.get()
                     .onFailure().call(exception -> rollbackOrCommitBasedOnException(annotation, exception))
                     .onCancellation().call(this::rollbackOnCancel)
-                    .call(() -> {
-                        // Good path - commit
-                        LOG.tracef("Calling commit from method %s", method);
-                        return commit();
-                    })
+                    .invoke( () -> LOG.tracef("Calling commit from method %s", method) )
+                    .call(this::commit)
                     .eventually(() -> Uni.combine().all()
                             // Closing of Hibernate sessions is made here
                             .unis(afterWorkStrategy.getAfterWorkActions(context))
@@ -130,7 +125,7 @@ public abstract class TransactionalInterceptorBase {
         return Uni.createFrom()
                 // In theory, .rollback() could throw an exception before returning a future.
                 // We are using a supplier so that we can catch it. I don't know if it could actually happen.
-                .completionStage(() -> transaction.commit().toCompletionStage())
+                .completionStage(() -> transaction.rollback().toCompletionStage())
                 .invoke(() -> LOG.tracef("Transaction rolled back due to cancellation: %s", transaction))
                 .onFailure().invoke(t -> LOG.tracef("Failed to rollback transaction on cancellation: %s", transaction))
                 .replaceWithVoid();

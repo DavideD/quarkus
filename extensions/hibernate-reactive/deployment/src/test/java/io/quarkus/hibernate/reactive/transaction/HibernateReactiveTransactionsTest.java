@@ -86,7 +86,7 @@ public class HibernateReactiveTransactionsTest {
 
     @Test
     @RunOnVertxContext
-    public void transactionalAnnotationRollback(UniAsserter asserter) {
+    public void transactionalAnnotationPersistRollback(UniAsserter asserter) {
         // We want to insert a new hero, but an error occurs
         asserter.assertFailedWith(
                 () -> transactional(session -> session
@@ -104,7 +104,7 @@ public class HibernateReactiveTransactionsTest {
 
     @Test
     @RunOnVertxContext
-    public void transactionalAnnotationCommit(UniAsserter asserter) {
+    public void transactionalAnnotationPersistCommit(UniAsserter asserter) {
         Hero spalman = new Hero("Spalman");
         // A regular persist
         asserter.execute(() -> transactional(session -> session.persist(spalman)));
@@ -170,11 +170,6 @@ public class HibernateReactiveTransactionsTest {
                 .onItem().invoke(h -> {
                     throw new RuntimeException("Oh NO! I cannot create the hero [" + h + "]");
                 });
-    }
-
-    @Transactional
-    public Uni<Hero> transactionalPersist(String newName) {
-        return persistHero(session, newName);
     }
 
     @Transactional
