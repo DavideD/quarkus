@@ -1,17 +1,22 @@
 package io.quarkus.test.common;
 
+import static io.quarkus.test.common.http.TestHTTPResourceManager.host;
+import static io.quarkus.test.common.http.TestHTTPResourceManager.rootPath;
+
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.ServiceLoader;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -21,11 +26,12 @@ import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import org.eclipse.microprofile.config.Config;
 import org.eclipse.microprofile.config.ConfigProvider;
 
-import io.quarkus.test.common.http.TestHTTPResourceManager;
-import io.quarkus.utilities.OS;
+import com.google.common.annotations.VisibleForTesting;
+
+import io.smallrye.common.os.OS;
+import io.smallrye.config.SmallRyeConfig;
 
 public final class LauncherUtil {
 
@@ -34,9 +40,26 @@ public final class LauncherUtil {
     private LauncherUtil() {
     }
 
-    @Deprecated(forRemoval = true, since = "3.17")
-    public static Config installAndGetSomeConfig() {
-        return ConfigProvider.getConfig();
+    /**
+     * Generates the value of <code>test.url</code> to pass as an argument to integration tests launchers.
+     * <p>
+     * Ideally, we shouldn't be using the configuration system to discover the url. We are keeping this for
+     * compatibility reasons, and it should be reworked with
+     * <a href="https://github.com/quarkusio/quarkus/discussions/46915">#45915</a>.
+     *
+     * @return a String with the <code>test.url</code> value to be evaluated by the running Quarkus Config instance.
+     */
+    // TODO - Replace internal usages of test.url with io.quarkus.vertx.http.HttpServer.getLocalBaseUri
+    static String generateTestUrl() {
+        SmallRyeConfig config = ConfigProvider.getConfig().unwrap(SmallRyeConfig.class);
+        String host = host(config, "quarkus.http.host");
+        // These are build time properties so it is fine to evaluate them here as they will not change
+        String rootPath = rootPath(config);
+        if (rootPath.endsWith("/")) {
+            rootPath = rootPath.substring(0, rootPath.length() - 1);
+        }
+        // We want to keep `quarkus.http.test-port` as an expression so it is evaluated correctly if is random
+        return "http://" + host + ":${quarkus.http.test-port:8081}" + rootPath;
     }
 
     /**
@@ -46,32 +69,20 @@ public final class LauncherUtil {
      * as can be seen in <a href="https://github.com/quarkusio/quarkus/issues/33229">here</a>
      */
     static Process launchProcessAndDrainIO(List<String> args, Map<String, String> env) throws IOException {
-        Process process = launchProcess(args, env);
-        new Thread(new ProcessReader(process.getInputStream())).start();
-        new Thread(new ProcessReader(process.getErrorStream())).start();
+        ProcessBuilder pb = new ProcessBuilder(args).redirectInput(ProcessBuilder.Redirect.INHERIT);
+        pb.environment().putAll(env);
+        var process = pb.start();
+        new Thread(new ProcessReader(process)).start();
         return process;
     }
 
     /**
-     * Launches a process using the supplied arguments but does drain the IO
+     * Launches a process using the supplied arguments but does not drain the IO
      */
     static Process launchProcess(List<String> args, Map<String, String> env) throws IOException {
-        Process process;
-        if (env.isEmpty()) {
-            process = Runtime.getRuntime().exec(args.toArray(new String[0]));
-        } else {
-            Map<String, String> currentEnv = System.getenv();
-            Map<String, String> finalEnv = new HashMap<>(currentEnv);
-            finalEnv.putAll(env);
-            String[] envArray = new String[finalEnv.size()];
-            int i = 0;
-            for (var entry : finalEnv.entrySet()) {
-                envArray[i] = entry.getKey() + "=" + entry.getValue();
-                i++;
-            }
-            process = Runtime.getRuntime().exec(args.toArray(new String[0]), envArray);
-        }
-        return process;
+        ProcessBuilder pb = new ProcessBuilder(args);
+        pb.environment().putAll(env);
+        return pb.start();
     }
 
     /**
@@ -79,7 +90,7 @@ public final class LauncherUtil {
      * listening on.
      * If the wait time is exceeded an {@code IllegalStateException} is thrown.
      */
-    static ListeningAddress waitForCapturedListeningData(Process quarkusProcess, Path logFile, long waitTimeSeconds) {
+    static Optional<ListeningAddress> waitForCapturedListeningData(Process quarkusProcess, Path logFile, long waitTimeSeconds) {
         ensureProcessIsAlive(quarkusProcess);
 
         CountDownLatch signal = new CountDownLatch(1);
@@ -91,7 +102,7 @@ public final class LauncherUtil {
             signal.await(waitTimeSeconds + 2, TimeUnit.SECONDS); // wait enough for the signal to be given by the capturing thread
             ListeningAddress result = resultReference.get();
             if (result != null) {
-                return result;
+                return result.port() != null && result.protocol() != null ? Optional.of(result) : Optional.empty();
             }
             // a null result means that we could not determine the status of the process so we need to abort testing
             destroyProcess(quarkusProcess);
@@ -113,7 +124,7 @@ public final class LauncherUtil {
             int exit = quarkusProcess.exitValue();
             String message = "Unable to successfully launch process '" + quarkusProcess.pid() + "'. Exit code is: '"
                     + exit + "'.";
-            if (OS.determineOS().equals(OS.MAC) && exit == 126) {
+            if (OS.current() == OS.MAC && exit == 126) {
                 message += System.lineSeparator()
                         + "This may be caused by building the native binary in a Linux container while the host is macOS.";
             }
@@ -126,9 +137,13 @@ public final class LauncherUtil {
      * and resort to forceful destruction if necessary
      */
     static void destroyProcess(Process quarkusProcess) {
+        destroyProcess(quarkusProcess, Duration.ofSeconds(10));
+    }
+
+    public static void destroyProcess(Process quarkusProcess, Duration waitTime) {
         quarkusProcess.destroy();
-        int i = 0;
-        while (i++ < 10) {
+        Instant max = Instant.now().plus(waitTime);
+        while (Instant.now().isBefore(max)) {
             try {
                 Thread.sleep(LOG_CHECK_INTERVAL);
             } catch (InterruptedException ignored) {
@@ -218,19 +233,6 @@ public final class LauncherUtil {
             throw new RuntimeException("Unable to start target quarkus application " + waitTimeSeconds + "s");
         }
         return result;
-    }
-
-    /**
-     * Updates the configuration necessary to make all test systems knowledgeable about the port on which the launched
-     * process is listening
-     */
-    static void updateConfigForPort(Integer effectivePort) {
-        if (effectivePort != null) {
-            System.setProperty("quarkus.http.port", effectivePort.toString()); //set the port as a system property in order to have it applied to Config
-            System.setProperty("quarkus.http.test-port", effectivePort.toString()); // needed for RestAssuredManager
-            System.clearProperty("test.url"); // make sure the old value does not interfere with setting the new one
-            System.setProperty("test.url", TestHTTPResourceManager.getUri());
-        }
     }
 
     /**
@@ -350,27 +352,97 @@ public final class LauncherUtil {
     }
 
     /**
-     * Used to drain the input of a launched process
+     * Captures stdout + stderr of the given process to {@code System.out} and {@code System.err}
+     * respectively.
+     *
+     * <p>
+     * The {@link #run()} method runs as long as the given {@link #process} is alive.
+     *
+     *
+     *
      */
-    private static class ProcessReader implements Runnable {
+    static class ProcessReader implements Runnable {
+        private final Process process;
 
-        private final InputStream inputStream;
+        private final ByteArrayOutputStream stdoutBuffer = new ByteArrayOutputStream();
+        private final ByteArrayOutputStream stderrBuffer = new ByteArrayOutputStream();
+        private final byte[] readBuffer = new byte[100];
 
-        private ProcessReader(InputStream inputStream) {
-            this.inputStream = inputStream;
+        private final OutputStream outTo;
+        private final OutputStream errTo;
+
+        ProcessReader(Process process) {
+            this(process, System.out, System.err);
         }
 
+        @VisibleForTesting
+        ProcessReader(Process process, OutputStream outTo, OutputStream errTo) {
+            this.process = process;
+            this.outTo = outTo;
+            this.errTo = errTo;
+        }
+
+        @SuppressWarnings("BusyWait")
         @Override
         public void run() {
-            byte[] b = new byte[100];
-            int i;
-            try {
-                while ((i = inputStream.read(b)) > 0) {
-                    System.out.print(new String(b, 0, i, StandardCharsets.UTF_8));
+            try (var stdout = process.getInputStream(); var stderr = process.getErrorStream()) {
+                var exited = -1;
+                while (true) {
+                    exited = checkExited(exited);
+
+                    var anyData = flush(stderr, stderrBuffer, errTo);
+                    anyData |= flush(stdout, stdoutBuffer, outTo);
+
+                    if (exited != -1 && !anyData) {
+                        if (exited != 0) {
+                            System.err.println("Process exited with non-zero status: " + exited);
+                        }
+                        break;
+                    }
+
+                    Thread.sleep(1L);
                 }
-            } catch (IOException e) {
+                stderrBuffer.writeTo(errTo);
+                stdoutBuffer.writeTo(outTo);
+            } catch (IOException | InterruptedException e) {
                 //ignore
             }
+        }
+
+        @VisibleForTesting
+        int checkExited(int exited) {
+            if (exited == -1) {
+                try {
+                    exited = process.exitValue();
+                } catch (IllegalThreadStateException e) {
+                    // still running
+                }
+            }
+            return exited;
+        }
+
+        private boolean flush(InputStream processStream, ByteArrayOutputStream buffer, OutputStream to)
+                throws IOException {
+            var any = false;
+            var available = processStream.available();
+            while (available > 0) {
+                var read = processStream.read(readBuffer, 0, Math.min(available, readBuffer.length));
+                if (read < 0) {
+                    break;
+                }
+                for (int i = 0; i < read; i++) {
+                    var b = readBuffer[i];
+                    buffer.write(b);
+                    if (b == 10) {
+                        // Flush line to stderr
+                        buffer.writeTo(to);
+                        buffer.reset();
+                    }
+                }
+                available -= read;
+                any = true;
+            }
+            return any;
         }
     }
 

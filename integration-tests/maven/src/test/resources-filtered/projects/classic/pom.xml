@@ -5,6 +5,7 @@
   <groupId>org.acme</groupId>
   <artifactId>acme</artifactId>
   <version>1.0-SNAPSHOT</version>
+  <packaging>quarkus</packaging>
   <properties>
     <quarkus.platform.group-id>io.quarkus</quarkus.platform.group-id>
     <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
@@ -60,7 +61,7 @@
     </dependency>
     <dependency>
       <groupId>io.quarkus</groupId>
-      <artifactId>quarkus-junit5</artifactId>
+      <artifactId>quarkus-junit</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>
@@ -79,15 +80,34 @@
         <groupId>io.quarkus</groupId>
         <artifactId>quarkus-maven-plugin</artifactId>
         <version>\${quarkus-plugin.version}</version>
+        <extensions>true</extensions>
+      </plugin>
+      <plugin>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <version>${version.surefire.plugin}</version>
         <executions>
           <execution>
             <goals>
-              <goal>generate-code</goal>
-              <goal>generate-code-tests</goal>
-              <goal>build</goal>
+              <goal>integration-test</goal>
+              <goal>verify</goal>
             </goals>
           </execution>
         </executions>
+        <configuration>
+          <argLine>@{argLine}</argLine>
+          <systemPropertyVariables>
+            <native.image.path>\${project.build.directory}/\${project.build.finalName}-runner</native.image.path>
+            <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+            <maven.home>\${maven.home}</maven.home>
+            <!--
+                This option is recommended (https://quarkus.io/guides/tests-with-coverage#coverage-for-integration-tests)
+                to run the integration tests as a jar with the JaCoCo agent.
+                Although we don't use JaCoCo in this project, this option is still configured to test that arguments are passed correctly to the JAR launcher for ITs,
+                since there was an issue related to quoting that was breaking the test application launch.
+            -->
+            <quarkus.test.arg-line>\${argLine}</quarkus.test.arg-line>
+          </systemPropertyVariables>
+        </configuration>
       </plugin>
     </plugins>
   </build>

@@ -16,14 +16,17 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.ServiceLoader;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BiConsumer;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -83,6 +86,7 @@ public class ArcContainerImpl implements ArcContainer {
     private final AtomicBoolean running;
 
     private final List<InjectableBean<?>> beans;
+    private final Map<String, InjectableBean<?>> beansById;
     private final Map<String, List<InjectableBean<?>>> beansByRawType;
     private final LazyValue<List<RemovedBean>> removedBeans;
     private final List<InjectableInterceptor<?>> interceptors;
@@ -90,7 +94,6 @@ public class ArcContainerImpl implements ArcContainer {
     private final List<InjectableObserverMethod<?>> observers;
     private final Contexts contexts;
     private final ComputingCache<Resolvable, Set<InjectableBean<?>>> resolved;
-    private final ComputingCache<String, InjectableBean<?>> beansById;
     private final ComputingCache<String, Set<InjectableBean<?>>> beansByName;
 
     private final ArrayList<ResourceReferenceProvider> resourceProviders;
@@ -105,12 +108,16 @@ public class ArcContainerImpl implements ArcContainer {
 
     private final boolean strictMode;
 
-    public ArcContainerImpl(CurrentContextFactory currentContextFactory, boolean strictMode) {
+    // An event mock reference is shared by identical injection points
+    private final ConcurrentMap<TypeAndQualifiers, AtomicReference<Event<?>>> eventMocks;
+
+    public ArcContainerImpl(CurrentContextFactory currentContextFactory, boolean strictMode, boolean testMode) {
         this.strictMode = strictMode;
         id = String.valueOf(ID_GENERATOR.incrementAndGet());
         running = new AtomicBoolean(true);
         List<InjectableBean<?>> beans = new ArrayList<>();
-        Map<String, List<InjectableBean<?>>> beansByRawType = new HashMap<>();
+        Map<String, InjectableBean<?>> beansById = new HashMap<>();
+        Map<String, Set<InjectableBean<?>>> beansByRawType = new HashMap<>();
         List<Supplier<Collection<RemovedBean>>> removedBeans = new ArrayList<>();
         List<InjectableInterceptor<?>> interceptors = new ArrayList<>();
         List<InjectableDecorator<?>> decorators = new ArrayList<>();
@@ -123,6 +130,7 @@ public class ArcContainerImpl implements ArcContainer {
         Supplier<ContextInstances> requestContextInstances = null;
         this.currentContextFactory = currentContextFactory == null ? new ThreadLocalCurrentContextFactory()
                 : currentContextFactory;
+        this.eventMocks = testMode ? new ConcurrentHashMap<>() : null;
 
         List<Components> components = new ArrayList<>();
         for (ComponentsProvider componentsProvider : ServiceLoader.load(ComponentsProvider.class)) {
@@ -139,6 +147,7 @@ public class ArcContainerImpl implements ArcContainer {
                     beans.add(bean);
                     precomputeBeanRawTypes(beansByRawType, bean);
                 }
+                beansById.put(bean.getIdentifier(), bean);
             }
             removedBeans.add(c.getRemovedBeans());
             observers.addAll(c.getObservers());
@@ -157,11 +166,11 @@ public class ArcContainerImpl implements ArcContainer {
         // register built-in beans
         addBuiltInBeans(beans, beansByRawType);
 
-        interceptors.sort(Comparator.comparingInt(InjectableInterceptor::getPriority));
-        decorators.sort(Comparator.comparingInt(InjectableDecorator::getPriority));
+        Comparator<InjectableBean<?>> injectableBeanComparator = new InjectableBeanComparator();
+        interceptors.sort(injectableBeanComparator);
+        decorators.sort(injectableBeanComparator);
 
         resolved = new ComputingCache<>(this::resolve);
-        beansById = new ComputingCache<>(this::findById);
         beansByName = new ComputingCache<>(this::resolve);
         resourceProviders = new ArrayList<>();
         for (ResourceReferenceProvider resourceProvider : ServiceLoader.load(ResourceReferenceProvider.class)) {
@@ -172,16 +181,9 @@ public class ArcContainerImpl implements ArcContainer {
         instance = InstanceImpl.forGlobalEntrypoint(Object.class, Collections.emptySet());
 
         this.beans = List.copyOf(beans);
-        this.beansByRawType = Map.copyOf(beansByRawType);
-        // Trim the size of the non-singleton lists
-        this.beansByRawType.forEach(new BiConsumer<String, List<InjectableBean<?>>>() {
-            @Override
-            public void accept(String key, List<InjectableBean<?>> val) {
-                if (val.size() > 1) {
-                    ((ArrayList<InjectableBean<?>>) val).trimToSize();
-                }
-            }
-        });
+        this.beansById = Map.copyOf(beansById);
+        this.beansByRawType = beansByRawType.entrySet().stream()
+                .collect(Collectors.toUnmodifiableMap(Entry::getKey, e -> List.copyOf(e.getValue())));
 
         this.interceptors = List.copyOf(interceptors);
         this.decorators = List.copyOf(decorators);
@@ -238,7 +240,7 @@ public class ArcContainerImpl implements ArcContainer {
         this.contexts = contextsBuilder.build();
     }
 
-    static void precomputeBeanRawTypes(Map<String, List<InjectableBean<?>>> map, InjectableBean<?> bean) {
+    static void precomputeBeanRawTypes(Map<String, Set<InjectableBean<?>>> map, InjectableBean<?> bean) {
         for (Type type : bean.getTypes()) {
             if (Object.class.equals(type)) {
                 continue;
@@ -249,18 +251,19 @@ public class ArcContainerImpl implements ArcContainer {
             }
             rawType = Types.boxedClass(rawType);
             String key = rawType.getName();
-            List<InjectableBean<?>> match = map.get(key);
+            Set<InjectableBean<?>> match = map.get(key);
             if (match == null) {
                 // very often a singleton list will be used
-                map.put(key, List.of(bean));
+                map.put(key, Set.of(bean));
             } else {
-                // we don't expect large lists so this should be fine performance wise
                 if (match.contains(bean)) {
                     continue;
                 }
                 if (match.size() == 1) {
-                    List<InjectableBean<?>> newMatch = new ArrayList<>();
-                    newMatch.add(match.get(0));
+                    // a set of 2 elements is also a relatively common case
+                    map.put(key, Set.of(match.iterator().next(), bean));
+                } else if (match.size() == 2) {
+                    Set<InjectableBean<?>> newMatch = new HashSet<>(match);
                     newMatch.add(bean);
                     map.put(key, newMatch);
                 } else {
@@ -331,18 +334,18 @@ public class ArcContainerImpl implements ArcContainer {
         if (bean == null) {
             return null;
         }
+        InjectionPoint injectionPoint = InjectionPointImpl.of(type, qualifiers);
         return new Supplier<InstanceHandle<T>>() {
             @Override
             public InstanceHandle<T> get() {
-                return beanInstanceHandle(bean, null);
+                return beanInstanceHandle(bean, null, injectionPoint, null);
             }
         };
     }
 
     @Override
     public <T> InstanceHandle<T> instance(InjectableBean<T> bean) {
-        Objects.requireNonNull(bean);
-        return beanInstanceHandle(bean, null);
+        return beanInstanceHandle(Objects.requireNonNull(bean), null, InjectionPointImpl.EMPTY, null);
     }
 
     @Override
@@ -380,7 +383,7 @@ public class ArcContainerImpl implements ArcContainer {
     @Override
     public <T> InjectableBean<T> bean(String beanIdentifier) {
         Objects.requireNonNull(beanIdentifier);
-        return (InjectableBean<T>) beansById.getValue(beanIdentifier);
+        return (InjectableBean<T>) beansById.get(beanIdentifier);
     }
 
     @Override
@@ -397,7 +400,7 @@ public class ArcContainerImpl implements ArcContainer {
         Set<InjectableBean<?>> resolvedBeans = beansByName.getValue(name);
         return resolvedBeans.size() != 1 ? EagerInstanceHandle.unavailable()
                 : (InstanceHandle<T>) beanInstanceHandle(resolvedBeans.iterator()
-                        .next(), null);
+                        .next(), null, InjectionPointImpl.EMPTY, null);
     }
 
     @Override
@@ -480,6 +483,9 @@ public class ArcContainerImpl implements ArcContainer {
             resolved.clear();
             running.set(false);
             InterceptedStaticMethods.clear();
+            if (eventMocks != null) {
+                eventMocks.clear();
+            }
 
             LOGGER.debugf("ArC DI container shut down");
         }
@@ -526,7 +532,7 @@ public class ArcContainerImpl implements ArcContainer {
         return notifier.isEmpty() ? null : notifier;
     }
 
-    private static void addBuiltInBeans(List<InjectableBean<?>> beans, Map<String, List<InjectableBean<?>>> beansByRawType) {
+    private static void addBuiltInBeans(List<InjectableBean<?>> beans, Map<String, Set<InjectableBean<?>>> beansByRawType) {
         // BeanManager, Event<?>, Instance<?>, InjectionPoint
         BeanManagerBean beanManagerBean = new BeanManagerBean();
         beans.add(beanManagerBean);
@@ -542,16 +548,16 @@ public class ArcContainerImpl implements ArcContainer {
     }
 
     private <T> InstanceHandle<T> instanceHandle(Type type, Annotation... qualifiers) {
-        return beanInstanceHandle(getBean(type, qualifiers), null);
+        return beanInstanceHandle(getBean(type, qualifiers), null, InjectionPointImpl.of(type, qualifiers), null);
     }
 
     static <T> InstanceHandle<T> beanInstanceHandle(InjectableBean<T> bean, CreationalContextImpl<T> parentContext,
-            boolean resetCurrentInjectionPoint, Consumer<T> destroyLogic) {
-        return beanInstanceHandle(bean, parentContext, resetCurrentInjectionPoint, destroyLogic, false);
+            InjectionPoint resetInjectionPoint, Consumer<T> destroyLogic) {
+        return beanInstanceHandle(bean, parentContext, resetInjectionPoint, destroyLogic, false);
     }
 
     static <T> InstanceHandle<T> beanInstanceHandle(InjectableBean<T> bean, CreationalContextImpl<T> parentContext,
-            boolean resetCurrentInjectionPoint, Consumer<T> destroyLogic, boolean useParentCreationalContextDirectly) {
+            InjectionPoint resetInjectionPoint, Consumer<T> destroyLogic, boolean useParentCreationalContextDirectly) {
         if (bean != null) {
             if (parentContext == null && Dependent.class.equals(bean.getScope())) {
                 parentContext = new CreationalContextImpl<>(null);
@@ -563,24 +569,20 @@ public class ArcContainerImpl implements ArcContainer {
                 creationalContext = new CreationalContextImpl<>(bean);
             }
             InjectionPoint prev = null;
-            if (resetCurrentInjectionPoint) {
-                prev = InjectionPointProvider.setCurrent(creationalContext, CurrentInjectionPointProvider.EMPTY);
+            if (resetInjectionPoint != null) {
+                prev = InjectionPointProvider.setCurrent(creationalContext, resetInjectionPoint);
             }
             try {
                 return new EagerInstanceHandle<>(bean, bean.get(creationalContext), creationalContext, parentContext,
                         destroyLogic);
             } finally {
-                if (resetCurrentInjectionPoint) {
+                if (resetInjectionPoint != null) {
                     InjectionPointProvider.setCurrent(creationalContext, prev);
                 }
             }
         } else {
             return EagerInstanceHandle.unavailable();
         }
-    }
-
-    static <T> InstanceHandle<T> beanInstanceHandle(InjectableBean<T> bean, CreationalContextImpl<T> parentContext) {
-        return beanInstanceHandle(bean, parentContext, true, null);
     }
 
     @SuppressWarnings("unchecked")
@@ -647,25 +649,6 @@ public class ArcContainerImpl implements ArcContainer {
 
     private Set<InjectableBean<?>> resolve(String name) {
         return resolve(getMatchingBeans(name));
-    }
-
-    private InjectableBean<?> findById(String identifier) {
-        for (InjectableBean<?> bean : beans) {
-            if (bean.getIdentifier().equals(identifier)) {
-                return bean;
-            }
-        }
-        for (InjectableInterceptor<?> interceptorBean : interceptors) {
-            if (interceptorBean.getIdentifier().equals(identifier)) {
-                return interceptorBean;
-            }
-        }
-        for (InjectableDecorator<?> decoratorBean : decorators) {
-            if (decoratorBean.getIdentifier().equals(identifier)) {
-                return decoratorBean;
-            }
-        }
-        return null;
     }
 
     @SuppressWarnings("unchecked")
@@ -904,7 +887,7 @@ public class ArcContainerImpl implements ArcContainer {
             }
         }
         // Observers with smaller priority values are called first
-        resolvedObservers.sort(InjectableObserverMethod::compare);
+        Collections.sort(resolvedObservers);
         return resolvedObservers;
     }
 
@@ -1039,7 +1022,22 @@ public class ArcContainerImpl implements ArcContainer {
     }
 
     public static ArcContainerImpl instance() {
-        return unwrap(Arc.container());
+        return unwrap(Arc.requireContainer());
+    }
+
+    <T> EventImpl<T> getEvent(Type eventType, Set<Annotation> eventQualifiers, InjectionPoint ip) {
+        if (eventMocks != null) {
+            AtomicReference<Event<?>> mock = eventMocks.computeIfAbsent(
+                    new TypeAndQualifiers(ip.getType(), ip.getQualifiers()),
+                    ArcContainerImpl::newEventMockReference);
+            return new MockableEventImpl<>(eventType, eventQualifiers, ip, mock);
+        } else {
+            return new EventImpl<>(eventType, eventQualifiers, ip);
+        }
+    }
+
+    private static AtomicReference<Event<?>> newEventMockReference(TypeAndQualifiers typeAndQualifiers) {
+        return new AtomicReference<>();
     }
 
     private static final class Resolvable {
@@ -1095,5 +1093,15 @@ public class ArcContainerImpl implements ArcContainer {
             return Arrays.equals(qualifiers, other.qualifiers);
         }
 
+    }
+
+    private record TypeAndQualifiers(Type requiredType, Set<Annotation> qualifiers) {
+    }
+
+    private static class InjectableBeanComparator implements Comparator<InjectableBean<?>> {
+        @Override
+        public int compare(InjectableBean o1, InjectableBean o2) {
+            return Integer.compare(o1.getPriority(), o2.getPriority());
+        }
     }
 }

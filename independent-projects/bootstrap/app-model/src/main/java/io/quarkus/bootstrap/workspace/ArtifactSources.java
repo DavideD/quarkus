@@ -3,13 +3,17 @@ package io.quarkus.bootstrap.workspace;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 
+import io.quarkus.bootstrap.BootstrapConstants;
+import io.quarkus.bootstrap.model.Mappable;
+import io.quarkus.bootstrap.model.MappableCollectionFactory;
 import io.quarkus.maven.dependency.ArtifactCoords;
 import io.quarkus.paths.EmptyPathTree;
 import io.quarkus.paths.MultiRootPathTree;
 import io.quarkus.paths.PathTree;
 
-public interface ArtifactSources {
+public interface ArtifactSources extends Mappable {
 
     String MAIN = ArtifactCoords.DEFAULT_CLASSIFIER;
     String TEST = "tests";
@@ -46,18 +50,8 @@ public interface ArtifactSources {
         final Collection<SourceDir> sourceDirs = getSourceDirs();
         final Collection<SourceDir> resourceDirs = getResourceDirs();
         final List<PathTree> trees = new ArrayList<>(sourceDirs.size() + resourceDirs.size());
-        for (SourceDir src : sourceDirs) {
-            final PathTree outputTree = src.getOutputTree();
-            if (outputTree != null && !outputTree.isEmpty() && !trees.contains(outputTree)) {
-                trees.add(outputTree);
-            }
-        }
-        for (SourceDir src : resourceDirs) {
-            final PathTree outputTree = src.getOutputTree();
-            if (outputTree != null && !outputTree.isEmpty() && !trees.contains(outputTree)) {
-                trees.add(outputTree);
-            }
-        }
+        collectOutputs(sourceDirs, trees);
+        collectOutputs(resourceDirs, trees);
         if (trees.isEmpty()) {
             return EmptyPathTree.getInstance();
         }
@@ -65,5 +59,29 @@ public interface ArtifactSources {
             return trees.get(0);
         }
         return new MultiRootPathTree(trees.toArray(new PathTree[0]));
+    }
+
+    private static void collectOutputs(Collection<SourceDir> sourceDirs, List<PathTree> trees) {
+        for (SourceDir src : sourceDirs) {
+            final PathTree outputTree = src.getOutputTree();
+            if (outputTree != null && !trees.contains(outputTree) && !outputTree.isEmpty()) {
+                trees.add(outputTree);
+            }
+        }
+    }
+
+    @Override
+    default Map<String, Object> asMap(MappableCollectionFactory factory) {
+        final Map<String, Object> map = factory.newMap(3);
+        map.put(BootstrapConstants.MAPPABLE_CLASSIFIER, getClassifier());
+        var sources = getSourceDirs();
+        if (!sources.isEmpty()) {
+            map.put(BootstrapConstants.MAPPABLE_SOURCES, Mappable.asMaps(sources, factory));
+        }
+        var resources = getResourceDirs();
+        if (!resources.isEmpty()) {
+            map.put(BootstrapConstants.MAPPABLE_RESOURCES, Mappable.asMaps(resources, factory));
+        }
+        return map;
     }
 }

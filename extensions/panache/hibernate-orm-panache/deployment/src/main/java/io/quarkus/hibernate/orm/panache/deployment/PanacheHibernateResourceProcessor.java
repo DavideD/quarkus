@@ -43,6 +43,7 @@ import io.quarkus.panache.common.deployment.PanacheMethodCustomizer;
 import io.quarkus.panache.common.deployment.PanacheMethodCustomizerBuildItem;
 import io.quarkus.panache.hibernate.common.deployment.HibernateEnhancersRegisteredBuildItem;
 import io.quarkus.panache.hibernate.common.deployment.PanacheJpaEntityOperationsEnhancer;
+import io.quarkus.panache.hibernate.common.deployment.PanacheJpaRepositoryEnhancer;
 
 public final class PanacheHibernateResourceProcessor {
 
@@ -65,7 +66,12 @@ public final class PanacheHibernateResourceProcessor {
     AdditionalJpaModelBuildItem produceModel() {
         // only useful for the index resolution: hibernate will register it to be transformed, but BuildMojo
         // only transforms classes from the application jar, so we do our own transforming
-        return new AdditionalJpaModelBuildItem("io.quarkus.hibernate.orm.panache.PanacheEntity");
+        return new AdditionalJpaModelBuildItem("io.quarkus.hibernate.orm.panache.PanacheEntity",
+                // Only added to persistence units actually using this class, using Jandex-based discovery,
+                // so we pass empty sets of PUs.
+                // The build items tell the Hibernate extension to process the classes at build time:
+                // add to Jandex index, bytecode enhancement, proxy generation, ...
+                Set.of());
     }
 
     @BuildStep
@@ -109,7 +115,12 @@ public final class PanacheHibernateResourceProcessor {
                 continue;
             List<org.jboss.jandex.Type> typeParameters = JandexUtil
                     .resolveTypeParameters(classInfo.name(), DOTNAME_PANACHE_REPOSITORY_BASE, index.getIndex());
-            panacheEntities.add(typeParameters.get(0).name().toString());
+            var entityTypeName = typeParameters.get(0).name();
+            panacheEntities.add(entityTypeName.toString());
+            // Also add subclasses, so that they get resolved to a persistence unit.
+            for (var subclass : index.getIndex().getAllKnownSubclasses(entityTypeName)) {
+                panacheEntities.add(subclass.name().toString());
+            }
             transformers.produce(new BytecodeTransformerBuildItem(classInfo.name().toString(), daoEnhancer));
         }
 
@@ -130,12 +141,17 @@ public final class PanacheHibernateResourceProcessor {
 
     @BuildStep
     @Record(ExecutionTime.STATIC_INIT)
-    void recordEntityToPersistenceUnit(List<EntityToPersistenceUnitBuildItem> items, PanacheHibernateOrmRecorder recorder) {
+    void recordEntityToPersistenceUnit(Optional<JpaModelPersistenceUnitMappingBuildItem> jpaModelPersistenceUnitMapping,
+            List<EntityToPersistenceUnitBuildItem> items, PanacheHibernateOrmRecorder recorder) {
         Map<String, String> map = new HashMap<>();
         for (EntityToPersistenceUnitBuildItem item : items) {
             map.put(item.getEntityClass(), item.getPersistenceUnitName());
         }
-        recorder.setEntityToPersistenceUnit(map);
+        // This is called even if there are no entity types, so that Panache gets properly initialized.
+        recorder.addEntityTypesToPersistenceUnit(map,
+                jpaModelPersistenceUnitMapping.map(JpaModelPersistenceUnitMappingBuildItem::isIncomplete)
+                        // This happens if there is no persistence unit, in which case we definitely know this metadata is complete.
+                        .orElse(false));
     }
 
     @BuildStep
@@ -154,5 +170,4 @@ public final class PanacheHibernateResourceProcessor {
         }
         return null;
     }
-
 }

@@ -27,14 +27,21 @@ import io.vertx.ext.web.RoutingContext;
 
 @Recorder
 public class SmallRyeGraphQLRecorder {
+    private final SmallRyeGraphQLConfig graphQLConfig;
+    private final RuntimeValue<SmallRyeGraphQLRuntimeConfig> runtimeConfig;
+
+    public SmallRyeGraphQLRecorder(
+            final SmallRyeGraphQLConfig graphQLConfig,
+            final RuntimeValue<SmallRyeGraphQLRuntimeConfig> runtimeConfig) {
+        this.graphQLConfig = graphQLConfig;
+        this.runtimeConfig = runtimeConfig;
+    }
 
     public RuntimeValue<SubmissionPublisher<String>> createTraficLogPublisher() {
         return new RuntimeValue<>(new SubmissionPublisher<>());
     }
 
-    public RuntimeValue<Boolean> createExecutionService(BeanContainer beanContainer,
-            Schema schema,
-            SmallRyeGraphQLConfig graphQLConfig,
+    public RuntimeValue<Boolean> createExecutionService(BeanContainer beanContainer, Schema schema,
             Optional<RuntimeValue<SubmissionPublisher<String>>> publisher) {
         GraphQLProducer graphQLProducer = beanContainer.beanInstance(GraphQLProducer.class);
         if (graphQLConfig.extraScalars().isPresent()) {
@@ -63,9 +70,11 @@ public class SmallRyeGraphQLRecorder {
         }
     }
 
-    public Handler<RoutingContext> executionHandler(RuntimeValue<Boolean> initialized, boolean allowGet,
-            boolean allowPostWithQueryParameters, boolean runBlocking, boolean allowCompression) {
+    public Handler<RoutingContext> executionHandler(RuntimeValue<Boolean> initialized, boolean runBlocking,
+            boolean allowCompression) {
         if (initialized.getValue()) {
+            boolean allowGet = runtimeConfig.getValue().httpGetEnabled();
+            boolean allowPostWithQueryParameters = runtimeConfig.getValue().httpPostQueryParametersEnabled();
             Handler<RoutingContext> handler = new SmallRyeGraphQLExecutionHandler(allowGet,
                     allowPostWithQueryParameters, runBlocking,
                     getCurrentIdentityAssociation(),
@@ -82,7 +91,8 @@ public class SmallRyeGraphQLRecorder {
     public Handler<RoutingContext> graphqlOverWebsocketHandler(BeanContainer beanContainer, RuntimeValue<Boolean> initialized,
             boolean runBlocking) {
         return new SmallRyeGraphQLOverWebSocketHandler(getCurrentIdentityAssociation(),
-                Arc.container().instance(CurrentVertxRequest.class).get(), runBlocking);
+                Arc.container().instance(CurrentVertxRequest.class).get(), runBlocking,
+                graphQLConfig.authorizationClientInitPayloadName());
     }
 
     public Handler<RoutingContext> schemaHandler(RuntimeValue<Boolean> initialized, boolean schemaAvailable) {
@@ -95,9 +105,9 @@ public class SmallRyeGraphQLRecorder {
 
     public Handler<RoutingContext> uiHandler(String graphqlUiFinalDestination,
             String graphqlUiPath, List<FileSystemStaticHandler.StaticWebRootConfiguration> webRootConfigurations,
-            SmallRyeGraphQLRuntimeConfig runtimeConfig, ShutdownContext shutdownContext) {
+            ShutdownContext shutdownContext) {
 
-        if (runtimeConfig.enable()) {
+        if (runtimeConfig.getValue().enable().orElse(runtimeConfig.getValue().enabled())) {
             WebJarStaticHandler handler = new WebJarStaticHandler(graphqlUiFinalDestination, graphqlUiPath,
                     webRootConfigurations);
             shutdownContext.addShutdownTask(new ShutdownContext.CloseRunnable(handler));

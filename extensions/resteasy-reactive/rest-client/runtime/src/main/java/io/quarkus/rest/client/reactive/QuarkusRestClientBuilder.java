@@ -3,7 +3,9 @@ package io.quarkus.rest.client.reactive;
 import java.net.URI;
 import java.net.URL;
 import java.security.KeyStore;
+import java.time.Duration;
 import java.util.ServiceLoader;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import javax.net.ssl.HostnameVerifier;
@@ -18,11 +20,12 @@ import org.eclipse.microprofile.rest.client.ext.QueryParamStyle;
 import org.eclipse.microprofile.rest.client.spi.RestClientBuilderListener;
 import org.jboss.resteasy.reactive.client.api.ClientLogger;
 import org.jboss.resteasy.reactive.client.api.LoggingScope;
+import org.jboss.resteasy.reactive.client.impl.VertxRequestCustomizingClientBuilder;
 
+import io.quarkus.proxy.ProxyType;
 import io.quarkus.rest.client.reactive.runtime.QuarkusRestClientBuilderImpl;
 import io.quarkus.rest.client.reactive.runtime.RestClientBuilderImpl;
 import io.quarkus.tls.TlsConfiguration;
-import io.vertx.core.http.HttpClientOptions;
 
 /**
  * This is the main entry point for creating a Type Safe Quarkus Rest Client.
@@ -33,7 +36,8 @@ import io.vertx.core.http.HttpClientOptions;
  * The <code>QuarkusRestClientBuilder</code> is based on {@link RestClientBuilder} class but Quarkus specific.
  * </p>
  */
-public interface QuarkusRestClientBuilder extends Configurable<QuarkusRestClientBuilder> {
+public interface QuarkusRestClientBuilder extends Configurable<QuarkusRestClientBuilder>,
+        VertxRequestCustomizingClientBuilder<QuarkusRestClientBuilder> {
 
     static QuarkusRestClientBuilder newBuilder() {
         RestClientBuilderImpl delegate = new RestClientBuilderImpl();
@@ -227,6 +231,22 @@ public interface QuarkusRestClientBuilder extends Configurable<QuarkusRestClient
     QuarkusRestClientBuilder nonProxyHosts(String nonProxyHosts);
 
     /**
+     * Specifies the connect timeout for the proxy connection
+     *
+     * @param connectTimeout proxy connect timeout.
+     * @return the current builder
+     */
+    QuarkusRestClientBuilder proxyConnectTimeout(Duration connectTimeout);
+
+    /**
+     * Specifies the proxy type for the proxy connection.
+     *
+     * @param proxyType proxy type
+     * @return the current builder
+     */
+    QuarkusRestClientBuilder proxyType(ProxyType proxyType);
+
+    /**
      * Specifies the URI formatting style to use when multiple query parameter values are passed to the client.
      *
      * @param style the URI formatting style to use for multiple query parameter values
@@ -251,22 +271,6 @@ public interface QuarkusRestClientBuilder extends Configurable<QuarkusRestClient
     QuarkusRestClientBuilder clientHeadersFactory(ClientHeadersFactory clientHeadersFactory);
 
     /**
-     * Specifies the HTTP client options to use.
-     *
-     * @param httpClientOptionsClass the HTTP client options to use.
-     * @return the current builder
-     */
-    QuarkusRestClientBuilder httpClientOptions(Class<? extends HttpClientOptions> httpClientOptionsClass);
-
-    /**
-     * Specifies the HTTP client options to use.
-     *
-     * @param httpClientOptions the HTTP client options to use.
-     * @return the current builder
-     */
-    QuarkusRestClientBuilder httpClientOptions(HttpClientOptions httpClientOptions);
-
-    /**
      * Specifies the client logger to use.
      *
      * @param clientLogger the client logger to use.
@@ -287,6 +291,14 @@ public interface QuarkusRestClientBuilder extends Configurable<QuarkusRestClient
      *
      */
     QuarkusRestClientBuilder loggingBodyLimit(Integer limit);
+
+    /**
+     * Which request and response headers values to mask in logs.
+     * <p>
+     * The value of any matching header will be replaced with {@code "<hidden>"}.
+     * The header name itself remains visible. E.g. {@code Authorization=<hidden>}
+     */
+    QuarkusRestClientBuilder loggingMaskedHeaders(Set<String> maskedHeaders);
 
     /**
      * Enable trusting all certificates. Disable by default.

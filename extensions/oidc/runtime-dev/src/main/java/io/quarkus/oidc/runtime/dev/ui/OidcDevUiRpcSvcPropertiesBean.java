@@ -23,19 +23,22 @@ public class OidcDevUiRpcSvcPropertiesBean {
     private final boolean graphqlIsAvailable;
     private final String swaggerUiPath;
     private final String graphqlUiPath;
-    private final boolean alwaysLogoutUserInDevUiOnReload;
+    private final String devServiceConfigHashCode;
     /**
      * Properties state id helps UI to determine that properties may have changed
      * and web component needs to be updated.
      */
     private final String propertiesStateId;
+    private final String logoutPath;
+    private final String readSessionCookiePath;
 
     OidcDevUiRpcSvcPropertiesBean(String authorizationUrl, String tokenUrl, String logoutUrl,
             Duration webClientTimeout, Map<String, Map<String, String>> grantOptions,
             Map<String, String> oidcUsers, String oidcProviderName, String oidcApplicationType,
             String oidcGrantType, boolean introspectionIsAvailable, String keycloakAdminUrl,
             List<String> keycloakRealms, boolean swaggerIsAvailable, boolean graphqlIsAvailable,
-            String swaggerUiPath, String graphqlUiPath, boolean alwaysLogoutUserInDevUiOnReload) {
+            String swaggerUiPath, String graphqlUiPath, String devServiceConfigHashCode,
+            String devUiLogoutPath, String devUiReadSessionCookiePath) {
         this.authorizationUrl = authorizationUrl;
         this.tokenUrl = tokenUrl;
         this.logoutUrl = logoutUrl;
@@ -52,8 +55,10 @@ public class OidcDevUiRpcSvcPropertiesBean {
         this.graphqlIsAvailable = graphqlIsAvailable;
         this.swaggerUiPath = swaggerUiPath;
         this.graphqlUiPath = graphqlUiPath;
-        this.alwaysLogoutUserInDevUiOnReload = alwaysLogoutUserInDevUiOnReload;
+        this.devServiceConfigHashCode = devServiceConfigHashCode;
         this.propertiesStateId = Long.toString(UUID.randomUUID().getLeastSignificantBits());
+        this.logoutPath = devUiLogoutPath;
+        this.readSessionCookiePath = devUiReadSessionCookiePath;
     }
 
     String getAuthorizationUrl() {
@@ -128,11 +133,19 @@ public class OidcDevUiRpcSvcPropertiesBean {
         return oidcGrantType;
     }
 
-    boolean isAlwaysLogoutUserInDevUiOnReload() {
-        return alwaysLogoutUserInDevUiOnReload;
+    String getDevServiceConfigHashCode() {
+        return devServiceConfigHashCode;
     }
 
     String getPropertiesStateId() {
         return propertiesStateId;
+    }
+
+    String getLogoutPath() {
+        return logoutPath;
+    }
+
+    String getReadSessionCookiePath() {
+        return readSessionCookiePath;
     }
 }

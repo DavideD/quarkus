@@ -13,6 +13,7 @@ public abstract class OidcCommonConfig implements io.quarkus.oidc.common.runtime
 
     protected OidcCommonConfig(io.quarkus.oidc.common.runtime.config.OidcCommonConfig mapping) {
         this.authServerUrl = mapping.authServerUrl();
+        this.discoveryPath = mapping.discoveryPath();
         this.discoveryEnabled = mapping.discoveryEnabled();
         this.registrationPath = mapping.registrationPath();
         this.connectionDelay = mapping.connectionDelay();
@@ -45,6 +46,11 @@ public abstract class OidcCommonConfig implements io.quarkus.oidc.common.runtime
      */
     @Deprecated(since = "3.18", forRemoval = true)
     public Optional<Boolean> discoveryEnabled = Optional.empty();
+
+    /**
+     * The relative path of the OIDC discovery endpoint.
+     */
+    private String discoveryPath;
 
     /**
      * The relative path or absolute URL of the OIDC dynamic client registration endpoint.
@@ -131,6 +137,11 @@ public abstract class OidcCommonConfig implements io.quarkus.oidc.common.runtime
     @Override
     public Optional<String> authServerUrl() {
         return authServerUrl;
+    }
+
+    @Override
+    public String discoveryPath() {
+        return discoveryPath;
     }
 
     @Override
@@ -469,11 +480,19 @@ public abstract class OidcCommonConfig implements io.quarkus.oidc.common.runtime
          */
         public Optional<String> password = Optional.empty();
 
+        private Optional<String> proxyConfigurationName = Optional.empty();
+
         private void addConfigMappingValues(io.quarkus.oidc.common.runtime.config.OidcCommonConfig.Proxy mapping) {
             this.host = mapping.host();
             this.port = mapping.port();
             this.username = mapping.username();
             this.password = mapping.password();
+            this.proxyConfigurationName = mapping.proxyConfigurationName();
+        }
+
+        @Override
+        public Optional<String> proxyConfigurationName() {
+            return proxyConfigurationName;
         }
 
         @Override

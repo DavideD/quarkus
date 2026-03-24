@@ -56,8 +56,9 @@
                 <exclude>org.eclipse.parsson:jakarta.json</exclude>
                 <!-- Ensure none of the deps use netty-all. This forces deps to use more fine grained netty artifacts -->
                 <exclude>io.netty:netty-all</exclude>
-                <!-- Ban Log4J (use org.jboss.logmanager:log4j-jboss-logmanager instead) -->
+                <!-- Ban Log4J 1.x -->
                 <exclude>log4j:log4j</exclude>
+                <!-- Ban Log4J2 (use org.jboss.logmanager:log4j2-jboss-logmanager instead) -->
                 <exclude>org.apache.logging.log4j:log4j-core</exclude>
                 <exclude>org.apache.logging.log4j:log4j-slf4j-impl</exclude>
                 <!-- Ban commons-logging (use org.jboss.logging:commons-logging-jboss-logging instead) -->
@@ -110,6 +111,12 @@
                 <!-- svm artifact, shouldn't be used as it's not public API. Use the -->
                 <!-- org.graalvm.sdk:graal-sdk dependency instead -->
                 <exclude>org.graalvm.nativeimage:svm</exclude>
+                <!-- moved to com.mysql:mysql-connector-j -->
+                <exclude>mysql:mysql-connector-java</exclude>
+                <!-- Use the SmallRye classfile API instead -->
+                <exclude>io.github.dmlloyd:jdk-classfile-backport</exclude>
+                <!-- org.lz4:lz4-java is abandoned and has a CVE -->
+                <exclude>org.lz4:lz4-java</exclude>
             </excludes>
             <includes>
                 <!-- this is for REST Assured -->

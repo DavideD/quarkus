@@ -14,7 +14,6 @@ import static org.hibernate.cfg.AvailableSettings.TRANSACTION_COORDINATOR_STRATE
 import static org.hibernate.cfg.AvailableSettings.URL;
 import static org.hibernate.cfg.AvailableSettings.USER;
 import static org.hibernate.cfg.AvailableSettings.XML_MAPPING_ENABLED;
-import static org.hibernate.internal.HEMLogging.messageLogger;
 
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
@@ -30,7 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 import jakarta.persistence.PersistenceException;
-import jakarta.persistence.spi.PersistenceUnitTransactionType;
+import jakarta.persistence.PersistenceUnitTransactionType;
 
 import org.hibernate.boot.CacheRegionDefinition;
 import org.hibernate.boot.MetadataBuilder;
@@ -39,6 +38,8 @@ import org.hibernate.boot.archive.scan.internal.StandardScanOptions;
 import org.hibernate.boot.archive.scan.spi.Scanner;
 import org.hibernate.boot.beanvalidation.BeanValidationIntegrator;
 import org.hibernate.boot.internal.MetadataImpl;
+import org.hibernate.boot.model.FunctionContributor;
+import org.hibernate.boot.model.TypeContributor;
 import org.hibernate.boot.model.process.spi.ManagedResources;
 import org.hibernate.boot.model.process.spi.MetadataBuildingProcess;
 import org.hibernate.boot.registry.StandardServiceRegistry;
@@ -50,12 +51,12 @@ import org.hibernate.cfg.AvailableSettings;
 import org.hibernate.dialect.Dialect;
 import org.hibernate.engine.jdbc.dialect.spi.DialectFactory;
 import org.hibernate.integrator.spi.Integrator;
-import org.hibernate.internal.EntityManagerMessageLogger;
 import org.hibernate.internal.util.StringHelper;
 import org.hibernate.jpa.boot.internal.StandardJpaScanEnvironmentImpl;
 import org.hibernate.jpa.boot.spi.JpaSettings;
 import org.hibernate.jpa.boot.spi.PersistenceUnitDescriptor;
 import org.hibernate.jpa.boot.spi.TypeContributorList;
+import org.hibernate.jpa.internal.JpaLogger;
 import org.hibernate.jpa.internal.util.LogHelper;
 import org.hibernate.jpa.internal.util.PersistenceUnitTransactionTypeHelper;
 import org.hibernate.resource.jdbc.spi.PhysicalConnectionHandlingMode;
@@ -68,6 +69,7 @@ import org.infinispan.quarkus.hibernate.cache.QuarkusInfinispanRegionFactory;
 
 import io.quarkus.hibernate.orm.runtime.BuildTimeSettings;
 import io.quarkus.hibernate.orm.runtime.IntegrationSettings;
+import io.quarkus.hibernate.orm.runtime.PersistenceUnitUtil;
 import io.quarkus.hibernate.orm.runtime.boot.xml.RecordableXmlMapping;
 import io.quarkus.hibernate.orm.runtime.integration.HibernateOrmIntegrationStaticDescriptor;
 import io.quarkus.hibernate.orm.runtime.integration.HibernateOrmIntegrationStaticInitListener;
@@ -98,7 +100,7 @@ public class FastBootMetadataBuilder {
     @Deprecated
     private static final String ALLOW_ENHANCEMENT_AS_PROXY = "hibernate.bytecode.allow_enhancement_as_proxy";
 
-    private static final EntityManagerMessageLogger LOG = messageLogger(FastBootMetadataBuilder.class);
+    private static final JpaLogger LOG = JpaLogger.JPA_LOGGER;
 
     private final PersistenceUnitDescriptor persistenceUnit;
     private final BuildTimeSettings buildTimeSettings;
@@ -188,6 +190,9 @@ public class FastBootMetadataBuilder {
 
         applyMetadataBuilderContributor();
 
+        applyTypeContributors();
+        applyFunctionContributors();
+
         // Unable to automatically handle:
         // AvailableSettings.ENHANCER_ENABLE_DIRTY_TRACKING,
         // AvailableSettings.ENHANCER_ENABLE_LAZY_INITIALIZATION,
@@ -248,6 +253,9 @@ public class FastBootMetadataBuilder {
 
         if (multiTenancyStrategy != null && multiTenancyStrategy != MultiTenancyStrategy.NONE
                 && multiTenancyStrategy != MultiTenancyStrategy.DISCRIMINATOR) {
+            // Note: the counterpart of this code, but for single-tenancy (injecting the datasource),
+            // can be found in io.quarkus.hibernate.orm.runtime.FastBootHibernatePersistenceProvider.injectDataSource
+
             // We need to initialize the multi tenant connection provider
             // on static init as it is used in MetadataBuildingOptionsImpl
             // to determine if multi-tenancy is enabled.
@@ -270,7 +278,10 @@ public class FastBootMetadataBuilder {
 
         // Quarkus specific
 
-        cfg.put("hibernate.boot.allow_jdbc_metadata_access", "false");
+        cfg.put(AvailableSettings.ALLOW_METADATA_ON_BOOT, "false");
+
+        // Disallow CDI during metadata building in anticipation for https://github.com/quarkusio/quarkus/issues/40897
+        cfg.put(AvailableSettings.ALLOW_EXTENSIONS_IN_CDI, "false");
 
         //This shouldn't be encouraged, but sometimes it's really useful - and it used to be the default
         //in Hibernate ORM before the JPA spec would require to change this.
@@ -593,7 +604,7 @@ public class FastBootMetadataBuilder {
         PersistenceUnitTransactionType transactionType = PersistenceUnitTransactionTypeHelper
                 .interpretTransactionType(configurationValues.get(JPA_TRANSACTION_TYPE));
         if (transactionType == null) {
-            transactionType = persistenceUnit.getTransactionType();
+            transactionType = persistenceUnit.getPersistenceUnitTransactionType();
         }
         if (transactionType == null) {
             // is it more appropriate to have this be based on bootstrap entry point (EE vs SE)?
@@ -655,6 +666,16 @@ public class FastBootMetadataBuilder {
         if (metadataBuilderContributor != null) {
             metadataBuilderContributor.contribute(metamodelBuilder);
         }
+    }
+
+    private void applyTypeContributors() {
+        PersistenceUnitUtil.extensionInstancesForPersistenceUnit(TypeContributor.class, persistenceUnit.getName())
+                .stream().forEach(metamodelBuilder::applyTypes);
+    }
+
+    private void applyFunctionContributors() {
+        PersistenceUnitUtil.extensionInstancesForPersistenceUnit(FunctionContributor.class, persistenceUnit.getName())
+                .stream().forEach(metamodelBuilder::applyFunctions);
     }
 
     @SuppressWarnings("unchecked")

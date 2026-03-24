@@ -26,6 +26,7 @@ final class OidcTenantConfigImpl implements OidcTenantConfig {
 
     enum ConfigMappingMethods {
         AUTH_SERVER_URL,
+        DISCOVERY_PATH,
         DISCOVERY_ENABLED,
         REGISTRATION_PATH,
         CONNECTION_DELAY,
@@ -86,6 +87,7 @@ final class OidcTenantConfigImpl implements OidcTenantConfig {
         CREDENTIALS_JWT_LIFESPAN,
         CREDENTIALS_JWT_ASSERTION,
         CREDENTIALS_JWT_AUDIENCE,
+        CREDENTIALS_JWT_KEEP_AUDIENCE_TRAILING_SLASH,
         CREDENTIALS_JWT_TOKEN_ID,
         PROVIDER,
         JWKS,
@@ -96,6 +98,7 @@ final class OidcTenantConfigImpl implements OidcTenantConfig {
         CODE_GRANT,
         AUTHENTICATION,
         CERTIFICATION_CHAIN,
+        RESOURCE_METADATA,
         LOGOUT,
         TOKEN,
         ROLES,
@@ -141,6 +144,8 @@ final class OidcTenantConfigImpl implements OidcTenantConfig {
         AUTHENTICATION_COOKIE_PATH_HEADER,
         AUTHENTICATION_COOKIE_DOMAIN,
         AUTHENTICATION_COOKIE_SAME_SITE,
+        AUTHENTICATION_STATE_COOKIE_SAME_SITE,
+        AUTHENTICATION_CACHE_CONTROL,
         AUTHENTICATION_ALLOW_MULTIPLE_CODE_FLOWS,
         AUTHENTICATION_FAIL_ON_MISSING_STATE_PARAM,
         AUTHENTICATION_FAIL_ON_UNRESOLVED_KID,
@@ -158,10 +163,16 @@ final class OidcTenantConfigImpl implements OidcTenantConfig {
         CERTIFICATION_CHAIN_TRUST_STORE_PASSWORD,
         CERTIFICATION_CHAIN_TRUST_STORE_CERT_ALIAS,
         CERTIFICATION_CHAIN_TRUST_STORE_FILE_TYPE,
+        RESOURCE_METADATA_ENABLED,
+        RESOURCE_METADATA_RESOURCE,
+        RESOURCE_METADATA_SCOPES,
+        RESOURCE_METADATA_AUTHORIZATION_SERVER,
+        RESOURCE_METADATA_FORCE_HTTPS_SCHEME,
         LOGOUT_PATH,
         LOGOUT_POST_LOGOUT_PATH,
         LOGOUT_POST_LOGOUT_URI_PARAM,
         LOGOUT_CLEAR_SITE_DATA,
+        LOGOUT_MODE,
         LOGOUT_EXTRA_PARAMS,
         LOGOUT_BACK_CHANNEL,
         LOGOUT_FRONT_CHANNEL,
@@ -203,7 +214,15 @@ final class OidcTenantConfigImpl implements OidcTenantConfig {
         INTROSPECTION_CREDENTIALS_SECRET,
         INTROSPECTION_CREDENTIALS_INCLUDE_CLIENT_ID,
         TENANT_ID,
-        JWT_BEARER_TOKEN_PATH
+        PROXY_CONFIGURATION_NAME,
+        JWT_BEARER_TOKEN_PATH,
+        PAR,
+        PAR_ENABLED,
+        RAR,
+        RAR_SIMPLE,
+        RAR_ARRAY,
+        RAR_TYPE,
+        PAR_PATH
     }
 
     final Map<ConfigMappingMethods, Boolean> invocationsRecorder = new EnumMap<>(ConfigMappingMethods.class);
@@ -507,6 +526,12 @@ final class OidcTenantConfigImpl implements OidcTenantConfig {
             }
 
             @Override
+            public LogoutMode logoutMode() {
+                invocationsRecorder.put(ConfigMappingMethods.LOGOUT_MODE, true);
+                return LogoutMode.QUERY;
+            }
+
+            @Override
             public Backchannel backchannel() {
                 invocationsRecorder.put(ConfigMappingMethods.LOGOUT_BACK_CHANNEL, true);
                 return new Backchannel() {
@@ -589,6 +614,42 @@ final class OidcTenantConfigImpl implements OidcTenantConfig {
             public Optional<String> trustStoreFileType() {
                 invocationsRecorder.put(ConfigMappingMethods.CERTIFICATION_CHAIN_TRUST_STORE_FILE_TYPE, true);
                 return Optional.empty();
+            }
+        };
+    }
+
+    @Override
+    public ResourceMetadata resourceMetadata() {
+        invocationsRecorder.put(ConfigMappingMethods.RESOURCE_METADATA, true);
+        return new ResourceMetadata() {
+            @Override
+            public boolean enabled() {
+                invocationsRecorder.put(ConfigMappingMethods.RESOURCE_METADATA_ENABLED, true);
+                return false;
+            }
+
+            @Override
+            public Optional<String> resource() {
+                invocationsRecorder.put(ConfigMappingMethods.RESOURCE_METADATA_RESOURCE, true);
+                return Optional.empty();
+            }
+
+            @Override
+            public Optional<Set<String>> scopes() {
+                invocationsRecorder.put(ConfigMappingMethods.RESOURCE_METADATA_SCOPES, true);
+                return Optional.empty();
+            }
+
+            @Override
+            public Optional<String> authorizationServer() {
+                invocationsRecorder.put(ConfigMappingMethods.RESOURCE_METADATA_AUTHORIZATION_SERVER, true);
+                return Optional.empty();
+            }
+
+            @Override
+            public boolean forceHttpsScheme() {
+                invocationsRecorder.put(ConfigMappingMethods.RESOURCE_METADATA_FORCE_HTTPS_SCHEME, true);
+                return false;
             }
         };
     }
@@ -718,6 +779,18 @@ final class OidcTenantConfigImpl implements OidcTenantConfig {
             }
 
             @Override
+            public CookieSameSite stateCookieSameSite() {
+                invocationsRecorder.put(ConfigMappingMethods.AUTHENTICATION_STATE_COOKIE_SAME_SITE, true);
+                return CookieSameSite.LAX;
+            }
+
+            @Override
+            public Optional<Set<CacheControl>> cacheControl() {
+                invocationsRecorder.put(ConfigMappingMethods.AUTHENTICATION_CACHE_CONTROL, true);
+                return Optional.empty();
+            }
+
+            @Override
             public boolean allowMultipleCodeFlows() {
                 invocationsRecorder.put(ConfigMappingMethods.AUTHENTICATION_ALLOW_MULTIPLE_CODE_FLOWS, true);
                 return false;
@@ -742,7 +815,7 @@ final class OidcTenantConfigImpl implements OidcTenantConfig {
             }
 
             @Override
-            public Duration sessionAgeExtension() {
+            public Optional<Duration> sessionAgeExtension() {
                 invocationsRecorder.put(ConfigMappingMethods.AUTHENTICATION_SESSION_AGE_EXTENSION, true);
                 return null;
             }
@@ -787,6 +860,48 @@ final class OidcTenantConfigImpl implements OidcTenantConfig {
             public Optional<String> stateSecret() {
                 invocationsRecorder.put(ConfigMappingMethods.AUTHENTICATION_STATE_SECRET, true);
                 return Optional.empty();
+            }
+
+            @Override
+            public PushedAuthorizationRequest par() {
+                invocationsRecorder.put(ConfigMappingMethods.PAR, true);
+                return new PushedAuthorizationRequest() {
+                    @Override
+                    public Optional<Boolean> enabled() {
+                        invocationsRecorder.put(ConfigMappingMethods.PAR_ENABLED, true);
+                        return Optional.empty();
+                    }
+
+                    @Override
+                    public Optional<String> path() {
+                        invocationsRecorder.put(ConfigMappingMethods.PAR_PATH, true);
+                        return Optional.empty();
+                    }
+                };
+            }
+
+            @Override
+            public Optional<RichAuthorizationRequests> rar() {
+                invocationsRecorder.put(ConfigMappingMethods.RAR, true);
+                return Optional.of(new RichAuthorizationRequests() {
+                    @Override
+                    public Map<String, String> simple() {
+                        invocationsRecorder.put(ConfigMappingMethods.RAR_SIMPLE, true);
+                        return Map.of();
+                    }
+
+                    @Override
+                    public Map<String, List<String>> array() {
+                        invocationsRecorder.put(ConfigMappingMethods.RAR_ARRAY, true);
+                        return Map.of();
+                    }
+
+                    @Override
+                    public String type() {
+                        invocationsRecorder.put(ConfigMappingMethods.RAR_TYPE, true);
+                        return "";
+                    }
+                });
             }
         };
     }
@@ -1073,6 +1188,12 @@ final class OidcTenantConfigImpl implements OidcTenantConfig {
                     }
 
                     @Override
+                    public boolean keepAudienceTrailingSlash() {
+                        invocationsRecorder.put(ConfigMappingMethods.CREDENTIALS_JWT_KEEP_AUDIENCE_TRAILING_SLASH, true);
+                        return false;
+                    }
+
+                    @Override
                     public Optional<String> tokenKeyId() {
                         invocationsRecorder.put(ConfigMappingMethods.CREDENTIALS_JWT_TOKEN_ID, true);
                         return Optional.empty();
@@ -1122,6 +1243,12 @@ final class OidcTenantConfigImpl implements OidcTenantConfig {
     public Optional<String> authServerUrl() {
         invocationsRecorder.put(ConfigMappingMethods.AUTH_SERVER_URL, true);
         return Optional.empty();
+    }
+
+    @Override
+    public String discoveryPath() {
+        invocationsRecorder.put(ConfigMappingMethods.DISCOVERY_PATH, true);
+        return null;
     }
 
     @Override
@@ -1176,6 +1303,12 @@ final class OidcTenantConfigImpl implements OidcTenantConfig {
     public Proxy proxy() {
         invocationsRecorder.put(ConfigMappingMethods.PROXY, true);
         return new Proxy() {
+            @Override
+            public Optional<String> proxyConfigurationName() {
+                invocationsRecorder.put(ConfigMappingMethods.PROXY_CONFIGURATION_NAME, true);
+                return Optional.empty();
+            }
+
             @Override
             public Optional<String> host() {
                 invocationsRecorder.put(ConfigMappingMethods.PROXY_HOST, true);

@@ -20,6 +20,7 @@ import org.jboss.threads.JBossThreadFactory;
 
 import io.quarkus.builder.diag.Diagnostic;
 import io.quarkus.builder.item.BuildItem;
+import io.smallrye.common.cpu.ProcessorInfo;
 
 final class Execution {
 
@@ -27,7 +28,7 @@ final class Execution {
 
     private final BuildChain chain;
     private final ConcurrentHashMap<ItemId, BuildItem> singles;
-    private final ConcurrentHashMap<ItemId, List<BuildItem>> multis;
+    private final MultiBuildItems multis;
     private final Set<ItemId> finalIds;
     private final ConcurrentHashMap<StepInfo, BuildContext> contextCache = new ConcurrentHashMap<>();
     private final EnhancedQueueExecutor executor;
@@ -50,12 +51,16 @@ final class Execution {
     Execution(final BuildExecutionBuilder builder, final Set<ItemId> finalIds) {
         chain = builder.getChain();
         this.singles = new ConcurrentHashMap<>(builder.getInitialSingle());
-        this.multis = new ConcurrentHashMap<>(builder.getInitialMulti());
+        this.multis = builder.getMultis();
         this.finalIds = finalIds;
         final EnhancedQueueExecutor.Builder executorBuilder = new EnhancedQueueExecutor.Builder();
         executorBuilder.setRegisterMBean(false);
         executorBuilder.setQueueLimited(false);
-        executorBuilder.setCorePoolSize(8).setMaximumPoolSize(1024);
+        final int availableProcessors = ProcessorInfo.availableProcessors();
+        final int corePoolSize = defineCorePoolSize(availableProcessors);
+        final int maxPoolSize = defineMaxPoolSize(availableProcessors, corePoolSize);
+        executorBuilder.setMaximumPoolSize(maxPoolSize);
+        executorBuilder.setCorePoolSize(corePoolSize);
         executorBuilder.setExceptionHandler(JBossExecutors.loggingExceptionHandler());
         executorBuilder.setThreadFactory(new JBossThreadFactory(new ThreadGroup("build group"), Boolean.FALSE, null, "build-%t",
                 JBossExecutors.loggingExceptionHandler(), null));
@@ -66,6 +71,18 @@ final class Execution {
             done = true;
 
         metrics = new BuildMetrics(buildTargetName);
+    }
+
+    private static int defineMaxPoolSize(final int availableProcessors, final int corePoolSize) {
+        //We used to have a hard limit of 1024, but we think now that was too high.
+        //Now we default to twice the number of available processors, and allow to configure it so that people can experiment.
+        Integer integer = Integer.getInteger("io.quarkus.builder.execution.maxPoolSize");
+        return integer != null ? integer : Math.max(availableProcessors * 2, corePoolSize);
+    }
+
+    private static int defineCorePoolSize(final int availableProcessors) {
+        //The default core pool size is 8 but we allow to tune this to experiment with different values.
+        return Integer.getInteger("io.quarkus.builder.execution.corePoolSize", 8);
     }
 
     List<Diagnostic> getDiagnostics() {
@@ -86,7 +103,7 @@ final class Execution {
         runningThread = Thread.currentThread();
 
         // run the build
-        final List<StepInfo> startSteps = chain.getStartSteps();
+        final Set<StepInfo> startSteps = chain.getStartSteps();
         for (StepInfo startStep : startSteps) {
             executor.execute(getBuildContext(startStep)::run);
         }
@@ -134,7 +151,7 @@ final class Execution {
         long duration = max(0, System.nanoTime() - start);
         metrics.buildFinished(TimeUnit.NANOSECONDS.toMillis(duration));
         return new BuildResult(singles, multis, finalIds, Collections.unmodifiableList(diagnostics),
-                duration, metrics);
+                duration, metrics, chain.getClassLoader());
     }
 
     EnhancedQueueExecutor getExecutor() {
@@ -157,7 +174,7 @@ final class Execution {
         return singles;
     }
 
-    ConcurrentHashMap<ItemId, List<BuildItem>> getMultis() {
+    MultiBuildItems getMultis() {
         return multis;
     }
 

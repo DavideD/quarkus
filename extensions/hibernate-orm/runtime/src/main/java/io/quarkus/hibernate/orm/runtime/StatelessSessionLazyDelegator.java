@@ -1,17 +1,23 @@
 package io.quarkus.hibernate.orm.runtime;
 
 import java.util.List;
+import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import jakarta.persistence.EntityGraph;
+import jakarta.persistence.TypedQueryReference;
 import jakarta.persistence.criteria.CriteriaDelete;
 import jakarta.persistence.criteria.CriteriaQuery;
 import jakarta.persistence.criteria.CriteriaUpdate;
 
+import org.hibernate.CacheMode;
 import org.hibernate.Filter;
 import org.hibernate.HibernateException;
 import org.hibernate.LockMode;
 import org.hibernate.SessionFactory;
+import org.hibernate.SharedSessionBuilder;
+import org.hibernate.SharedStatelessSessionBuilder;
 import org.hibernate.StatelessSession;
 import org.hibernate.Transaction;
 import org.hibernate.graph.GraphSemantic;
@@ -25,7 +31,6 @@ import org.hibernate.query.Query;
 import org.hibernate.query.SelectionQuery;
 import org.hibernate.query.criteria.HibernateCriteriaBuilder;
 import org.hibernate.query.criteria.JpaCriteriaInsert;
-import org.hibernate.query.criteria.JpaCriteriaInsertSelect;
 
 /**
  * Plays the exact same role as {@link org.hibernate.engine.spi.SessionLazyDelegator} for {@link org.hibernate.Session}
@@ -54,6 +59,11 @@ class StatelessSessionLazyDelegator implements StatelessSession {
     }
 
     @Override
+    public void insertMultiple(List<?> entities) {
+        delegate.get().insertMultiple(entities);
+    }
+
+    @Override
     public void update(Object entity) {
         delegate.get().update(entity);
     }
@@ -64,6 +74,11 @@ class StatelessSessionLazyDelegator implements StatelessSession {
     }
 
     @Override
+    public void updateMultiple(List<?> entities) {
+        delegate.get().updateMultiple(entities);
+    }
+
+    @Override
     public void delete(Object entity) {
         delegate.get().delete(entity);
     }
@@ -71,6 +86,11 @@ class StatelessSessionLazyDelegator implements StatelessSession {
     @Override
     public void delete(String entityName, Object entity) {
         delegate.get().delete(entityName, entity);
+    }
+
+    @Override
+    public void deleteMultiple(List<?> entities) {
+        delegate.get().deleteMultiple(entities);
     }
 
     @Override
@@ -94,6 +114,36 @@ class StatelessSessionLazyDelegator implements StatelessSession {
     }
 
     @Override
+    public <T> T get(EntityGraph<T> graph, Object id) {
+        return delegate.get().get(graph, id);
+    }
+
+    @Override
+    public <T> T get(EntityGraph<T> graph, Object id, LockMode lockMode) {
+        return delegate.get().get(graph, id, lockMode);
+    }
+
+    @Override
+    public <T> List<T> getMultiple(Class<T> entityClass, List<?> ids) {
+        return delegate.get().getMultiple(entityClass, ids);
+    }
+
+    @Override
+    public <T> List<T> getMultiple(Class<T> entityClass, List<?> ids, LockMode lockMode) {
+        return delegate.get().getMultiple(entityClass, ids, lockMode);
+    }
+
+    @Override
+    public <T> List<T> getMultiple(EntityGraph<T> entityGraph, List<?> ids) {
+        return delegate.get().getMultiple(entityGraph, ids);
+    }
+
+    @Override
+    public <T> List<T> getMultiple(EntityGraph<T> entityGraph, GraphSemantic graphSemantic, List<?> ids) {
+        return delegate.get().getMultiple(entityGraph, graphSemantic, ids);
+    }
+
+    @Override
     public Filter enableFilter(String filterName) {
         return delegate.get().enableFilter(filterName);
     }
@@ -106,11 +156,6 @@ class StatelessSessionLazyDelegator implements StatelessSession {
     @Override
     public void disableFilter(String filterName) {
         delegate.get().disableFilter(filterName);
-    }
-
-    @Override
-    public MutationQuery createMutationQuery(JpaCriteriaInsert insertSelect) {
-        return delegate.get().createMutationQuery(insertSelect);
     }
 
     @Override
@@ -277,6 +322,11 @@ class StatelessSessionLazyDelegator implements StatelessSession {
     }
 
     @Override
+    public <R> Query<R> createQuery(TypedQueryReference<R> typedQueryReference) {
+        return delegate.get().createQuery(typedQueryReference);
+    }
+
+    @Override
     @Deprecated(since = "6.0")
     public NativeQuery createNativeQuery(String sqlString) {
         return delegate.get().createNativeQuery(sqlString);
@@ -319,6 +369,11 @@ class StatelessSessionLazyDelegator implements StatelessSession {
     }
 
     @Override
+    public <R> SelectionQuery<R> createSelectionQuery(String hqlString, EntityGraph<R> resultGraph) {
+        return delegate.get().createSelectionQuery(hqlString, resultGraph);
+    }
+
+    @Override
     public MutationQuery createMutationQuery(String hqlString) {
         return delegate.get().createMutationQuery(hqlString);
     }
@@ -334,8 +389,8 @@ class StatelessSessionLazyDelegator implements StatelessSession {
     }
 
     @Override
-    public MutationQuery createMutationQuery(JpaCriteriaInsertSelect insertSelect) {
-        return delegate.get().createMutationQuery(insertSelect);
+    public MutationQuery createMutationQuery(JpaCriteriaInsert insert) {
+        return delegate.get().createMutationQuery(insert);
     }
 
     @Override
@@ -413,6 +468,26 @@ class StatelessSessionLazyDelegator implements StatelessSession {
     }
 
     @Override
+    public SharedSessionBuilder sessionWithOptions() {
+        return delegate.get().sessionWithOptions();
+    }
+
+    @Override
+    public SharedStatelessSessionBuilder statelessWithOptions() {
+        return delegate.get().statelessWithOptions();
+    }
+
+    @Override
+    public void inTransaction(Consumer<? super Transaction> action) {
+        delegate.get().inTransaction(action);
+    }
+
+    @Override
+    public <R> R fromTransaction(Function<? super Transaction, R> action) {
+        return delegate.get().fromTransaction(action);
+    }
+
+    @Override
     public SessionFactory getFactory() {
         return delegate.get().getFactory();
     }
@@ -428,6 +503,11 @@ class StatelessSessionLazyDelegator implements StatelessSession {
     }
 
     @Override
+    public void upsertMultiple(List<?> entities) {
+        delegate.get().upsertMultiple(entities);
+    }
+
+    @Override
     public <T> T get(EntityGraph<T> graph, GraphSemantic graphSemantic, Object id) {
         return delegate.get().get(graph, graphSemantic, id);
     }
@@ -435,5 +515,20 @@ class StatelessSessionLazyDelegator implements StatelessSession {
     @Override
     public <T> T get(EntityGraph<T> graph, GraphSemantic graphSemantic, Object id, LockMode lockMode) {
         return delegate.get().get(graph, graphSemantic, id, lockMode);
+    }
+
+    @Override
+    public CacheMode getCacheMode() {
+        return delegate.get().getCacheMode();
+    }
+
+    @Override
+    public void setCacheMode(CacheMode cacheMode) {
+        delegate.get().setCacheMode(cacheMode);
+    }
+
+    @Override
+    public <T> T unwrap(Class<T> type) {
+        return delegate.get().unwrap(type);
     }
 }

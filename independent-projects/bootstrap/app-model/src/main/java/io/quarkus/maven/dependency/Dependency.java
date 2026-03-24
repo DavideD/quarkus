@@ -3,7 +3,9 @@ package io.quarkus.maven.dependency;
 import java.util.Collection;
 import java.util.List;
 
-public interface Dependency extends ArtifactCoords {
+import io.quarkus.bootstrap.model.Mappable;
+
+public interface Dependency extends ArtifactCoords, Mappable {
 
     String SCOPE_COMPILE = "compile";
     String SCOPE_IMPORT = "import";
@@ -18,6 +20,15 @@ public interface Dependency extends ArtifactCoords {
 
     static Dependency pomImport(String groupId, String artifactId, String version) {
         return new ArtifactDependency(groupId, artifactId, null, ArtifactCoords.TYPE_POM, version, SCOPE_IMPORT, false);
+    }
+
+    static Dependency withFlags(String groupId, String artifactId, String classifier, String type, String version, int flags) {
+        return new ArtifactDependency(groupId, artifactId, classifier, type, version,
+                flags);
+    }
+
+    static Dependency jarWithFlags(String groupId, String artifactId, String version, int flags) {
+        return withFlags(groupId, artifactId, ArtifactCoords.DEFAULT_CLASSIFIER, ArtifactCoords.TYPE_JAR, version, flags);
     }
 
     String getScope();

@@ -45,6 +45,7 @@ import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNa
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.PATH;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.PATH_PARAM;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.PATH_SEGMENT;
+import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.PERIOD;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.PRIMITIVE_BOOLEAN;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.PRIMITIVE_CHAR;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.PRIMITIVE_DOUBLE;
@@ -77,7 +78,6 @@ import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNa
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.SSE_EVENT_SINK;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.STRING;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.SUSPENDED;
-import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.TRANSACTIONAL;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.UNI;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.URI_INFO;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.YEAR;
@@ -159,7 +159,7 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
             RESOURCE_INFO);
 
     protected static final Set<DotName> SUPPORT_TEMPORAL_PARAMS = Set.of(INSTANT, LOCAL_DATE, LOCAL_TIME, LOCAL_DATE_TIME,
-            OFFSET_TIME, OFFSET_DATE_TIME, ZONED_DATE_TIME, YEAR, YEAR_MONTH);
+            OFFSET_TIME, OFFSET_DATE_TIME, ZONED_DATE_TIME, YEAR, YEAR_MONTH, PERIOD);
 
     protected static final Logger log = Logger.getLogger(EndpointIndexer.class);
     protected static final String[] EMPTY_STRING_ARRAY = new String[] {};
@@ -474,7 +474,7 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
             classNameBindings = existingClassNameBindings;
         }
 
-        for (DotName httpMethod : httpAnnotationToMethod.keySet()) {
+        for (DotName httpMethod : httpAnnotationToMethod.keySet().stream().sorted().toList()) {
             List<MethodInfo> methods = currentClassInfo.methods();
             for (MethodInfo info : methods) {
                 AnnotationInstance annotation = annotationStore.getAnnotation(info, httpMethod);
@@ -752,6 +752,14 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
                 }
             }
             Set<String> nameBindingNames = nameBindingNames(currentMethodInfo, classNameBindings);
+
+            /*
+             * TODO: At some point we need to rewrite isBlocking and isRunOnVirtualThread into
+             * one method that returns an enum.
+             * This would require passing this enum all the way to the runtime and ripping out
+             * the two flags from ResourceMethod
+             */
+
             boolean blocking = isBlocking(currentMethodInfo, defaultBlocking);
             boolean runOnVirtualThread = isRunOnVirtualThread(currentMethodInfo, blocking, defaultBlocking);
             // we want to allow "overriding" the blocking/non-blocking setting from an implementation class
@@ -872,6 +880,8 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
     private boolean isRunOnVirtualThread(MethodInfo info, boolean blocking, BlockingDefault defaultValue) {
         Map.Entry<AnnotationTarget, AnnotationInstance> runOnVirtualThreadAnnotation = getInheritableAnnotation(info,
                 RUN_ON_VIRTUAL_THREAD);
+        Map.Entry<AnnotationTarget, AnnotationInstance> blockingAnnotation = getInheritableAnnotation(info, BLOCKING);
+        Map.Entry<AnnotationTarget, AnnotationInstance> nonBlockingAnnotation = getInheritableAnnotation(info, NON_BLOCKING);
 
         if (runOnVirtualThreadAnnotation != null) {
             if (!JDK_SUPPORTS_VIRTUAL_THREADS) {
@@ -884,17 +894,25 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
                         + "' uses @RunOnVirtualThread but the target JDK version doesn't support virtual threads. Please configure your build tool to target Java 19 or above");
             }
             if (!blocking) {
-                throw new DeploymentException(
-                        "Method '" + info.name() + "' of class '" + info.declaringClass().name()
-                                + "' is considered a non blocking method. @RunOnVirtualThread can only be used on " +
-                                " methods considered blocking");
+                if (blockingAnnotation != null) {
+                    return false;
+                }
+                if (nonBlockingAnnotation != null) {
+                    throw new DeploymentException(
+                            "Method '" + info.name() + "' of class '" + info.declaringClass().name()
+                                    + "' is considered a non blocking method. @RunOnVirtualThread can only be used on " +
+                                    " methods considered blocking");
+                }
+                return true;
             } else {
                 return true;
             }
-        } else if (defaultValue == BlockingDefault.RUN_ON_VIRTUAL_THREAD) {
-            return true;
         } else {
-            return false;
+            if (blockingAnnotation != null) {
+                return false;
+            } else {
+                return defaultValue == BlockingDefault.RUN_ON_VIRTUAL_THREAD;
+            }
         }
     }
 
@@ -928,15 +946,13 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
         } else if ((nonBlockingAnnotation != null)) {
             return false;
         }
-        Map.Entry<AnnotationTarget, AnnotationInstance> transactional = getInheritableAnnotation(info, TRANSACTIONAL); //we treat this the same as blocking, as JTA is blocking, but it is lower priority
+
         if (defaultValue == BlockingDefault.BLOCKING) {
             return true;
         } else if (defaultValue == BlockingDefault.RUN_ON_VIRTUAL_THREAD) {
             return false;
         } else if (defaultValue == BlockingDefault.NON_BLOCKING) {
             return false;
-        } else if (transactional != null) {
-            return true;
         }
         return doesMethodHaveBlockingSignature(info);
     }

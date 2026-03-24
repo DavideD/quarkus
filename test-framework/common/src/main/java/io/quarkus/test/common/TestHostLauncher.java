@@ -2,6 +2,11 @@ package io.quarkus.test.common;
 
 import java.io.IOException;
 import java.util.Map;
+import java.util.Optional;
+import java.util.OptionalInt;
+
+import org.eclipse.microprofile.config.Config;
+import org.eclipse.microprofile.config.ConfigProvider;
 
 /**
  * A launcher that simply sets the {@code quarkus.http.host} property based on the value {@code quarkus.http.test-host}
@@ -10,13 +15,26 @@ import java.util.Map;
  */
 @SuppressWarnings("rawtypes")
 public class TestHostLauncher implements ArtifactLauncher {
-
     private String previousHost;
 
     @Override
-    public void start() throws IOException {
+    public Optional<ListeningAddress> start() throws IOException {
+        Config config = ConfigProvider.getConfig();
         // set 'quarkus.http.host' to ensure that RestAssured targets the proper host
-        previousHost = System.setProperty("quarkus.http.host", System.getProperty("quarkus.http.test-host"));
+        previousHost = System.setProperty("quarkus.http.host", config.getValue("quarkus.http.test-host", String.class));
+
+        // We need to manually query and set defaults, because this runs in IT and VertxHttpConfig is not available
+        boolean testSslEnabled = config.getOptionalValue("quarkus.http.test-ssl-enabled", boolean.class).orElse(false);
+        int port;
+        String protocol;
+        if (testSslEnabled) {
+            port = config.getValue("quarkus.http.test-ssl-port", OptionalInt.class).orElse(8444);
+            protocol = "https";
+        } else {
+            port = config.getValue("quarkus.http.test-port", OptionalInt.class).orElse(8081);
+            protocol = "http";
+        }
+        return Optional.of(new ListeningAddress(port, protocol));
     }
 
     @Override
@@ -24,11 +42,6 @@ public class TestHostLauncher implements ArtifactLauncher {
         if (previousHost != null) {
             System.setProperty("quarkus.http.host", previousHost);
         }
-    }
-
-    @Override
-    public boolean listensOnSsl() {
-        return Boolean.parseBoolean(System.getProperty("quarkus.http.test-ssl-enabled", "false"));
     }
 
     @Override

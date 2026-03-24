@@ -1,5 +1,7 @@
 package io.quarkus.smallrye.reactivemessaging.deployment;
 
+import static io.quarkus.smallrye.reactivemessaging.runtime.ReactiveMessagingConfiguration.normalizeChannelName;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -48,28 +50,24 @@ public class WiringHelper {
     }
 
     static void produceIncomingChannel(BuildProducer<ChannelBuildItem> producer, String name) {
-        String channelName = normalizeChannelName(name);
-
-        Optional<String> managingConnector = getManagingConnector(ChannelDirection.INCOMING, channelName);
+        Optional<String> managingConnector = getManagingConnector(ChannelDirection.INCOMING, name);
         if (managingConnector.isPresent()) {
-            if (isChannelEnabled(ChannelDirection.INCOMING, channelName)) {
-                producer.produce(ChannelBuildItem.incoming(channelName, managingConnector.get()));
+            if (isChannelEnabled(ChannelDirection.INCOMING, name)) {
+                producer.produce(ChannelBuildItem.incoming(name, managingConnector.get()));
             }
         } else {
-            producer.produce(ChannelBuildItem.incoming(channelName, null));
+            producer.produce(ChannelBuildItem.incoming(name, null));
         }
     }
 
     static void produceOutgoingChannel(BuildProducer<ChannelBuildItem> producer, String name) {
-        String channelName = normalizeChannelName(name);
-
-        Optional<String> managingConnector = getManagingConnector(ChannelDirection.OUTGOING, channelName);
+        Optional<String> managingConnector = getManagingConnector(ChannelDirection.OUTGOING, name);
         if (managingConnector.isPresent()) {
-            if (isChannelEnabled(ChannelDirection.OUTGOING, channelName)) {
-                producer.produce(ChannelBuildItem.outgoing(channelName, managingConnector.get()));
+            if (isChannelEnabled(ChannelDirection.OUTGOING, name)) {
+                producer.produce(ChannelBuildItem.outgoing(name, managingConnector.get()));
             }
         } else {
-            producer.produce(ChannelBuildItem.outgoing(channelName, null));
+            producer.produce(ChannelBuildItem.outgoing(name, null));
         }
     }
 
@@ -83,7 +81,7 @@ public class WiringHelper {
      */
     static Optional<String> getManagingConnector(ChannelDirection direction, String channel) {
         return ConfigProvider.getConfig().getOptionalValue(
-                "mp.messaging." + direction.name().toLowerCase() + "." + normalizeChannelName(channel) + ".connector",
+                "quarkus.messaging." + direction.name().toLowerCase() + "." + normalizeChannelName(channel) + ".connector",
                 String.class);
     }
 
@@ -97,7 +95,8 @@ public class WiringHelper {
     static boolean isChannelEnabled(ChannelDirection direction, String channel) {
         return ConfigProvider.getConfig()
                 .getOptionalValue(
-                        "mp.messaging." + direction.name().toLowerCase() + "." + normalizeChannelName(channel) + ".enabled",
+                        "quarkus.messaging." + direction.name().toLowerCase() + "." + normalizeChannelName(channel)
+                                + ".enabled",
                         Boolean.class)
                 .orElse(true);
     }
@@ -197,21 +196,6 @@ public class WiringHelper {
     }
 
     /**
-     * Normalize the name of a given channel.
-     *
-     * Concatenate the channel name with double quotes when it contains dots.
-     * <p>
-     * Otherwise, the SmallRye Reactive Messaging only considers the
-     * text up to the first occurrence of a dot as the channel name.
-     *
-     * @param name the channel name.
-     * @return normalized channel name.
-     */
-    private static String normalizeChannelName(String name) {
-        return name != null && !name.startsWith("\"") && name.contains(".") ? "\"" + name + "\"" : name;
-    }
-
-    /**
      * Finds a connector by name and direction in the given list.
      *
      * @param connectors the list of connectors
@@ -230,29 +214,6 @@ public class WiringHelper {
 
     static boolean hasConnector(List<ConnectorBuildItem> connectors, ChannelDirection direction, String name) {
         return connectors.stream().anyMatch(c -> c.getName().equalsIgnoreCase(name) && c.getDirection() == direction);
-    }
-
-    static Class<?> toType(String type) throws ClassNotFoundException {
-        switch (type.toLowerCase()) {
-            case "boolean":
-                return Boolean.class;
-            case "int":
-                return Integer.class;
-            case "string":
-                return String.class;
-            case "double":
-                return Double.class;
-            case "float":
-                return Float.class;
-            case "short":
-                return Short.class;
-            case "long":
-                return Long.class;
-            case "byte":
-                return Byte.class;
-            default:
-                return WiringHelper.class.getClassLoader().loadClass(type);
-        }
     }
 
     static boolean isSynthetic(MethodInfo method) {

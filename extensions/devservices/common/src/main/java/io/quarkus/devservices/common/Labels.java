@@ -22,6 +22,7 @@ public final class Labels {
 
     public static final String COMPOSE_WAIT_FOR = QUARKUS_COMPOSE_PREFIX + ".wait_for";
     public static final String COMPOSE_WAIT_FOR_LOGS = COMPOSE_WAIT_FOR + ".logs";
+    public static final String COMPOSE_WAIT_FOR_LOGS_TIMEOUT = COMPOSE_WAIT_FOR_LOGS + ".timeout";
     public static final String COMPOSE_WAIT_FOR_PORTS = COMPOSE_WAIT_FOR + ".ports";
     public static final String COMPOSE_WAIT_FOR_PORTS_DISABLE = COMPOSE_WAIT_FOR_PORTS + ".disable";
     public static final String COMPOSE_WAIT_FOR_PORTS_TIMEOUT = COMPOSE_WAIT_FOR_PORTS + ".timeout";
@@ -29,6 +30,16 @@ public final class Labels {
     public static final String COMPOSE_JDBC_PARAMETERS = QUARKUS_COMPOSE_PREFIX + ".jdbc.parameters";
 
     public static final String COMPOSE_EXPOSED_PORTS = QUARKUS_COMPOSE_PREFIX + ".exposed_ports";
+
+    public static final String QUARKUS_LAUNCH_MODE = QUARKUS_DEV_SERVICE + ".launch-mode";
+
+    /**
+     * Label which indicates that this dev service was started by this process, and therefore should not be discovered for
+     * re-use;
+     * instead reuse should be managed by the DevServicesRegistry, so that config updates apply.
+     * We use a UUID as the value so that we don't filter out dev services from other processes.
+     */
+    public static final String QUARKUS_PROCESS_UUID = QUARKUS_DEV_SERVICE + ".process-uuid";
 
     private static final String DATASOURCE = "datasource";
 

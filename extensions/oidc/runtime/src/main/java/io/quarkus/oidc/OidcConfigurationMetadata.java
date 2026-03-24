@@ -15,9 +15,15 @@ public class OidcConfigurationMetadata {
     public static final String JWKS_ENDPOINT = "jwks_uri";
     public static final String USERINFO_ENDPOINT = "userinfo_endpoint";
     public static final String END_SESSION_ENDPOINT = "end_session_endpoint";
-    private static final String REGISTRATION_ENDPOINT = "registration_endpoint";
-    private static final String REVOCATION_ENDPOINT = "revocation_endpoint";
+    public static final String REGISTRATION_ENDPOINT = "registration_endpoint";
+    public static final String REVOCATION_ENDPOINT = "revocation_endpoint";
     public static final String SCOPES_SUPPORTED = "scopes_supported";
+    public static final String RESPONSE_TYPES_SUPPORTED = "response_types_supported";
+    public static final String SUBJECT_TYPES_SUPPORTED = "subject_types_supported";
+    public static final String ID_TOKEN_SIGNING_ALGORITHMS_SUPPORTED = "id_token_signing_alg_values_supported";
+    public static final String CODE_CHALLENGE_METHODS_SUPPORTED = "code_challenge_methods_supported";
+    public static final String PUSHED_AUTHORIZATION_REQUEST_ENDPOINT = "pushed_authorization_request_endpoint";
+    public static final String REQUIRE_PUSHED_AUTHORIZATION_REQUESTS = "require_pushed_authorization_requests";
 
     private final String discoveryUri;
     private final String tokenUri;
@@ -29,6 +35,8 @@ public class OidcConfigurationMetadata {
     private final String registrationUri;
     private final String revocationUri;
     private final String issuer;
+    private final String pushedAuthorizationRequestUri;
+    private final boolean requirePushedAuthorizationRequests;
     private final JsonObject json;
 
     public OidcConfigurationMetadata(String tokenUri,
@@ -39,7 +47,8 @@ public class OidcConfigurationMetadata {
             String endSessionUri,
             String registrationUri,
             String revocationUri,
-            String issuer) {
+            String issuer,
+            String pushedAuthorizationRequestUri) {
         this.discoveryUri = null;
         this.tokenUri = tokenUri;
         this.introspectionUri = introspectionUri;
@@ -50,6 +59,8 @@ public class OidcConfigurationMetadata {
         this.registrationUri = registrationUri;
         this.revocationUri = revocationUri;
         this.issuer = issuer;
+        this.pushedAuthorizationRequestUri = pushedAuthorizationRequestUri;
+        this.requirePushedAuthorizationRequests = false;
         this.json = null;
     }
 
@@ -78,6 +89,10 @@ public class OidcConfigurationMetadata {
                 localMetadataConfig == null ? null : localMetadataConfig.revocationUri);
         this.issuer = getMetadataValue(wellKnownConfig, ISSUER,
                 localMetadataConfig == null ? null : localMetadataConfig.issuer);
+        this.pushedAuthorizationRequestUri = getMetadataValue(wellKnownConfig, PUSHED_AUTHORIZATION_REQUEST_ENDPOINT,
+                localMetadataConfig == null ? null : localMetadataConfig.pushedAuthorizationRequestUri);
+        this.requirePushedAuthorizationRequests = Boolean
+                .parseBoolean(getMetadataValue(wellKnownConfig, REQUIRE_PUSHED_AUTHORIZATION_REQUESTS, null));
         this.json = wellKnownConfig;
     }
 
@@ -125,8 +140,28 @@ public class OidcConfigurationMetadata {
         return getStringList(SCOPES_SUPPORTED);
     }
 
+    public List<String> getSupportedResponseTypes() {
+        return getStringList(RESPONSE_TYPES_SUPPORTED);
+    }
+
+    public List<String> getSupportedSubjectTypes() {
+        return getStringList(SUBJECT_TYPES_SUPPORTED);
+    }
+
+    public List<String> getSupportedIdTokenSigningAlgorithms() {
+        return getStringList(ID_TOKEN_SIGNING_ALGORITHMS_SUPPORTED);
+    }
+
+    public List<String> getSupportedCodeChallengeMethods() {
+        return getStringList(CODE_CHALLENGE_METHODS_SUPPORTED);
+    }
+
     public String getIssuer() {
         return issuer;
+    }
+
+    public String getPushedAuthorizationRequestUri() {
+        return pushedAuthorizationRequestUri;
     }
 
     public String get(String propertyName) {
@@ -142,6 +177,10 @@ public class OidcConfigurationMetadata {
         } else {
             return null;
         }
+    }
+
+    public boolean isRequirePushedAuthorizationRequests() {
+        return requirePushedAuthorizationRequests;
     }
 
     public boolean contains(String propertyName) {

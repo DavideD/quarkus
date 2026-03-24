@@ -7,10 +7,12 @@ import java.util.List;
 
 import org.jboss.logging.Logger;
 
+import io.quarkus.bootstrap.app.ApplicationModelSerializer;
 import io.quarkus.bootstrap.model.ApplicationModel;
 import io.quarkus.bootstrap.resolver.AppModelResolverException;
 import io.quarkus.bootstrap.resolver.QuarkusGradleModelFactory;
-import io.quarkus.bootstrap.util.BootstrapUtils;
+import io.quarkus.bootstrap.workspace.WorkspaceModule;
+import io.quarkus.maven.dependency.ResolvedDependency;
 
 /**
  * Helper class used to expose build tool used by the project
@@ -51,6 +53,38 @@ public class BuildToolHelper {
 
     }
 
+    /**
+     * Returns the application module directory, if the application is built from a source project.
+     * For a single module project it will the project directory. For a multimodule project,
+     * it will be the directory of the application module.
+     * <p>
+     * During re-augmentation of applications packaged as {@code mutable-jar} this method will return the current directory,
+     * since the source project might not be available anymore.
+     *
+     * @return application module directory, never null
+     */
+    public static Path getApplicationModuleOrCurrentDirectory(ApplicationModel appModel) {
+        return getModuleOrCurrentDirectory(appModel.getAppArtifact());
+    }
+
+    private static Path getModuleOrCurrentDirectory(ResolvedDependency resolvedDep) {
+        final WorkspaceModule module = resolvedDep.getWorkspaceModule();
+        if (module != null) {
+            return module.getModuleDir().toPath();
+        }
+        var paths = resolvedDep.getResolvedPaths();
+        for (var path : paths) {
+            if (Files.isDirectory(path)) {
+                var moduleDir = BuildToolHelper.getProjectDir(path);
+                if (moduleDir != null) {
+                    return moduleDir;
+                }
+            }
+        }
+        // the module isn't available, return the current directory
+        return Path.of("").toAbsolutePath();
+    }
+
     public static Path getProjectDir(Path p) {
         Path currentPath = p;
         while (currentPath != null) {
@@ -59,7 +93,7 @@ public class BuildToolHelper {
             }
             currentPath = currentPath.getParent();
         }
-        log.warnv("Unable to find a project directory for {0}.", p);
+        log.warnv("Unable to find the project directory for {0}.", p);
         return null;
     }
 
@@ -115,7 +149,7 @@ public class BuildToolHelper {
             final ApplicationModel model = QuarkusGradleModelFactory.create(
                     getBuildFile(projectRoot, BuildTool.GRADLE).toFile(),
                     mode, jvmArgs, tasks);
-            BootstrapUtils.exportModel(model, "TEST".equalsIgnoreCase(mode));
+            ApplicationModelSerializer.exportGradleModel(model, "TEST".equalsIgnoreCase(mode));
             return model;
         }
         return null;
@@ -126,7 +160,7 @@ public class BuildToolHelper {
         if (isGradleProject(projectRoot)) {
             final ApplicationModel model = QuarkusGradleModelFactory
                     .createForTasks(getBuildFile(projectRoot, BuildTool.GRADLE).toFile(), DEVMODE_REQUIRED_TASKS);
-            BootstrapUtils.exportModel(model, false);
+            ApplicationModelSerializer.exportGradleModel(model, false);
             return model;
         }
         return null;

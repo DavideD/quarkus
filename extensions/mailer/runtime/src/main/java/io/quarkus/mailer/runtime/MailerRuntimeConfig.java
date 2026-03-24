@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.OptionalLong;
 import java.util.regex.Pattern;
 
 import io.quarkus.runtime.annotations.ConfigGroup;
@@ -216,7 +217,7 @@ public interface MailerRuntimeConfig {
      * Sets the connection pool cleaner period.
      * Zero disables expiration checks and connections will remain in the pool until they are closed.
      */
-    @WithDefault("PT1S")
+    @WithDefault("1S")
     Duration poolCleanerPeriod();
 
     /**
@@ -224,7 +225,7 @@ public interface MailerRuntimeConfig {
      * This value determines how long a connection remains unused in the pool before being evicted and closed.
      * A timeout of 0 means there is no timeout.
      */
-    @WithDefault("PT300S")
+    @WithDefault("300S")
     Duration keepAliveTimeout();
 
     /**
@@ -261,4 +262,24 @@ public interface MailerRuntimeConfig {
      */
     @WithDefault("false")
     boolean logInvalidRecipients();
+
+    /**
+     * Sets the timeout duration for blocking mailer operations.
+     * When using the blocking mailer ({@link io.quarkus.mailer.Mailer} interface), this timeout determines how long to wait
+     * for the mail to be sent before throwing a {@link java.util.concurrent.TimeoutException}.
+     * <p>
+     * This prevents indefinite thread blocking when SMTP servers are misconfigured or unreachable.
+     * A value of 0 means no timeout (wait indefinitely) - which is not recommended.
+     * <p>
+     * Default is 60 seconds.
+     */
+    @WithDefault("60S")
+    Duration timeout();
+
+    /**
+     * Sets the max emails count per connection before it gets closed.
+     * <p>
+     * Some SMTP servers have the requirement to allow only a number of emails sent per connection.
+     */
+    OptionalLong maxMailsPerConnection();
 }

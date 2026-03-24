@@ -34,13 +34,13 @@
 
         <!-- Keeping 3.0.0.M3 because 3.2.1 requires class changes -->
         <enforcer-api.version>3.0.0-M3</enforcer-api.version>
-        <maven-invoker-plugin.version>3.9.0</maven-invoker-plugin.version>
-        <maven-core.version>3.9.9</maven-core.version>
+        <maven-invoker-plugin.version>3.9.1</maven-invoker-plugin.version>
+        <maven-core.version>3.9.12</maven-core.version>
 
         <!--
            Supported Maven versions, interpreted as a version range (Also defined in build-parent)
         -->
-        <supported-maven-versions>[3.6.2,)</supported-maven-versions>
+        <supported-maven-versions>[3.9.0,)</supported-maven-versions>
     </properties>
 
     <dependencies>
@@ -104,7 +104,7 @@
                     <dependency>
                         <groupId>org.apache.groovy</groupId>
                         <artifactId>groovy</artifactId>
-                        <version>4.0.27</version>
+                        <version>4.0.28</version>
                     </dependency>
                 </dependencies>
             </plugin>

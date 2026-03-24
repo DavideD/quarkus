@@ -26,6 +26,7 @@ import com.arjuna.common.internal.util.propertyservice.BeanPopulator;
 import com.arjuna.common.util.propertyservice.PropertiesFactory;
 
 import io.quarkus.datasource.common.runtime.DataSourceUtil;
+import io.quarkus.runtime.RuntimeValue;
 import io.quarkus.runtime.ShutdownContext;
 import io.quarkus.runtime.annotations.Recorder;
 import io.quarkus.runtime.configuration.ConfigurationException;
@@ -39,13 +40,18 @@ public class NarayanaJtaRecorder {
 
     private static final Logger log = Logger.getLogger(NarayanaJtaRecorder.class);
 
-    public void setNodeName(final TransactionManagerConfiguration transactions) {
+    private final RuntimeValue<TransactionManagerConfiguration> transactions;
 
+    public NarayanaJtaRecorder(final RuntimeValue<TransactionManagerConfiguration> transactions) {
+        this.transactions = transactions;
+    }
+
+    public void setNodeName() {
         try {
-            String nodeName = transactions.nodeName();
+            String nodeName = transactions.getValue().nodeName();
             if (nodeName.getBytes(StandardCharsets.UTF_8).length > 28
-                    && transactions.shortenNodeNameIfNecessary()) {
-                nodeName = shortenNodeName(transactions.nodeName());
+                    && transactions.getValue().shortenNodeNameIfNecessary()) {
+                nodeName = shortenNodeName(transactions.getValue().nodeName());
             }
             arjPropertyManager.getCoreEnvironmentBean().setNodeIdentifier(nodeName);
             jtaPropertyManager.getJTAEnvironmentBean().setXaRecoveryNodes(List.of(nodeName));
@@ -90,10 +96,10 @@ public class NarayanaJtaRecorder {
         defaultProperties = properties;
     }
 
-    public void setDefaultTimeout(TransactionManagerConfiguration transactions) {
+    public void setDefaultTimeout() {
         arjPropertyManager.getCoordinatorEnvironmentBean()
-                .setDefaultTimeout((int) transactions.defaultTransactionTimeout().getSeconds());
-        TxControl.setDefaultTimeout((int) transactions.defaultTransactionTimeout().getSeconds());
+                .setDefaultTimeout((int) transactions.getValue().defaultTransactionTimeout().getSeconds());
+        TxControl.setDefaultTimeout((int) transactions.getValue().defaultTransactionTimeout().getSeconds());
     }
 
     public static Properties getDefaultProperties() {
@@ -105,19 +111,19 @@ public class NarayanaJtaRecorder {
                 .setTransactionStatusManagerEnable(false);
     }
 
-    public void setConfig(final TransactionManagerConfiguration transactions) {
+    public void setConfig() {
         List<String> objectStores = Arrays.asList(null, "communicationStore", "stateStore");
-        if (transactions.objectStore().type().equals(ObjectStoreType.File_System)) {
-            objectStores.forEach(name -> setObjectStoreDir(name, transactions));
-        } else if (transactions.objectStore().type().equals(ObjectStoreType.JDBC)) {
-            objectStores.forEach(name -> setJDBCObjectStore(name, transactions));
+        if (transactions.getValue().objectStore().type().equals(ObjectStoreType.File_System)) {
+            objectStores.forEach(name -> setObjectStoreDir(name, transactions.getValue()));
+        } else if (transactions.getValue().objectStore().type().equals(ObjectStoreType.JDBC)) {
+            objectStores.forEach(name -> setJDBCObjectStore(name, transactions.getValue()));
         }
         BeanPopulator.getDefaultInstance(RecoveryEnvironmentBean.class)
-                .setRecoveryModuleClassNames(transactions.recoveryModules());
+                .setRecoveryModuleClassNames(transactions.getValue().recoveryModules());
         BeanPopulator.getDefaultInstance(RecoveryEnvironmentBean.class)
-                .setExpiryScannerClassNames(transactions.expiryScanners());
+                .setExpiryScannerClassNames(transactions.getValue().expiryScanners());
         BeanPopulator.getDefaultInstance(JTAEnvironmentBean.class)
-                .setXaResourceOrphanFilterClassNames(transactions.xaResourceOrphanFilters());
+                .setXaResourceOrphanFilterClassNames(transactions.getValue().xaResourceOrphanFilters());
     }
 
     /**
@@ -158,13 +164,12 @@ public class NarayanaJtaRecorder {
         instance.setTablePrefix(config.objectStore().tablePrefix());
     }
 
-    public void startRecoveryService(final TransactionManagerConfiguration transactions,
-            Map<String, String> configuredDataSourcesConfigKeys,
-            Set<String> dataSourcesWithTransactionIntegration) {
+    public void startRecoveryService(Map<String, String> configuredDataSourcesConfigKeys,
+            Set<String> dataSourcesWithTransactionIntegration, boolean xaResourcesPresent, ShutdownContext context) {
 
-        if (transactions.objectStore().type().equals(ObjectStoreType.JDBC)) {
+        if (transactions.getValue().objectStore().type().equals(ObjectStoreType.JDBC)) {
             final String objectStoreDataSourceName;
-            if (transactions.objectStore().datasource().isEmpty()) {
+            if (transactions.getValue().objectStore().datasource().isEmpty()) {
                 if (!DataSourceUtil.hasDefault(configuredDataSourcesConfigKeys.keySet())) {
                     throw new ConfigurationException(
                             "The Narayana JTA extension does not have a datasource configured as the JDBC object store,"
@@ -177,7 +182,7 @@ public class NarayanaJtaRecorder {
                 }
                 objectStoreDataSourceName = DataSourceUtil.DEFAULT_DATASOURCE_NAME;
             } else {
-                objectStoreDataSourceName = transactions.objectStore().datasource().get();
+                objectStoreDataSourceName = transactions.getValue().objectStore().datasource().get();
 
                 if (!configuredDataSourcesConfigKeys.keySet().contains(objectStoreDataSourceName)) {
                     throw new ConfigurationException(
@@ -201,25 +206,25 @@ public class NarayanaJtaRecorder {
                         objectStoreDataSourceName, configuredDataSourcesConfigKeys.get(objectStoreDataSourceName)));
             }
         }
-        if (transactions.enableRecovery()) {
-            QuarkusRecoveryService.getInstance().create();
-            QuarkusRecoveryService.getInstance().start();
+        boolean recoveryEnabled = transactions.getValue().enableRecovery().orElse(xaResourcesPresent);
+        if (!recoveryEnabled) {
+            return;
         }
-    }
-
-    public void handleShutdown(ShutdownContext context, TransactionManagerConfiguration transactions) {
+        QuarkusRecoveryService.getInstance().create();
+        QuarkusRecoveryService.getInstance().start();
         context.addShutdownTask(() -> {
-            if (transactions.enableRecovery()) {
-                try {
-                    QuarkusRecoveryService.getInstance().stop();
-                } catch (Exception e) {
-                    // the recovery manager throws IllegalStateException if it has already been shutdown
-                    log.warn("The recovery manager has already been shutdown", e);
-                } finally {
-                    QuarkusRecoveryService.getInstance().destroy();
-                }
+            try {
+                QuarkusRecoveryService.getInstance().stop();
+            } catch (Exception e) {
+                // the recovery manager throws IllegalStateException if it has already been shutdown
+                log.warn("The recovery manager has already been shutdown", e);
+            } finally {
+                QuarkusRecoveryService.getInstance().destroy();
             }
         });
+    }
+
+    public void handleShutdown(ShutdownContext context) {
         context.addLastShutdownTask(() -> {
             TransactionReaper.terminate(false);
         });

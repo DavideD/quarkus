@@ -18,9 +18,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
@@ -35,11 +37,13 @@ import org.htmlunit.WebResponse;
 import org.htmlunit.html.HtmlForm;
 import org.htmlunit.html.HtmlPage;
 import org.htmlunit.util.Cookie;
+import org.htmlunit.util.NameValuePair;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import io.quarkus.oidc.common.runtime.OidcCommonUtils;
+import io.quarkus.oidc.common.runtime.OidcConstants;
 import io.quarkus.oidc.runtime.OidcUtils;
 import io.quarkus.test.common.QuarkusTestResource;
 import io.quarkus.test.junit.QuarkusTest;
@@ -48,6 +52,7 @@ import io.restassured.RestAssured;
 import io.restassured.response.Response;
 import io.smallrye.jwt.build.Jwt;
 import io.smallrye.jwt.util.KeyUtils;
+import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 
 /**
@@ -70,7 +75,7 @@ public class CodeFlowTest {
             Cookie stateCookie = getStateCookie(webClient, null);
             assertNotNull(stateCookie);
             assertEquals(stateCookie.getName(), "q_auth_Default_test_" + getStateCookieStateParam(stateCookie));
-            assertNull(stateCookie.getSameSite());
+            assertEquals("lax", stateCookie.getSameSite());
 
             webClient.getCookieManager().clearCookies();
 
@@ -95,16 +100,7 @@ public class CodeFlowTest {
             assertEquals("Welcome to Test App", page.getTitleText(),
                     "A second request should not redirect and just re-authenticate the user");
 
-            page = webClient.getPage("http://localhost:8081/web-app/configMetadataIssuer");
-
-            assertEquals(
-                    client.getAuthServerUrl(),
-                    page.asNormalizedText());
-
-            page = webClient.getPage("http://localhost:8081/web-app/configMetadataScopes");
-
-            assertTrue(page.asNormalizedText().contains("openid"));
-            assertTrue(page.asNormalizedText().contains("profile"));
+            verifyConfigurationMetadata(webClient);
 
             Cookie sessionCookie = getSessionCookie(webClient, null);
             assertNotNull(sessionCookie);
@@ -146,7 +142,51 @@ public class CodeFlowTest {
             webClient.getCookieManager().clearCookies();
 
             checkHealth();
+
+            // Static default tenant
+            checkResourceMetadata(null, "/realms/quarkus", null);
         }
+    }
+
+    private void verifyConfigurationMetadata(WebClient webClient) throws IOException {
+        // Issuer
+        HtmlPage page = webClient.getPage("http://localhost:8081/web-app/configMetadataIssuer");
+
+        assertEquals(
+                client.getAuthServerUrl(),
+                page.asNormalizedText());
+
+        // Scopes
+        page = webClient.getPage("http://localhost:8081/web-app/configMetadataScopes");
+
+        assertTrue(page.asNormalizedText().contains("openid"));
+        assertTrue(page.asNormalizedText().contains("profile"));
+
+        // Response types
+        page = webClient.getPage("http://localhost:8081/web-app/configMetadataResponseTypes");
+
+        assertTrue(page.asNormalizedText().contains("code"));
+        assertTrue(page.asNormalizedText().contains("token"));
+
+        // Subject types
+        page = webClient.getPage("http://localhost:8081/web-app/configMetadataSubjectTypes");
+
+        assertTrue(page.asNormalizedText().contains("public"));
+        assertTrue(page.asNormalizedText().contains("pairwise"));
+
+        // ID token signing algorithms
+        page = webClient.getPage("http://localhost:8081/web-app/configMetadataIdTokenSigningAlgorithms");
+
+        assertTrue(page.asNormalizedText().contains("RS256"));
+        assertTrue(page.asNormalizedText().contains("ES256"));
+        assertTrue(page.asNormalizedText().contains("PS256"));
+
+        // PKCE code challenge methods
+        page = webClient.getPage("http://localhost:8081/web-app/configMetadataCodeChallengeMethods");
+
+        assertTrue(page.asNormalizedText().contains("S256"));
+        assertTrue(page.asNormalizedText().contains("plain"));
+
     }
 
     private static void checkHealth() {
@@ -254,7 +294,7 @@ public class CodeFlowTest {
             String endpointLocation = webResponse.getResponseHeaderValue("location");
 
             Cookie stateCookie = getStateCookie(webClient, "tenant-https_test");
-            assertNull(stateCookie.getSameSite());
+            assertEquals("none", stateCookie.getSameSite());
             verifyCodeVerifierAndNonce(stateCookie, keycloakUrl);
 
             assertTrue(endpointLocation.startsWith("https"));
@@ -329,7 +369,7 @@ public class CodeFlowTest {
 
             // State cookie is present
             Cookie stateCookie = getStateCookie(webClient, "tenant-https_test");
-            assertNull(stateCookie.getSameSite());
+            assertEquals("none", stateCookie.getSameSite());
             verifyCodeVerifierAndNonce(stateCookie, keycloakUrl);
 
             // Make a call without an extra state query param, status is 401
@@ -459,6 +499,8 @@ public class CodeFlowTest {
         } catch (Exception ex) {
             assertEquals("Unexpected 401", ex.getMessage());
         }
+        // Static `tenant-nonce` tenant with custom resource path
+        checkResourceMetadata("metadata", ":8080/q/oidc", Set.of("read"));
     }
 
     private void doTestCodeFlowNonce(boolean wrongRedirect) throws Exception {
@@ -591,6 +633,122 @@ public class CodeFlowTest {
             webResponse = webClient.loadWebResponse(new WebRequest(endpointLocationUri.toURL()));
             assertEquals(401, webResponse.getStatusCode());
             assertNull(getStateCookie(webClient, "tenant-nonce"));
+
+            webClient.getCookieManager().clearCookies();
+        }
+    }
+
+    @Test
+    public void testCodeFlowAbsoluteRedirect() throws Exception {
+        try (final WebClient webClient = createWebClient()) {
+            webClient.getOptions().setRedirectEnabled(false);
+
+            WebResponse webResponse = webClient
+                    .loadWebResponse(
+                            new WebRequest(
+                                    URI.create("http://localhost:8081/tenant-absolute-redirect?custom=customValue").toURL()));
+            String keycloakUrl = webResponse.getResponseHeaderValue("location");
+            verifyLocationHeader(webClient, keycloakUrl, "tenant-absolute-redirect", "tenant-absolute-redirect%2Fcallback",
+                    false);
+
+            HtmlPage page = webClient.getPage(keycloakUrl);
+
+            assertEquals("Sign in to quarkus", page.getTitleText());
+            HtmlForm loginForm = page.getForms().get(0);
+            loginForm.getInputByName("username").setValueAttribute("alice");
+            loginForm.getInputByName("password").setValueAttribute("alice");
+
+            webClient.getOptions().setThrowExceptionOnFailingStatusCode(false);
+            webResponse = loginForm.getButtonByName("login").click().getWebResponse();
+            webClient.getOptions().setThrowExceptionOnFailingStatusCode(true);
+
+            // This is a redirect from the OIDC server to the endpoint, with technical paramerts like `code`
+            // but without a request specific query parameter
+            String endpointLocation = webResponse.getResponseHeaderValue("location");
+
+            URI endpointLocationUri = URI.create(endpointLocation);
+            assertEquals("http://localhost:8081/tenant-absolute-redirect/callback",
+                    endpointLocationUri.getScheme() + "://" + endpointLocationUri.getAuthority()
+                            + endpointLocationUri.getPath());
+            assertTrue(endpointLocationUri.getQuery().contains("code="));
+            assertTrue(endpointLocationUri.getQuery().contains("state="));
+            assertFalse(endpointLocationUri.getQuery().contains("custom="));
+
+            // This is a final redirect dropping the technical parameters like `code`
+            // but restoring the custom query parameter
+            webResponse = webClient.loadWebResponse(new WebRequest(endpointLocationUri.toURL()));
+            endpointLocation = webResponse.getResponseHeaderValue("location");
+            endpointLocationUri = URI.create(endpointLocation);
+            assertEquals("http://localhost:8081/tenant-absolute-redirect/callback",
+                    endpointLocationUri.getScheme() + "://" + endpointLocationUri.getAuthority()
+                            + endpointLocationUri.getPath());
+
+            assertFalse(endpointLocationUri.getQuery().contains("code="));
+            assertFalse(endpointLocationUri.getQuery().contains("state="));
+            assertTrue(endpointLocationUri.getQuery().contains("custom=customValue"));
+
+            webResponse = webClient.loadWebResponse(new WebRequest(endpointLocationUri.toURL()));
+            assertEquals(200, webResponse.getStatusCode());
+            assertEquals("http://localhost:8081/tenant-absolute-redirect/callback", webResponse.getContentAsString());
+
+            webClient.getCookieManager().clearCookies();
+        }
+    }
+
+    @Test
+    public void testCodeFlowRestorePathAbsoluteRedirect() throws Exception {
+        try (final WebClient webClient = createWebClient()) {
+            webClient.getOptions().setRedirectEnabled(false);
+
+            WebResponse webResponse = webClient
+                    .loadWebResponse(
+                            new WebRequest(
+                                    URI.create("http://localhost:8081/tenant-restore-path-absolute-redirect?custom=customValue")
+                                            .toURL()));
+            String keycloakUrl = webResponse.getResponseHeaderValue("location");
+            verifyLocationHeader(webClient, keycloakUrl, "tenant-restore-path-absolute-redirect",
+                    "tenant-restore-path-absolute-redirect%2Fcallback",
+                    false);
+
+            HtmlPage page = webClient.getPage(keycloakUrl);
+
+            assertEquals("Sign in to quarkus", page.getTitleText());
+            HtmlForm loginForm = page.getForms().get(0);
+            loginForm.getInputByName("username").setValueAttribute("alice");
+            loginForm.getInputByName("password").setValueAttribute("alice");
+
+            webClient.getOptions().setThrowExceptionOnFailingStatusCode(false);
+            webResponse = loginForm.getButtonByName("login").click().getWebResponse();
+            webClient.getOptions().setThrowExceptionOnFailingStatusCode(true);
+
+            // This is a redirect from the OIDC server to the endpoint, with technical paramerts like `code`
+            // but without a request specific query parameter
+            String endpointLocation = webResponse.getResponseHeaderValue("location");
+
+            URI endpointLocationUri = URI.create(endpointLocation);
+            assertEquals("http://localhost:8081/tenant-restore-path-absolute-redirect/callback",
+                    endpointLocationUri.getScheme() + "://" + endpointLocationUri.getAuthority()
+                            + endpointLocationUri.getPath());
+            assertTrue(endpointLocationUri.getQuery().contains("code="));
+            assertTrue(endpointLocationUri.getQuery().contains("state="));
+            assertFalse(endpointLocationUri.getQuery().contains("custom="));
+
+            // This is a final redirect dropping the technical parameters like `code`
+            // but restoring the custom query parameter, as well as the original request path
+            webResponse = webClient.loadWebResponse(new WebRequest(endpointLocationUri.toURL()));
+            endpointLocation = webResponse.getResponseHeaderValue("location");
+            endpointLocationUri = URI.create(endpointLocation);
+            assertEquals("http://localhost:8081/tenant-restore-path-absolute-redirect",
+                    endpointLocationUri.getScheme() + "://" + endpointLocationUri.getAuthority()
+                            + endpointLocationUri.getPath());
+
+            assertFalse(endpointLocationUri.getQuery().contains("code="));
+            assertFalse(endpointLocationUri.getQuery().contains("state="));
+            assertTrue(endpointLocationUri.getQuery().contains("custom=customValue"));
+
+            webResponse = webClient.loadWebResponse(new WebRequest(endpointLocationUri.toURL()));
+            assertEquals(200, webResponse.getStatusCode());
+            assertEquals("http://localhost:8081/tenant-restore-path-absolute-redirect", webResponse.getContentAsString());
 
             webClient.getCookieManager().clearCookies();
         }
@@ -790,8 +948,13 @@ public class CodeFlowTest {
             page = loginForm.getButtonByName("login").click();
             assertEquals("Tenant Refresh, refreshed: false", page.asNormalizedText());
 
+            // The session cookie is returned after the authorization code flow completed
+            // At this point cache-control must be set to `no-store`
+            assertEquals("no-store", page.getWebResponse().getResponseHeaderValue("cache-control"));
+            assertNotNull(getSessionSetCookieHeader(page.getWebResponse(), "tenant-refresh"));
             Cookie sessionCookie = getSessionCookie(webClient, "tenant-refresh");
             assertNotNull(sessionCookie);
+
             String idToken = getIdToken(sessionCookie);
 
             //wait now so that we reach the ID token timeout
@@ -813,11 +976,22 @@ public class CodeFlowTest {
                         }
                     });
 
+            // The session cookie has been refreshed
+            // At this point cache-control must be set to `no-store`
+            assertEquals("no-store", page.getWebResponse().getResponseHeaderValue("cache-control"));
+            assertNotNull(getSessionSetCookieHeader(page.getWebResponse(), "tenant-refresh"));
+
             // local session refreshed and still valid
             page = webClient.getPage("http://localhost:8081/tenant-refresh");
             assertEquals("Tenant Refresh, refreshed: false", page.asNormalizedText());
+
+            // Set-Cookie header is not returned this time
+            assertNull(getSessionSetCookieHeader(page.getWebResponse(), "tenant-refresh"));
+            // But WebClient cache has the session cookie
             assertNotNull(getSessionCookie(webClient, "tenant-refresh"));
 
+            // cache-control is only expected when the session cookie is returned
+            assertNull(page.getWebResponse().getResponseHeaderValue("cache-control"));
             //wait now so that we reach the refresh timeout
             await().atMost(20, TimeUnit.SECONDS)
                     .pollInterval(Duration.ofSeconds(1))
@@ -860,6 +1034,10 @@ public class CodeFlowTest {
             assertNull(getSessionCookie(webClient, "tenant-logout"));
             assertEquals("Sign in to logout-realm", page.getTitleText());
             webClient.getCookieManager().clearCookies();
+
+            // Static `tenant-refresh` tenant
+            checkResourceMetadata("tenant-refresh", "/realms/logout-realm", Set.of("read", "write"));
+
         }
     }
 
@@ -1491,6 +1669,28 @@ public class CodeFlowTest {
         }
     }
 
+    @Test
+    public void testRestoreQueryKeepRedirectParams() throws IOException, InterruptedException {
+        try (final WebClient webClient = createWebClient()) {
+            HtmlPage page = webClient
+                    .getPage(
+                            "http://localhost:8081/web-app/refresh/tenant-restore-query-keep-redirect-params?context=contextValue");
+
+            assertEquals("Sign in to quarkus", page.getTitleText());
+
+            HtmlForm loginForm = page.getForms().get(0);
+
+            loginForm.getInputByName("username").setValueAttribute("alice");
+            loginForm.getInputByName("password").setValueAttribute("alice");
+
+            page = loginForm.getButtonByName("login").click();
+
+            assertEquals("RT injected;context=contextValue",
+                    page.getBody().asNormalizedText());
+            webClient.getCookieManager().clearCookies();
+        }
+    }
+
     private void doTestAccessAndRefreshTokenInjectionWithoutIndexHtmlAndListener(WebClient webClient)
             throws IOException, InterruptedException {
         HtmlPage page = webClient.getPage("http://localhost:8081/web-app/refresh/tenant-listener");
@@ -1680,6 +1880,103 @@ public class CodeFlowTest {
         }
     }
 
+    @Test
+    public void testPushedAuthorizationRequestClientSecret() throws IOException {
+        // first verify that PAR is required by this OIDC client
+        try (final WebClient webClient = createWebClient()) {
+            webClient.getOptions().setThrowExceptionOnFailingStatusCode(false);
+            var webResponse = webClient
+                    .getPage("http://localhost:8081/web-app/pushed-authorization-request/disabled-par-tenant-client-secret")
+                    .getWebResponse();
+            assertEquals(401, webResponse.getStatusCode());
+            var requestQuery = webResponse.getWebRequest().getUrl().getQuery();
+            // error code: invalid_request, error description: Pushed Authorization Request is only allowed
+            assertNotNull(requestQuery);
+            assertTrue(requestQuery.contains("error=invalid_request"),
+                    () -> "request query does not contain 'error=invalid_request': " + requestQuery);
+            assertTrue(requestQuery.contains("Pushed"), () -> "request query does not contain 'Pushed': " + requestQuery);
+            assertTrue(requestQuery.contains("Authorization"),
+                    () -> "request query does not contain 'Authorization': " + requestQuery);
+        }
+
+        // now verify that with enabled PAR, authorization succeeds
+        // the only difference to the previous OIDC tenant is enabled PAR
+        try (final WebClient webClient = createWebClient()) {
+            HtmlPage page = webClient
+                    .getPage("http://localhost:8081/web-app/pushed-authorization-request/tenant-client-secret");
+
+            assertEquals("Sign in to quarkus", page.getTitleText());
+
+            HtmlForm loginForm = page.getForms().get(0);
+
+            loginForm.getInputByName("username").setValueAttribute("alice");
+            loginForm.getInputByName("password").setValueAttribute("alice");
+
+            page = loginForm.getButtonByName("login").click();
+            assertEquals("alice", page.getBody().asNormalizedText());
+            webClient.getCookieManager().clearCookies();
+        }
+    }
+
+    @Test
+    public void testPushedAuthorizationRequestWrongUserCredentials() throws IOException {
+        // this should be similar as with disabled PAR, but let's check as this will happen to users
+        try (final WebClient webClient = createWebClient()) {
+            HtmlPage page = webClient
+                    .getPage("http://localhost:8081/web-app/pushed-authorization-request/tenant-client-secret");
+
+            assertEquals("Sign in to quarkus", page.getTitleText());
+
+            HtmlForm loginForm = page.getForms().get(0);
+
+            loginForm.getInputByName("username").setValueAttribute("alice");
+            loginForm.getInputByName("password").setValueAttribute("wrong");
+
+            HtmlPage aPage = loginForm.getButtonByName("login").click();
+            assertTrue(aPage.getBody().asNormalizedText().contains("Invalid username or password."),
+                    () -> "Expected 'Invalid username or password.' but got " + aPage.getBody().asNormalizedText());
+            webClient.getCookieManager().clearCookies();
+        }
+    }
+
+    @Test
+    public void testPushedAuthorizationRequestJwtSecret() throws IOException {
+        // first verify that PAR is required by this OIDC client
+        try (final WebClient webClient = createWebClient()) {
+            webClient.getOptions().setThrowExceptionOnFailingStatusCode(false);
+            var webResponse = webClient
+                    .getPage("http://localhost:8081/web-app/pushed-authorization-request/disabled-par-tenant-jwt")
+                    .getWebResponse();
+
+            assertEquals(401, webResponse.getStatusCode());
+            // error code: invalid_request, error description: Pushed Authorization Request is only allowed
+            var requestQuery = webResponse.getWebRequest().getUrl().getQuery();
+            assertNotNull(requestQuery);
+            assertTrue(requestQuery.contains("error=invalid_request"),
+                    () -> "request query does not contain 'error=invalid_request': " + requestQuery);
+            assertTrue(requestQuery.contains("Pushed"), () -> "request query does not contain 'Pushed': " + requestQuery);
+            assertTrue(requestQuery.contains("Authorization"),
+                    () -> "request query does not contain 'Authorization': " + requestQuery);
+        }
+
+        // now verify that with enabled PAR, authorization succeeds
+        // the only difference to the previous OIDC tenant is enabled PAR
+        try (final WebClient webClient = createWebClient()) {
+            HtmlPage page = webClient.getPage("http://localhost:8081/web-app/pushed-authorization-request/tenant-jwt");
+
+            assertEquals("Sign in to quarkus", page.getTitleText());
+
+            HtmlForm loginForm = page.getForms().get(0);
+
+            loginForm.getInputByName("username").setValueAttribute("alice");
+            loginForm.getInputByName("password").setValueAttribute("alice");
+
+            page = loginForm.getButtonByName("login").click();
+            assertEquals("alice", page.getBody().asNormalizedText());
+            webClient.getCookieManager().clearCookies();
+        }
+    }
+
     private WebClient createWebClient() {
         WebClient webClient = new WebClient();
         webClient.setCssErrorHandler(new SilentCssErrorHandler());
@@ -1740,6 +2037,17 @@ public class CodeFlowTest {
         }
     }
 
+    private String getSessionSetCookieHeader(WebResponse response, String tenantId) {
+        String cookieName = "q_session" + (tenantId == null ? "_Default_test" : "_" + tenantId);
+        for (NameValuePair h : response.getResponseHeaders()) {
+            if ("Set-Cookie".equalsIgnoreCase(h.getName())
+                    && h.getValue().startsWith(cookieName)) {
+                return h.getValue();
+            }
+        }
+        return null;
+    }
+
     private Cookie getSessionAtCookie(WebClient webClient, String tenantId) {
         return webClient.getCookieManager().getCookie("q_session_at" + (tenantId == null ? "_Default_test" : "_" + tenantId));
     }
@@ -1750,5 +2058,26 @@ public class CodeFlowTest {
 
     private String getIdToken(Cookie sessionCookie) {
         return sessionCookie.getValue().split("\\|")[0];
+    }
+
+    private static void checkResourceMetadata(String resource, String authorizationServerSuffix, Set<String> scopes) {
+        Response metadataResponse = RestAssured.when()
+                .get("http://localhost:8081" + OidcConstants.RESOURCE_METADATA_WELL_KNOWN_PATH
+                        + (resource == null ? "" : "/" + resource));
+        JsonObject jsonMetadata = new JsonObject(metadataResponse.asString());
+        assertEquals("https://localhost:8081" + (resource == null ? "" : "/" + resource),
+                jsonMetadata.getString(OidcConstants.RESOURCE_METADATA_RESOURCE));
+        JsonArray jsonAuthorizarionServers = jsonMetadata.getJsonArray(OidcConstants.RESOURCE_METADATA_AUTHORIZATION_SERVERS);
+        assertEquals(1, jsonAuthorizarionServers.size());
+
+        String authorizationServer = jsonAuthorizarionServers.getString(0);
+        assertTrue(authorizationServer.startsWith("http://localhost:"));
+        assertTrue(authorizationServer.endsWith(authorizationServerSuffix));
+
+        if (scopes != null) {
+            JsonArray scopesArray = jsonMetadata.getJsonArray(OidcConstants.RESOURCE_METADATA_SCOPES);
+            assertEquals(scopes.size(), scopesArray.size());
+            assertEquals(scopes, scopesArray.stream().collect(Collectors.toSet()));
+        }
     }
 }

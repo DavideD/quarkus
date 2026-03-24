@@ -4,6 +4,7 @@ plugins {
 
 dependencies {
     compileOnly(libs.kotlin.gradle.plugin.api)
+    implementation("org.apache.maven:maven-core")
     gradleApi()
 }
 
@@ -12,6 +13,12 @@ group = "io.quarkus"
 java {
     withSourcesJar()
     withJavadocJar()
+}
+
+// to generate reproducible jars
+tasks.withType<Jar>().configureEach {
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
 }
 
 publishing {

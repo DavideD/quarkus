@@ -1,32 +1,39 @@
 import { QwcHotReloadElement, html, css} from 'qwc-hot-reload-element';
-import { RouterController } from 'router-controller';
 import { JsonRpc } from 'jsonrpc';
+import { StorageController } from 'storage-controller';
 import '@vaadin/combo-box';
 import '@vaadin/item';
 import '@vaadin/icon';
 import '@vaadin/list-box';
+import '@vaadin/text-field';
 import '@qomponent/qui-card';
 import '@vaadin/grid';
 import '@vaadin/tabs';
 import '@vaadin/tabsheet';
-import { columnBodyRenderer, columnHeaderRenderer } from '@vaadin/grid/lit.js';
-import '@qomponent/qui-code-block';
+import { columnBodyRenderer } from '@vaadin/grid/lit.js';
+import 'qui-themed-code-block';
 import { notifier } from 'notifier';
 import '@vaadin/progress-bar';
 import '@vaadin/button';
 import '@qomponent/qui-alert';
 import '@vaadin/dialog';
-import { dialogFooterRenderer, dialogHeaderRenderer, dialogRenderer } from '@vaadin/dialog/lit.js';
+import '@qomponent/qui-dot';
+import 'qui-assistant-button';
+import 'qui-assistant-warning';
+import '@qomponent/qui-badge';
+import { dialogHeaderRenderer, dialogRenderer } from '@vaadin/dialog/lit.js';
+import { observeState } from 'lit-element-state';
+import { assistantState } from 'assistant-state';
+import { msg, str, updateWhenLocaleChanges } from 'localization';
 
 /**
  * Allows interaction with your Datasource
  */
-export class QwcAgroalDatasource extends QwcHotReloadElement {
+export class QwcAgroalDatasource extends observeState(QwcHotReloadElement) {
     jsonRpc = new JsonRpc(this);
     configJsonRpc = new JsonRpc("devui-configuration");
-    
-    routerController = new RouterController(this);
-    
+    storageControl = new StorageController(this);
+
     static styles = css`
         .dataSources{
             display: flex;
@@ -50,6 +57,12 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
             align-items: baseline;
             gap: 20px;
         }
+        .tables {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+    
         .tablesAndData {
             display: flex;
             height: 100%;
@@ -78,12 +91,8 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
     
         .sqlInput {
             display: flex;
-            justify-content: space-between;
-            gap: 10px;
             align-items: center;
-            padding-bottom: 20px;
-            border-bottom-style: dotted;
-            border-bottom-color: var(--lumo-contrast-10pct);
+            padding-bottom: 10px;
         }
 
         .sqlInput .cm-content {
@@ -102,9 +111,13 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
             margin: 0;
         }
     
-        #sql {
+        #sqlInput {
             width: 100%;
         }
+        #assistantInput {
+            width: 100%;
+        }
+    
         .data {
             display: flex;
             flex-direction: column;
@@ -148,16 +161,28 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
             text-decoration: none; 
             color: var(--lumo-primary-text-color);
         }
+        .generateTableDataButton {
+            align-self: center;
+            padding-top: 50px;
+        }
+    
+        qui-badge {
+            cursor: pointer;
+            padding-left: 2px;
+            padding-right: 5px;
+        }
     `;
     
     static properties = {
         _dataSources: {state: true},
         _selectedDataSource: {state: true},
         _tables: {state: true},
+        _dot: {state: true},
         _selectedTable: {state: true},
         _selectedTableIndex:{state: true},
         _selectedTableCols:{state: true},
         _currentSQL: {state: true},
+        _currentEnglish: {state: true},
         _currentDataSet: {state: true},
         _isWatching: {state: true},
         _watchId: {state: false},
@@ -169,18 +194,28 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
         _isAllowedDB: {state: true},
         _displaymessage: {state: true},
         _insertSQL: {state: true},
-        _dialogOpened: {state: true}
+        _showBusyLoadingDialog: {state: true},
+        _showAssistantWarning: {state: true},
+        _showImportSQLDialog: {state: true},
+        _showErDiagramDialog: {state: true},
+        _englishToSQLEnabled: {state: true},
+        _englishToSQLLoadingMessage: {state: true},
+        _jsonColDialogOpened: {state: true},
+        _selectedJsonCol: {state: true}
     };
     
     constructor() {
         super();
+        updateWhenLocaleChanges(this);
         this._dataSources = null;
         this._selectedDataSource = null;
         this._tables = null;
+        this._dot = null;
         this._selectedTable = null;
         this._selectedTableCols = null;
         this._selectedTableIndex = 0;
         this._currentSQL = null;
+        this._currentEnglish = null;
         this._currentDataSet = null;
         this._isWatching = false;
         this._watchId = null;
@@ -192,29 +227,39 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
         this._allowedHost = null;
         this._displaymessage = null;
         this._insertSQL = null;
-        this._dialogOpened = false;
+        this._showBusyLoadingDialog = null;
+        this._showAssistantWarning = false;
+        this._showImportSQLDialog = false;
+        this._showErDiagramDialog = false;
+        this._englishToSQLEnabled = this.storageControl.get("english-to-sql") === "true";
+        this._englishToSQLLoadingMessage = null;
+        this._jsonColDialogOpened = false;
+        this._selectedJsonCol = null;
     }
     
     connectedCallback() {
         super.connectedCallback();
-        
-        var page = this.routerController.getCurrentPage();
-        if(page && page.metadata){
-            this._allowSql = (page.metadata.allowSql === "true");
-            this._appendSql = page.metadata.appendSql;
-            this._allowedHost = page.metadata.allowedHost;
-        }else{
-            this._allowSql = false;
-            this._appendSql = "";
-            this._allowedHost = null;
-        }
-        
-        this.jsonRpc.getDataSources().then(jsonRpcResponse => {
-            this._dataSources = jsonRpcResponse.result.reduce((map, obj) => {
+        this.hotReload();
+    }
+
+    hotReload(){
+        const configPromise = this.configJsonRpc.getAllValues();
+        const dbPromise = this.jsonRpc.getDataSources();
+        Promise.all([configPromise, dbPromise]).then(values => {
+            const configValues = values[0].result;
+            this._allowSql = configValues['quarkus.datasource.dev-ui.allow-sql'] === 'true';
+            this._appendSql = configValues['quarkus.datasource.dev-ui.append-to-default-select'] || "";
+            this._allowedHost = configValues['quarkus.datasource.dev-ui.allowed-db-host'] || null;
+            const dsResponse = values[1].result;
+            if (dsResponse) {
+                this._dataSources = dsResponse.reduce((map, obj) => {
                     map[obj.name] = obj;
                     return map;
-              }, {});
+                }, {});
+            }
         });
+        this._jsonColDialogOpened = false;
+        this._selectedJsonCol = null;
     }
     
     disconnectedCallback() {
@@ -234,34 +279,56 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
                             </div>
                               ${this._renderDataOrWarning()}
                         </div>
-                        ${this._renderImportSqlDialog()}`;
+                        ${this._renderBusyLoadingDialog()}
+                        ${this._renderImportSqlDialog()}
+                        ${this._renderDotViewerDialog()}
+                        ${this._renderJsonColDialog()}`;
         } else {
-            return html`<div style="color: var(--lumo-secondary-text-color);width: 95%;" >
-                <div>Fetching data sources...</div>
+            return this._renderProgressBar(msg('Fetching data sources...', { id: 'quarkus-agroal-fetching-data-sources' }));
+        }
+    }
+    
+    _renderProgressBar(message){
+        return html`<div style="color: var(--lumo-secondary-text-color);width: 95%;" >
+                <div>${message}</div>
                 <vaadin-progress-bar indeterminate></vaadin-progress-bar>
             </div>`;
+    }
+    
+    _renderBusyLoadingDialog(){
+        if(this._showBusyLoadingDialog){
+            return html`<vaadin-dialog
+                    resizable
+                    draggable
+                    header-title=${msg('Loading', { id: 'quarkus-agroal-loading' })}
+                    .opened="${true}"
+                    
+                ${dialogRenderer(this._renderBusyLoadingDialogContents)}
+                ></vaadin-dialog>`;
         }
     }
     
     _renderImportSqlDialog(){
-        if(this._insertSQL){
+        if(this._insertSQL && !this._showBusyLoadingDialog){
             return html`
                 <vaadin-dialog
                     resizable
                     draggable
-                    header-title="Import SQL Script"
-                    .opened="${this._dialogOpened}"
+                    header-title=${msg('Import SQL Script', { id: 'quarkus-agroal-import-sql-script' })}
+                    .opened="${this._showImportSQLDialog}"
                     @opened-changed="${(event) => {
-                        this._dialogOpened = event.detail.value;
+                        this._showImportSQLDialog = event.detail.value;
                     }}"
                     ${dialogHeaderRenderer(
                         () => html`
-                            <vaadin-button title="Save insert script" theme="tertiary" @click="${this._saveInsertScript}">
+                            ${this._renderAssistantWarning()}
+                            <vaadin-button title=${msg('Save insert script', { id: 'quarkus-agroal-save-insert-script' })} theme="tertiary" @click="${this._saveInsertScript}">
                                 <vaadin-icon icon="font-awesome-solid:floppy-disk"></vaadin-icon>
                             </vaadin-button>
-                            <vaadin-button title="Copy insert script" theme="tertiary" @click="${this._copyInsertScript}">
+                            <vaadin-button title=${msg('Copy insert script', { id: 'quarkus-agroal-copy-insert-script' })} theme="tertiary" @click="${this._copyInsertScript}">
                                 <vaadin-icon icon="font-awesome-solid:copy"></vaadin-icon>
                             </vaadin-button>
+                            ${this._renderAssistantButton()}
                             <vaadin-button theme="tertiary" @click="${this._closeDialog}">
                                 <vaadin-icon icon="font-awesome-solid:xmark"></vaadin-icon>
                             </vaadin-button>`,
@@ -270,6 +337,84 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
                 ${dialogRenderer(this._renderImportSqlDialogContents)}
                 ></vaadin-dialog>`;
         }
+    }
+    
+    _renderDotViewerDialog(){
+        if(this._dot && !this._showBusyLoadingDialog){
+            return html`
+                <vaadin-dialog
+                    resizable
+                    draggable
+                    header-title=${msg('ER Diagram', { id: 'quarkus-agroal-er-diagram' })}
+                    .opened="${this._showErDiagramDialog}"
+                    @opened-changed="${(event) => {
+                        this._showErDiagramDialog = event.detail.value;
+                    }}"
+                    ${dialogHeaderRenderer(
+                        () => html`
+                            <vaadin-button theme="tertiary" @click="${this._closeDialog}">
+                                <vaadin-icon icon="font-awesome-solid:xmark"></vaadin-icon>
+                            </vaadin-button>`,
+                    []
+                    )}
+                ${dialogRenderer(this._renderDotViewerDialogContents)}
+                ></vaadin-dialog>`;
+        }
+    }
+    
+    _renderAssistantButton(){
+        if(assistantState.current.isConfigured && this._insertSQL){
+            return html`<qui-assistant-button title=${msg('Use Quarkus Assistant to generate more data', { id: 'quarkus-agroal-generate-more-data' })} @click="${this._generateMoreData}"></qui-assistant-button>`;
+        }
+     }
+
+     _renderAssistantWarning(){
+         if(this._showAssistantWarning){
+             return html`<qui-assistant-warning></qui-assistant-warning>`;
+         }
+     }
+
+    _generateMoreData(){
+        if(this._insertSQL){
+            this._showBusyLoadingDialog = msg('Quarkus Assistant is generating more data ... please wait', { id: 'quarkus-agroal-generating-more-data' });
+        
+            this.jsonRpc.generateMoreData({
+                                    currentInsertScript:this._insertSQL
+                                }).then(jsonRpcResponse => {
+                                    const script = jsonRpcResponse.result.script;
+                                    if (Array.isArray(script)) {
+                                        this._insertSQL = script.join('\n');
+                                    } else {
+                                        this._insertSQL = script;
+                                    }
+                                    this._showBusyLoadingDialog = null;
+                                    this._showImportSQLDialog = true;
+                                    this._showAssistantWarning = true;
+                                });
+        }
+    }
+    
+    _generateInitialData(){
+        this._showBusyLoadingDialog = msg('Quarkus Assistant is generating data ... please wait', { id: 'quarkus-agroal-generating-data' });
+        this.jsonRpc.generateTableData({
+                                    datasource:this._selectedDataSource.name,
+                                    schema: this._selectedTable.tableSchema,
+                                    name: this._selectedTable.tableName,
+                                    rowCount: 5
+                                }).then(jsonRpcResponse => {
+                                    const script = jsonRpcResponse.result.script;
+                                    if (Array.isArray(script)) {
+                                        this._currentSQL = script.join('\n');
+                                    } else {
+                                        this._currentSQL = script;
+                                    }
+                                    this._showBusyLoadingDialog = null;
+                                    this._showImportSQLDialog = true;
+                                    this._showAssistantWarning = true;
+                                    
+                                    
+                                    
+                                });
     }
     
     _saveInsertScript(){
@@ -286,30 +431,41 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
             URL.revokeObjectURL(url);
             anchor.remove();
 
-            notifier.showInfoMessage("File saved successfully");
+            notifier.showInfoMessage(msg('File saved successfully', { id: 'quarkus-agroal-file-saved' }));
         } catch (error) {
-            notifier.showErrorMessage("Failed to save file: " + error);
+            notifier.showErrorMessage(msg(str`Failed to save file: ${error}`, { id: 'quarkus-agroal-file-save-failed' }));
         }
     }
     
     _copyInsertScript(){
         navigator.clipboard.writeText(this._insertSQL).then(
             () => {
-                notifier.showInfoMessage("Copied to clipboard successfully!");
+                notifier.showInfoMessage(msg('Copied to clipboard successfully!', { id: 'quarkus-agroal-copied-to-clipboard' }));
             },
             (err) => {
-                notifier.showErrorMessage("Could not copy text: " + err);
+                notifier.showErrorMessage(msg(str`Could not copy text: ${err}`, { id: 'quarkus-agroal-copy-failed' }));
             }
         );
     }
     
     _closeDialog(){
         this._insertSQL = null;
-        this._dialogOpened = false;
+        this._dot = null;
+        this._showImportSQLDialog = false;
+        this._showErDiagramDialog = false;
+        this._showAssistantWarning = false;
     }
     
     _renderImportSqlDialogContents(){
-        return html`<qui-code-block content="${this._insertSQL}" mode="sql" theme="dark"></qui-code-block>`;
+        return html`<qui-themed-code-block content="${this._insertSQL}" mode="sql"></qui-themed-code-block>`;
+    }
+    
+    _renderDotViewerDialogContents(){
+        return html`<qui-dot dot="${this._dot}"></qui-dot>`;
+    }
+    
+    _renderBusyLoadingDialogContents(){
+        return this._renderProgressBar(this._showBusyLoadingDialog);
     }
     
     _renderDataOrWarning(){
@@ -317,6 +473,7 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
             return html`<div class="tablesAndData">
                         <div class="tables">
                             ${this._renderTables()}
+                            ${this._renderGenerateErDiagramButton()}
                         </div>
                         <div class="tableData">
                             ${this._renderDataAndDefinition()}
@@ -324,14 +481,14 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
                     </div>`;
         }else{
             return html`<qui-alert level="warning" permanent>
-                            <span>No active local datasource found.</span>
+                            <span>${msg('No active local datasource found.', { id: 'quarkus-agroal-no-active-datasource' })}</span>
                         </qui-alert>`;
         }
     }
     
     _renderDatasourcesComboBox(){
         return html`<vaadin-combo-box
-                        label="Datasource"
+                        label=${msg('Datasource', { id: 'quarkus-agroal-datasource-label' })}
                         item-label-path="name"
                         item-value-path="name"
                         .items="${Object.values(this._dataSources)}"
@@ -350,16 +507,16 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
     
     _renderExportButton(){
         if(this._selectedDataSource){
-            return html`<vaadin-button @click=${this._createImportSql} title="Create an import.sql from the current data">
+            return html`<vaadin-button @click=${this._createImportSql} title=${msg('Create an import.sql from the current data', { id: 'quarkus-agroal-create-import-sql' })}>
                             <vaadin-icon icon="font-awesome-solid:file-export" slot="prefix"></vaadin-icon>
-                            import.sql
+                            ${msg('import.sql', { id: 'quarkus-agroal-import-sql' })}
                         </vaadin-button>`;
         }
     }
     
     _renderTables(){
         if(this._tables){
-            return html`<qui-card class="tablesCard" header="Tables">
+            return html`<qui-card class="tablesCard" header=${msg('Tables', { id: 'quarkus-agroal-tables' })}>
                             <div slot="content">
                                 <vaadin-list-box selected="0" @selected-changed="${this._onTableChanged}">
                                     ${this._tables.map((table) =>
@@ -370,24 +527,33 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
                         </qui-card>`;
         }else{
             return html`<div style="color: var(--lumo-secondary-text-color);width: 95%;" >
-                <div>Fetching tables...</div>
+                <div>${msg('Fetching tables...', { id: 'quarkus-agroal-fetching-tables' })}</div>
                 <vaadin-progress-bar indeterminate></vaadin-progress-bar>
             </div>`;
         }
         
     }
     
+    _renderGenerateErDiagramButton(){
+        if(this._selectedDataSource){
+            return html`<vaadin-button @click=${this._generateErDiagram} title=${msg('Generate an ER Diagram for the tables', { id: 'quarkus-agroal-generate-er-diagram-title' })}>
+                            <vaadin-icon icon="font-awesome-solid:table" slot="prefix"></vaadin-icon>
+                            ${msg('ER Diagram', { id: 'quarkus-agroal-er-diagram' })}
+                        </vaadin-button>`;
+        }
+    }
+    
     _renderDataAndDefinition(){
         return html`<vaadin-tabsheet class="fill" theme="bordered">
-                        <vaadin-button slot="suffix" theme="icon" title="Refresh" aria-label="Refresh">
+                        <vaadin-button slot="suffix" theme="icon" title=${msg('Refresh', { id: 'quarkus-agroal-refresh' })} aria-label=${msg('Refresh', { id: 'quarkus-agroal-refresh' })}>
                             <vaadin-icon @click=${this.hotReload} icon="font-awesome-solid:arrows-rotate"></vaadin-icon>
                         </vaadin-button>
                         
                         ${this._renderWatchButton()}
                         
                         <vaadin-tabs slot="tabs">
-                          <vaadin-tab id="data-tab">Data</vaadin-tab>
-                          <vaadin-tab id="definition-tab">Definition</vaadin-tab>
+                          <vaadin-tab id="data-tab">${msg('Data', { id: 'quarkus-agroal-data' })}</vaadin-tab>
+                          <vaadin-tab id="definition-tab">${msg('Definition', { id: 'quarkus-agroal-definition' })}</vaadin-tab>
                         </vaadin-tabs>
 
                         <div tab="data-tab" style="height:100%;">${this._renderTableData()}</div>
@@ -397,11 +563,11 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
     
     _renderWatchButton(){
         if(this._isWatching){
-            return html`<vaadin-button slot="suffix" theme="icon" title="Stop watching" aria-label="Stop watching">
+            return html`<vaadin-button slot="suffix" theme="icon" title=${msg('Stop watching', { id: 'quarkus-agroal-stop-watching' })} aria-label=${msg('Stop watching', { id: 'quarkus-agroal-stop-watching' })}>
                             <vaadin-icon @click=${this._unwatch} icon="font-awesome-solid:eye"></vaadin-icon>
                         </vaadin-button>`;
         }else{
-            return html`<vaadin-button slot="suffix" theme="icon" title="Start watching" aria-label="Start watching">
+            return html`<vaadin-button slot="suffix" theme="icon" title=${msg('Start watching', { id: 'quarkus-agroal-start-watching' })} aria-label=${msg('Start watching', { id: 'quarkus-agroal-start-watching' })}>
                             <vaadin-icon @click=${this._watch} icon="font-awesome-solid:eye-slash"></vaadin-icon>
                         </vaadin-button>`;
         }
@@ -410,23 +576,39 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
     _renderTableData(){
         if(this._selectedTable && this._currentDataSet && this._currentDataSet.cols){
             return html`<div class="data">
+                            ${this._renderTableDataGrid()}
                             ${this._renderSqlInput()}
-                            <vaadin-grid .items="${this._currentDataSet.data}" theme="row-stripes no-border" class="fill" column-reordering-allowed>
-                                ${this._currentDataSet.cols.map((col) => 
-                                    this._renderTableHeader(col)
-                                )}
-                                <span slot="empty-state">No data.</span>
-                            </vaadin-grid>
-                            ${this._renderPager()}
                         </div>    
                     `;
         }else if(this._displaymessage){
             return html`<span>${this._displaymessage}</span>`;
         }else{
-            return html`<div style="color: var(--lumo-secondary-text-color);width: 95%;" >
-                <div>Fetching data...</div>
-                <vaadin-progress-bar indeterminate></vaadin-progress-bar>
-            </div>`;
+            if(assistantState.current.isConfigured && this._englishToSQLEnabled){
+                return html`<div style="color: var(--lumo-secondary-text-color);width: 95%;" >
+                    <div>${this._englishToSQLLoadingMessage}</div>
+                    <vaadin-progress-bar indeterminate></vaadin-progress-bar>
+                </div>`;
+            }else{
+                return html`<div style="color: var(--lumo-secondary-text-color);width: 95%;" >
+                    <div>${msg('Fetching data ...', { id: 'quarkus-agroal-fetching-data' })}</div>
+                    <vaadin-progress-bar indeterminate></vaadin-progress-bar>
+                </div>`;
+            }
+            
+        }
+    }
+    
+    _renderTableDataGrid(){
+        if((this._currentDataSet.data && this._currentDataSet.data.length>0)|| !assistantState.current.isConfigured){
+            return html`<vaadin-grid .items="${this._currentDataSet.data}" theme="row-stripes no-border" class="fill" column-reordering-allowed>
+                                ${this._currentDataSet.cols.map((col) => 
+                                    this._renderTableHeader(col)
+                                )}
+                                <span slot="empty-state">${msg('No data.', { id: 'quarkus-agroal-no-data' })}</span>
+                            </vaadin-grid>
+                            ${this._renderPager()}`;
+        }else {
+            return html`<qui-assistant-button class="generateTableDataButton" title=${msg('Use Quarkus Assistant to generate some data', { id: 'quarkus-agroal-generate-some-data-title' })} @click="${this._generateInitialData}">${msg('Generate some data', { id: 'quarkus-agroal-generate-some-data' })}</qui-assistant-button>`;
         }
     }
     
@@ -452,10 +634,12 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
                         </vaadin-grid>`;
         }
     }
-    _renderPager() {    
+    _renderPager() {  
+        const pn = this._currentPageNumber;
+        const nop = this._currentNumberOfPages;
         return html`<div class="pager">
                         ${this._renderPreviousPageButton()}
-                        <span>${this._currentPageNumber} of ${this._currentNumberOfPages}</span>
+                        <span>${msg(str`${pn} of ${nop}`, { id: 'quarkus-agroal-page-of' })}</span>
                         ${this._renderNextPageButton()}
                     </div>`;
     }
@@ -465,7 +649,7 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
         if(this._currentPageNumber === 1){
             klas = "hidden";
         }
-        return html`<vaadin-button theme="icon tertiary" aria-label="Previous" @click=${this._previousPage} class="${klas}">
+        return html`<vaadin-button theme="icon tertiary" aria-label=${msg('Previous', { id: 'quarkus-agroal-previous' })} @click=${this._previousPage} class="${klas}">
                         <vaadin-icon icon="font-awesome-solid:circle-chevron-left"></vaadin-icon>
                     </vaadin-button>`;
     }
@@ -475,7 +659,7 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
         if(this._currentPageNumber === this._currentNumberOfPages){
             klas = "hidden";
         }
-        return html`<vaadin-button theme="icon tertiary" aria-label="Next" @click=${this._nextPage} class="${klas}">
+        return html`<vaadin-button theme="icon tertiary" aria-label=${msg('Next', { id: 'quarkus-agroal-next' })} @click=${this._nextPage} class="${klas}">
                         <vaadin-icon icon="font-awesome-solid:circle-chevron-right"></vaadin-icon>
                     </vaadin-button>`;
     }
@@ -484,22 +668,66 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
         if (this._allowSql) {
             return html`
                 <div class="sqlInput">
-                    <qui-code-block @shiftEnter=${this._shiftEnterPressed} content="${this._currentSQL}"
-                                    class="font-large cursor-text" id="sql" mode="sql" theme="dark"
-                                    value='${this._currentSQL}' editable></qui-code-block>
-                    <vaadin-button class="no-margin" slot="suffix" theme="icon" aria-label="Clear">
-                        <vaadin-tooltip .hoverDelay=${500} slot="tooltip" text="Clear"></vaadin-tooltip>
-                        <vaadin-icon class="small-icon" @click=${this._clearSqlInput}
-                                     icon="font-awesome-solid:trash"></vaadin-icon>
+                    ${this._renderEnglishToSQLButton()}
+                    ${this._renderInputTextField()}
+                    <vaadin-button class="no-margin" theme="icon tertiary small" aria-label=${msg('Clear', { id: 'quarkus-agroal-clear' })}>
+                        <vaadin-tooltip .hoverDelay=${500} slot="tooltip" text=${msg('Clear', { id: 'quarkus-agroal-clear' })}></vaadin-tooltip>
+                        <vaadin-icon class="small-icon" @click=${() => this._clearInput(this._englishToSQLEnabled)}
+                                     icon="font-awesome-solid:broom"></vaadin-icon>
                     </vaadin-button>
-                    <vaadin-button class="no-margin" slot="suffix" theme="icon" aria-label="Run">
-                        <vaadin-tooltip .hoverDelay=${500} slot="tooltip" text="Run"></vaadin-tooltip>
+                    <vaadin-button class="no-margin" theme="icon tertiary small" aria-label=${msg('Run', { id: 'quarkus-agroal-run' })}>
+                        <vaadin-tooltip .hoverDelay=${500} slot="tooltip" text=${msg('Run', { id: 'quarkus-agroal-run' })}></vaadin-tooltip>
                         <vaadin-icon class="small-icon" @click=${this._executeClicked}
                                      icon="font-awesome-solid:play"></vaadin-icon>
                     </vaadin-button>
                 </div>`;
         } else {
-            return html`<vaadin-button theme="small" @click="${this._handleAllowSqlChange}">Allow any SQL execution from here</vaadin-button>`;
+            return html`<vaadin-button theme="small" @click="${this._handleAllowSqlChange}">${msg('Allow any SQL execution from here', { id: 'quarkus-agroal-allow-sql-execution' })}</vaadin-button>`;
+        }
+    }
+    
+    _renderInputTextField(){
+        if(assistantState.current.isConfigured && this._englishToSQLEnabled){
+           return html`<vaadin-text-field value='${this._currentEnglish}' placeholder=${msg('Describe the data you are looking for in English', { id: 'quarkus-agroal-describe-data-english' })} @keydown="${this._englishKeyDown}" id="assistantInput">
+                            <vaadin-icon slot="prefix" icon="font-awesome-solid:robot" title="${this._currentSQL}"></vaadin-icon>
+                        </vaadin-text-field>`;     
+        }else{
+            return html`<qui-themed-code-block @shiftEnter=${this._shiftEnterPressed} content="${this._currentSQL}"
+                                    class="font-large cursor-text" id="sqlInput" mode="sql"
+                                    value='${this._currentSQL}' editable></qui-themed-code-block>`;
+        }
+    }
+    
+    _renderEnglishToSQLButton(){
+        if(assistantState.current.isConfigured){
+            if(this._englishToSQLEnabled){
+                return html`${msg('Using', { id: 'quarkus-agroal-using' })} <qui-badge @click=${this._switchEnglishToSQL} color="var(--quarkus-assistant)"><span>${msg('Assistant', { id: 'quarkus-agroal-assistant' })}</span></qui-badge>`;
+            }else{
+                return html`${msg('Using', { id: 'quarkus-agroal-using' })} <qui-badge @click=${this._switchEnglishToSQL}><span>${msg('SQL', { id: 'quarkus-agroal-sql' })}</span></qui-badge>`;
+            }
+        }
+    }
+    
+    _switchEnglishToSQL(){
+        this._englishToSQLEnabled = !this._englishToSQLEnabled;
+        this.storageControl.set("english-to-sql", this._englishToSQLEnabled);
+    }
+    
+    _englishKeyDown(e){
+        if (e.key === 'Enter') {
+            this._executeClickedAI();
+        }
+    }
+    
+    _generateErDiagram(){
+        if(this._selectedDataSource){
+            this._showBusyLoadingDialog = msg('Generating ER Diagram ... please wait', { id: 'quarkus-agroal-generating-er-diagram' });
+            this._insertSQL = null;
+            this.jsonRpc.generateDot({datasource:this._selectedDataSource.name}).then(jsonRpcResponse => {
+                this._showBusyLoadingDialog = null;
+                this._dot = jsonRpcResponse.result;
+                this._showErDiagramDialog = true;
+            });
         }
     }
     
@@ -509,7 +737,7 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
             'value': 'true'
         }).then(e => {
             this._allowSql = true;
-        });;
+        });
     }
     
     _columnNameRenderer(col){
@@ -526,8 +754,7 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
             let colDef = this._selectedTableCols.get(columnName);
             if(colDef){
                 let colType = colDef.columnType.toLowerCase();
-            
-                if(colDef.binary){
+                if(colDef.binary && colType !== "jsonb" && colType !== "json"){
                     return this._renderBinaryCell(value, colType);
                 }else {
                     return this._renderTextCell(value, colType);
@@ -545,12 +772,26 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
             }else {
                 return html`<vaadin-icon style="color: var(--lumo-contrast-50pct);" title="${value}" icon="font-awesome-regular:square"></vaadin-icon>`;
             }
+        } else if(colType === "jsonb" || colType === "json"){
+            return html`${this._renderJsonContent(value)}`;
         } else {
             if(value.startsWith("http://") || value.startsWith("https://")){
                 return html`<a href="${value}" target="_blank">${value}</a>`;
-            }else{
+            }else if (typeof value === "string" && this._isJSON(value)) {
+                return this._renderJsonChars(value);
+            }else {
                 return html`<span>${value}</span>`;
             }
+        }
+    }
+    
+    _isJSON(str) {
+        if (typeof str !== "string") return false;
+        try {
+          const result = JSON.parse(str);
+          return result !== null && (typeof result === "object" || Array.isArray(result));
+        } catch {
+          return false;
         }
     }
     
@@ -562,15 +803,48 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
                 byteNumbers[i] = byteCharacters.charCodeAt(i);
             }
             const byteArray = new Uint8Array(byteNumbers);
-
+            
             const blob = new Blob([byteArray], { type: 'application/octet-stream' });
             const url = URL.createObjectURL(blob);
 
-            return html`<a class="download" href="${url}" download="download">download</span>`;
+            return html`<a class="download" href="${url}" download="download">${msg('download', { id: 'quarkus-agroal-download' })}</span>`;
         } catch (e) {
             // Here try a normal render. Sometimes Java objects can render in String format (eg. UUID)
             return this._renderTextCell(value, colType);
         }
+    }
+    
+    _renderJsonColDialog(){
+        return html`
+            <vaadin-dialog
+              header-title=${msg('Json value', { id: 'quarkus-agroal-json-value' })}
+              .opened="${this._jsonColDialogOpened}"
+              @closed="${() => {
+                    this._jsonColDialogOpened = false;
+                    this._selectedJsonCol = null;
+              }}"
+              ${dialogRenderer(this._renderJsonColDialogContent, this._selectedJsonCol)}
+            ></vaadin-dialog>`;
+    }
+        
+    _renderJsonContent(value){
+        const byteCharacters = atob(value);
+        return this._renderJsonChars(byteCharacters);
+    }
+    
+    _renderJsonChars(value){
+        return html`<span style="cursor:pointer;" @click="${()=> this._showJsonColDialog(value)}">${value.substring(0, 20)}...</span>`;
+    }
+    
+    _showJsonColDialog(value){
+        
+        const parsed = JSON.parse(value);
+        this._selectedJsonCol = JSON.stringify(parsed, null, 2);
+        this._jsonColDialogOpened = true;
+    }
+    
+    _renderJsonColDialogContent(){
+        return html`<qui-themed-code-block content="${this._selectedJsonCol}" mode="json"></qui-themed-code-block>`;
     }
     
     _watch(){
@@ -601,7 +875,7 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
         this._fetchTableDefinitions();
         this._selectedTableIndex = event.detail.value;
         this._selectedTable = this._tables[this._selectedTableIndex];
-        this._clearSqlInput();
+        this._clearInput(false);
     }
     
     _previousPage(){
@@ -640,7 +914,7 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
                     notifier.showErrorMessage(jsonRpcResponse.result.error);
                 } else if (jsonRpcResponse.result.message){
                     notifier.showInfoMessage(jsonRpcResponse.result.message);
-                    this._clearSqlInput();
+                    this._clearInput(false);
                 } else {
                     this._currentDataSet = jsonRpcResponse.result;
                     this._currentNumberOfPages = this._getNumberOfPages();
@@ -663,7 +937,7 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
                     }, new Map());
                     this._executeCurrentSQL();
                 }else {
-                    this._displaymessage = "No tables found";
+                    this._displaymessage = msg('No tables found', { id: 'quarkus-agroal-no-tables-found' });
                 }
             });
         }
@@ -673,22 +947,61 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
         if(this._selectedDataSource){
             this.jsonRpc.getInsertScript({datasource:this._selectedDataSource.name}).then(jsonRpcResponse => {
                 this._insertSQL = jsonRpcResponse.result;
-                this._dialogOpened = true;
+                this._showImportSQLDialog = true;
             });
         }
     }
     
     _executeClicked(){
-        let newValue = this.shadowRoot.getElementById('sql').getAttribute('value');
+        if(assistantState.current.isConfigured && this._englishToSQLEnabled){
+            this._executeClickedAI();
+        }else {
+            this._executeClickedSQL();
+        }    
+    }
+    
+    _executeClickedSQL(){
+        let newValue = this.shadowRoot.getElementById('sqlInput').getAttribute('value');
         this._executeSQL(newValue);
     }
     
-    _clearSqlInput(){
-        if(this._selectedTable){
-            if(this._appendSql){
-                this._executeSQL("select * from " + this._selectedTable.tableSchema + "." + this._selectedTable.tableName + " " + this._appendSql);
-            }else{
-                this._executeSQL("select * from " + this._selectedTable.tableSchema + "." + this._selectedTable.tableName);
+    _executeClickedAI(){
+        this._currentEnglish = this.shadowRoot.getElementById('assistantInput').value;
+        this._englishToSQLLoadingMessage = msg(str`Creating SQL from "${this._currentEnglish}"`, { id: 'quarkus-agroal-creating-sql-from'});
+        this._currentDataSet = null;
+        this._currentSQL = null;
+        
+        this.jsonRpc.englishToSQL({
+                                    datasource:this._selectedDataSource.name,
+                                    schema: this._selectedTable.tableSchema,
+                                    name: this._selectedTable.tableName,
+                                    english: this._currentEnglish
+                                }).then(jsonRpcResponse => {
+                                    if(jsonRpcResponse.result.error){
+                                        notifier.showErrorMessage(jsonRpcResponse.result.error);
+                                    } else {
+                                        let sql = jsonRpcResponse.result.sql;
+                                        this._englishToSQLLoadingMessage = msg(str`Using SQL "${sql}"`, { id: 'quarkus-agroal-using-sql' });
+                                        notifier.showInfoMessage(sql);
+                                        this._executeSQL(sql);
+                                    }
+                                });
+
+
+        
+    }
+    
+    _clearInput(englishToSql){
+        if(englishToSql && assistantState.current.isConfigured){
+            this._currentEnglish = null;
+            this.shadowRoot.getElementById('assistantInput').value = '';
+        }else{
+            if(this._selectedTable){
+                if(this._appendSql){
+                    this._executeSQL("select * from " + this._selectedTable.tableSchema + "." + this._selectedTable.tableName + " " + this._appendSql);
+                }else{
+                    this._executeSQL("select * from " + this._selectedTable.tableSchema + "." + this._selectedTable.tableName);
+                }
             }
         }
     }
@@ -700,14 +1013,11 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
     _executeSQL(sql){
         this._currentSQL = sql.trim();
         this._executeCurrentSQL();
+        this._englishToSQLLoadingMessage = null;
     }
     
     _startsWithIgnoreCaseAndSpaces(str, searchString) {
         return str.trim().toLowerCase().startsWith(searchString.toLowerCase());
-    }
-    
-    hotReload(){
-        this._fetchTableDefinitions();
     }
     
     _isAllowedHostDatabase() {
@@ -716,20 +1026,6 @@ export class QwcAgroalDatasource extends QwcHotReloadElement {
         try {
             if (jdbcUrl.startsWith("jdbc:h2:mem:") || jdbcUrl.startsWith("jdbc:h2:file:")) {
                 return true;
-            }
-
-            if (jdbcUrl.startsWith("jdbc:derby:memory:")) {
-                return true;
-            }
-
-            if (jdbcUrl.startsWith("jdbc:derby:")) {
-                const derbyUri = jdbcUrl.replace("jdbc:", "");
-                if (derbyUri.startsWith("localhost") || derbyUri.startsWith("127.0.0.1")) {
-                    return true;
-                }
-                if(this._allowedHost && this._allowedHost!=="" && derbyUri.startsWith(this._allowedHost)){
-                    return true;
-                }
             }
 
             const urlPattern = /\/\/([^:/?#]+)|@([^:/?#]+)/;

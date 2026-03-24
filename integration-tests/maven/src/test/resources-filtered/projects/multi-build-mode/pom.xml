@@ -5,6 +5,7 @@
   <groupId>org.acme</groupId>
   <artifactId>acme</artifactId>
   <version>1.0-SNAPSHOT</version>
+  <packaging>quarkus</packaging>
   <properties>
     <quarkus.platform.group-id>io.quarkus</quarkus.platform.group-id>
     <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
@@ -16,7 +17,6 @@
     <compiler-plugin.version>${compiler-plugin.version}</compiler-plugin.version>
     <surefire-plugin.version>${version.surefire.plugin}</surefire-plugin.version>
     <commons.collections.version>4.4</commons.collections.version>
-    <commons.io.version>1.3.2</commons.io.version>
   </properties>
   <dependencyManagement>
     <dependencies>
@@ -38,7 +38,7 @@
     </dependency>
     <dependency>
       <groupId>io.quarkus</groupId>
-      <artifactId>quarkus-junit5</artifactId>
+      <artifactId>quarkus-junit</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>
@@ -55,7 +55,6 @@
     <dependency>
       <groupId>commons-io</groupId>
       <artifactId>commons-io</artifactId>
-      <version>\${commons.io.version}</version>
       <optional>true</optional>
     </dependency>
   </dependencies>
@@ -74,6 +73,22 @@
         <version>\${quarkus-plugin.version}</version>
         <extensions>true</extensions>
         <executions>
+          <execution>
+            <id>default-generate-code</id>
+            <phase>none</phase>
+          </execution>
+          <execution>
+            <id>default-generate-code-tests</id>
+            <phase>none</phase>
+          </execution>
+          <execution>
+            <id>default-build</id>
+            <phase>none</phase>
+          </execution>
+          <execution>
+            <id>default-native-image-agent</id>
+            <phase>none</phase>
+          </execution>
           <execution>
             <id>fast-build-foo</id>
             <goals>

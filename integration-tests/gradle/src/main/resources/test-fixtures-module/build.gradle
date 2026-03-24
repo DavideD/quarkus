@@ -18,12 +18,12 @@ dependencies {
     implementation enforcedPlatform("${quarkusPlatformGroupId}:${quarkusPlatformArtifactId}:${quarkusPlatformVersion}")
     implementation 'io.quarkus:quarkus-resteasy'
 
-    testImplementation 'io.quarkus:quarkus-junit5'
+    testImplementation 'io.quarkus:quarkus-junit'
     testImplementation 'io.rest-assured:rest-assured'
 }
 
-group 'my-groupId'
-version 'my-version'
+group = 'my-groupId'
+version = 'my-version'
 
 compileJava {
     options.encoding = 'UTF-8'

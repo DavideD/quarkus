@@ -24,6 +24,8 @@ import io.quarkus.oidc.common.OidcRequestFilter;
 import io.quarkus.oidc.common.OidcResponseFilter;
 import io.quarkus.oidc.common.runtime.OidcCommonUtils;
 import io.quarkus.oidc.common.runtime.OidcTlsSupport;
+import io.quarkus.proxy.ProxyConfigurationRegistry;
+import io.quarkus.runtime.RuntimeValue;
 import io.quarkus.runtime.annotations.Recorder;
 import io.quarkus.runtime.configuration.ConfigurationException;
 import io.quarkus.tls.TlsConfigurationRegistry;
@@ -35,28 +37,33 @@ import io.vertx.mutiny.ext.web.client.WebClient;
 
 @Recorder
 public class OidcClientRegistrationRecorder {
-
     private static final Logger LOG = Logger.getLogger(OidcClientRegistrationRecorder.class);
     private static final String DEFAULT_ID = "Default";
 
-    public OidcClientRegistrations setup(OidcClientRegistrationsConfig oidcClientRegsConfig,
-            Supplier<Vertx> vertx, Supplier<TlsConfigurationRegistry> registrySupplier) {
+    private final RuntimeValue<OidcClientRegistrationsConfig> runtimeConfig;
 
+    public OidcClientRegistrationRecorder(final RuntimeValue<OidcClientRegistrationsConfig> runtimeConfig) {
+        this.runtimeConfig = runtimeConfig;
+    }
+
+    public OidcClientRegistrations setup(Supplier<Vertx> vertx, Supplier<TlsConfigurationRegistry> registrySupplier,
+            Supplier<ProxyConfigurationRegistry> proxyConfigurationRegistrySupplier) {
         var tlsSupport = OidcTlsSupport.of(registrySupplier);
         OidcClientRegistration defaultClientReg = createOidcClientRegistration(
-                getDefaultClientRegistration(oidcClientRegsConfig),
-                tlsSupport, vertx);
+                getDefaultClientRegistration(runtimeConfig.getValue()),
+                tlsSupport, vertx, proxyConfigurationRegistrySupplier);
 
         Map<String, OidcClientRegistration> staticOidcClientRegs = new HashMap<>();
-        for (var config : oidcClientRegsConfig.namedClientRegistrations().entrySet()) {
-            staticOidcClientRegs.put(config.getKey(), createOidcClientRegistration(config.getValue(), tlsSupport, vertx));
+        for (var config : runtimeConfig.getValue().namedClientRegistrations().entrySet()) {
+            staticOidcClientRegs.put(config.getKey(),
+                    createOidcClientRegistration(config.getValue(), tlsSupport, vertx, proxyConfigurationRegistrySupplier));
         }
 
         return new OidcClientRegistrationsImpl(defaultClientReg, staticOidcClientRegs,
                 new Function<OidcClientRegistrationConfig, Uni<OidcClientRegistration>>() {
                     @Override
                     public Uni<OidcClientRegistration> apply(OidcClientRegistrationConfig config) {
-                        return createOidcClientRegistrationUni(config, tlsSupport, vertx);
+                        return createOidcClientRegistrationUni(config, tlsSupport, vertx, proxyConfigurationRegistrySupplier);
                     }
                 });
     }
@@ -87,13 +94,16 @@ public class OidcClientRegistrationRecorder {
     }
 
     public static OidcClientRegistration createOidcClientRegistration(OidcClientRegistrationConfig oidcConfig,
-            OidcTlsSupport tlsSupport, Supplier<Vertx> vertxSupplier) {
-        return createOidcClientRegistrationUni(oidcConfig, tlsSupport, vertxSupplier).await()
+            OidcTlsSupport tlsSupport, Supplier<Vertx> vertxSupplier,
+            Supplier<ProxyConfigurationRegistry> proxyConfigurationRegistrySupplier) {
+        return createOidcClientRegistrationUni(oidcConfig, tlsSupport, vertxSupplier, proxyConfigurationRegistrySupplier)
+                .await()
                 .atMost(oidcConfig.connectionTimeout());
     }
 
     public static Uni<OidcClientRegistration> createOidcClientRegistrationUni(OidcClientRegistrationConfig oidcConfig,
-            OidcTlsSupport tlsSupport, Supplier<Vertx> vertxSupplier) {
+            OidcTlsSupport tlsSupport, Supplier<Vertx> vertxSupplier,
+            Supplier<ProxyConfigurationRegistry> proxyConfigurationRegistrySupplier) {
         if (!oidcConfig.registrationEnabled()) {
             String message = String.format("'%s' client registration configuration is disabled", "");
             LOG.debug(message);
@@ -122,7 +132,7 @@ public class OidcClientRegistrationRecorder {
         WebClientOptions options = new WebClientOptions();
         options.setFollowRedirects(oidcConfig.followRedirects());
         OidcCommonUtils.setHttpClientOptions(oidcConfig, options,
-                tlsSupport.forConfig(oidcConfig.tls().tlsConfigurationName()));
+                tlsSupport.forConfig(oidcConfig.tls().tlsConfigurationName()), proxyConfigurationRegistrySupplier.get());
 
         final io.vertx.mutiny.core.Vertx vertx = new io.vertx.mutiny.core.Vertx(vertxSupplier.get());
         WebClient client = WebClient.create(vertx, options);
@@ -228,9 +238,10 @@ public class OidcClientRegistrationRecorder {
             Map<OidcEndpoint.Type, List<OidcResponseFilter>> oidcResponseFilters,
             String authServerUrl, io.vertx.mutiny.core.Vertx vertx, OidcClientRegistrationConfig oidcConfig) {
         final long connectionDelayInMillisecs = OidcCommonUtils.getConnectionDelayInMillis(oidcConfig);
+        final String discoveryUri = OidcCommonUtils.getDiscoveryUri(authServerUrl, oidcConfig.discoveryPath());
         return OidcCommonUtils
                 .discoverMetadata(client, oidcRequestFilters, new OidcRequestContextProperties(),
-                        oidcResponseFilters, authServerUrl,
+                        oidcResponseFilters, discoveryUri,
                         connectionDelayInMillisecs, vertx,
                         oidcConfig.useBlockingDnsLookup())
                 .onItem().transform(json -> new OidcConfigurationMetadata(json.getString("registration_endpoint")));

@@ -1,6 +1,8 @@
 package io.quarkus.oidc.runtime;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
 
 import jakarta.enterprise.context.ApplicationScoped;
 
@@ -13,7 +15,6 @@ import io.quarkus.oidc.TokenStateManager;
 import io.quarkus.oidc.common.runtime.OidcCommonUtils;
 import io.quarkus.oidc.runtime.OidcTenantConfig.TokenStateManager.Strategy;
 import io.quarkus.security.AuthenticationFailedException;
-import io.smallrye.jwt.algorithm.KeyEncryptionAlgorithm;
 import io.smallrye.mutiny.Uni;
 import io.vertx.core.http.Cookie;
 import io.vertx.core.http.impl.ServerCookie;
@@ -63,48 +64,34 @@ public class DefaultTokenStateManager implements TokenStateManager {
             }
 
             // Now all three tokens are encrypted
-            String encryptedTokens = encryptToken(sb.toString(), routingContext, oidcConfig);
+            String encryptedTokens = OidcUtils.encryptToken(sb.toString(), routingContext, oidcConfig);
             return Uni.createFrom().item(encryptedTokens);
         } else {
             // ID, access and refresh tokens are represented as individual cookies
 
             // Encrypt ID token
-            String encryptedIdToken = encryptToken(tokens.getIdToken(), routingContext, oidcConfig);
+            String encryptedIdToken = OidcUtils.encryptToken(tokens.getIdToken(), routingContext, oidcConfig);
 
             // By default, all three tokens are retained
             if (oidcConfig.tokenStateManager().strategy() == Strategy.KEEP_ALL_TOKENS) {
 
-                StringBuilder sb = new StringBuilder();
-
-                // Add access token and its expires_in property
-                sb.append(tokens.getAccessToken())
-                        .append(CodeAuthenticationMechanism.COOKIE_DELIM)
-                        .append(tokens.getAccessTokenExpiresIn() != null ? tokens.getAccessTokenExpiresIn() : "")
-                        .append(CodeAuthenticationMechanism.COOKIE_DELIM)
-                        .append(tokens.getAccessTokenScope() != null ? tokens.getAccessTokenScope() : "");
-
-                // Encrypt access token and create a `q_session_at` cookie.
-                CodeAuthenticationMechanism.createCookie(routingContext,
-                        oidcConfig,
-                        getAccessTokenCookieName(oidcConfig),
-                        encryptToken(sb.toString(), routingContext, oidcConfig),
-                        routingContext.get(CodeAuthenticationMechanism.SESSION_MAX_AGE_PARAM), true);
+                createSessionAccessTokenCookie(routingContext, oidcConfig, tokens);
 
                 // Encrypt refresh token and create a `q_session_rt` cookie.
                 if (tokens.getRefreshToken() != null) {
-                    CodeAuthenticationMechanism.createCookie(routingContext,
+                    OidcUtils.createSessionCookie(routingContext,
                             oidcConfig,
                             getRefreshTokenCookieName(oidcConfig),
-                            encryptToken(tokens.getRefreshToken(), routingContext, oidcConfig),
-                            routingContext.get(CodeAuthenticationMechanism.SESSION_MAX_AGE_PARAM), true);
+                            OidcUtils.encryptToken(tokens.getRefreshToken(), routingContext, oidcConfig),
+                            routingContext.get(CodeAuthenticationMechanism.SESSION_MAX_AGE_PARAM));
                 }
             } else if (oidcConfig.tokenStateManager().strategy() == Strategy.ID_REFRESH_TOKENS
                     && tokens.getRefreshToken() != null) {
                 // Encrypt refresh token and create a `q_session_rt` cookie.
-                CodeAuthenticationMechanism.createCookie(routingContext,
+                OidcUtils.createSessionCookie(routingContext,
                         oidcConfig,
                         getRefreshTokenCookieName(oidcConfig),
-                        encryptToken(tokens.getRefreshToken(), routingContext, oidcConfig),
+                        OidcUtils.encryptToken(tokens.getRefreshToken(), routingContext, oidcConfig),
                         routingContext.get(CodeAuthenticationMechanism.SESSION_MAX_AGE_PARAM));
             }
 
@@ -127,7 +114,7 @@ public class DefaultTokenStateManager implements TokenStateManager {
         if (!oidcConfig.tokenStateManager().splitTokens()) {
             // ID, access and refresh tokens are all be represented by a single cookie.
 
-            String decryptedTokenState = decryptToken(tokenState, routingContext, oidcConfig);
+            String decryptedTokenState = OidcUtils.decryptToken(tokenState, routingContext, oidcConfig);
 
             String[] tokens = CodeAuthenticationMechanism.COOKIE_PATTERN.split(decryptedTokenState);
 
@@ -151,13 +138,13 @@ public class DefaultTokenStateManager implements TokenStateManager {
             }
         } else {
             // Decrypt ID token from the q_session cookie
-            idToken = decryptToken(tokenState, routingContext, oidcConfig);
+            idToken = OidcUtils.decryptToken(tokenState, routingContext, oidcConfig);
 
             if (oidcConfig.tokenStateManager().strategy() == Strategy.KEEP_ALL_TOKENS) {
-                Cookie atCookie = getAccessTokenCookie(routingContext, oidcConfig);
-                if (atCookie != null) {
+                String atCookieValue = getAccessTokenCookie(routingContext, oidcConfig);
+                if (atCookieValue != null) {
                     // Decrypt access token from the q_session_at cookie
-                    String accessTokenState = decryptToken(atCookie.getValue(), routingContext, oidcConfig);
+                    String accessTokenState = OidcUtils.decryptToken(atCookieValue, routingContext, oidcConfig);
                     String[] accessTokenData = CodeAuthenticationMechanism.COOKIE_PATTERN.split(accessTokenState);
                     accessToken = accessTokenData[0];
                     try {
@@ -179,12 +166,12 @@ public class DefaultTokenStateManager implements TokenStateManager {
                 Cookie rtCookie = getRefreshTokenCookie(routingContext, oidcConfig);
                 if (rtCookie != null) {
                     // Decrypt refresh token from the q_session_rt cookie
-                    refreshToken = decryptToken(rtCookie.getValue(), routingContext, oidcConfig);
+                    refreshToken = OidcUtils.decryptToken(rtCookie.getValue(), routingContext, oidcConfig);
                 }
             } else if (oidcConfig.tokenStateManager().strategy() == Strategy.ID_REFRESH_TOKENS) {
                 Cookie rtCookie = getRefreshTokenCookie(routingContext, oidcConfig);
                 if (rtCookie != null) {
-                    refreshToken = decryptToken(rtCookie.getValue(), routingContext, oidcConfig);
+                    refreshToken = OidcUtils.decryptToken(rtCookie.getValue(), routingContext, oidcConfig);
                 }
             }
         }
@@ -196,8 +183,15 @@ public class DefaultTokenStateManager implements TokenStateManager {
     public Uni<Void> deleteTokens(RoutingContext routingContext, OidcTenantConfig oidcConfig, String tokenState,
             OidcRequestContext<Void> requestContext) {
         if (oidcConfig.tokenStateManager().splitTokens()) {
-            OidcUtils.removeCookie(routingContext, getAccessTokenCookie(routingContext, oidcConfig),
-                    oidcConfig);
+            getAccessTokenCookie(routingContext, oidcConfig);
+            List<String> atCookieNames = routingContext.get(OidcUtils.SESSION_AT_COOKIE_NAME);
+            if (atCookieNames != null) {
+                LOG.debugf("Remove session access cookie names: %s", atCookieNames);
+                for (String cookieName : atCookieNames) {
+                    OidcUtils.removeCookie(routingContext, oidcConfig, cookieName);
+                }
+            }
+
             OidcUtils.removeCookie(routingContext, getRefreshTokenCookie(routingContext, oidcConfig),
                     oidcConfig);
         }
@@ -217,8 +211,10 @@ public class DefaultTokenStateManager implements TokenStateManager {
         }
     }
 
-    private static ServerCookie getAccessTokenCookie(RoutingContext routingContext, OidcTenantConfig oidcConfig) {
-        return (ServerCookie) routingContext.request().getCookie(getAccessTokenCookieName(oidcConfig));
+    private static String getAccessTokenCookie(RoutingContext routingContext, OidcTenantConfig oidcConfig) {
+        final Map<String, Cookie> cookies = routingContext.request().cookieMap();
+        return OidcUtils.getSessionCookie(routingContext.data(), cookies, oidcConfig, OidcUtils.SESSION_AT_COOKIE_NAME,
+                getAccessTokenCookieName(oidcConfig));
     }
 
     private static ServerCookie getRefreshTokenCookie(RoutingContext routingContext, OidcTenantConfig oidcConfig) {
@@ -235,34 +231,6 @@ public class DefaultTokenStateManager implements TokenStateManager {
         return OidcUtils.SESSION_RT_COOKIE_NAME + cookieSuffix;
     }
 
-    private static String encryptToken(String token, RoutingContext context, OidcTenantConfig oidcConfig) {
-        if (oidcConfig.tokenStateManager().encryptionRequired()) {
-            TenantConfigContext configContext = context.get(TenantConfigContext.class.getName());
-            try {
-                KeyEncryptionAlgorithm encAlgorithm = KeyEncryptionAlgorithm
-                        .valueOf(oidcConfig.tokenStateManager().encryptionAlgorithm().name());
-                return OidcUtils.encryptString(token, configContext.getSessionCookieEncryptionKey(), encAlgorithm);
-            } catch (Exception ex) {
-                throw new AuthenticationFailedException(ex);
-            }
-        }
-        return token;
-    }
-
-    private static String decryptToken(String token, RoutingContext context, OidcTenantConfig oidcConfig) {
-        if (oidcConfig.tokenStateManager().encryptionRequired()) {
-            TenantConfigContext configContext = context.get(TenantConfigContext.class.getName());
-            try {
-                KeyEncryptionAlgorithm encAlgorithm = KeyEncryptionAlgorithm
-                        .valueOf(oidcConfig.tokenStateManager().encryptionAlgorithm().name());
-                return OidcUtils.decryptString(token, configContext.getSessionCookieEncryptionKey(), encAlgorithm);
-            } catch (Exception ex) {
-                throw new AuthenticationFailedException(ex);
-            }
-        }
-        return token;
-    }
-
     private static String encodeScopes(OidcTenantConfig oidcConfig, String accessTokenScope) {
         if (oidcConfig.tokenStateManager().encryptionRequired()) {
             return accessTokenScope;
@@ -275,5 +243,50 @@ public class DefaultTokenStateManager implements TokenStateManager {
             return accessTokenScope;
         }
         return OidcCommonUtils.base64UrlDecode(accessTokenScope);
+    }
+
+    private static void createSessionAccessTokenCookie(RoutingContext routingContext, OidcTenantConfig oidcConfig,
+            AuthorizationCodeTokens tokens) {
+
+        String cookieName = getAccessTokenCookieName(oidcConfig);
+
+        StringBuilder sb = new StringBuilder();
+
+        // Add access token and its expires_in property
+        sb.append(tokens.getAccessToken())
+                .append(CodeAuthenticationMechanism.COOKIE_DELIM)
+                .append(tokens.getAccessTokenExpiresIn() != null ? tokens.getAccessTokenExpiresIn() : "")
+                .append(CodeAuthenticationMechanism.COOKIE_DELIM)
+                .append(tokens.getAccessTokenScope() != null ? encodeScopes(oidcConfig, tokens.getAccessTokenScope())
+                        : "");
+
+        String cookieValue = OidcUtils.encryptToken(sb.toString(), routingContext, oidcConfig);
+
+        LOG.debugf("Session access token cookie length for the tenant %s is %d bytes.",
+                oidcConfig.tenantId().get(), cookieValue.length());
+        if (cookieValue.length() > OidcUtils.MAX_COOKIE_VALUE_LENGTH) {
+            LOG.debugf(
+                    "Session access token cookie length for the tenant %s is greater than %d bytes."
+                            + " The cookie will be split to chunks to avoid browsers ignoring it."
+                            + " Alternative recommendations: 1. Set 'quarkus.oidc.token-state-manager.strategy=id-refresh-tokens' if you do not need to use the access token"
+                            + " as a source of roles or to request UserInfo or propagate it to the downstream services."
+                            + " 2. Decrease the encrypted session access token cookie's length by enabling a direct encryption algorithm"
+                            + " with 'quarkus.oidc.token-state-manager.encryption-algorithm=dir'."
+                            + " 3. Decrease the session access token cookie's length by disabling its encryption with 'quarkus.oidc.token-state-manager.encryption-required=false'"
+                            + " but only if it is considered to be safe in your application's network."
+                            + " 4. Use the 'quarkus-oidc-db-token-state-manager' extension or the 'quarkus-oidc-redis-token-state-manager' extension"
+                            + " or register a custom 'quarkus.oidc.TokenStateManager'"
+                            + " CDI bean with the alternative priority set to 1 and save the tokens on the server.",
+                    oidcConfig.tenantId().get(), OidcUtils.MAX_COOKIE_VALUE_LENGTH);
+            OidcUtils.createChunkedCookie(routingContext, oidcConfig, cookieName, cookieValue,
+                    routingContext.get(CodeAuthenticationMechanism.SESSION_MAX_AGE_PARAM));
+        } else {
+            // Create a `q_session_at` cookie.
+            OidcUtils.createSessionCookie(routingContext,
+                    oidcConfig,
+                    cookieName,
+                    cookieValue,
+                    routingContext.get(CodeAuthenticationMechanism.SESSION_MAX_AGE_PARAM));
+        }
     }
 }

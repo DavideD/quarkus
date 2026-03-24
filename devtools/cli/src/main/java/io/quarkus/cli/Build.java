@@ -6,10 +6,9 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.Callable;
 
-import io.quarkus.cli.build.BaseBuildCommand;
-import io.quarkus.cli.build.BuildSystemRunner;
 import io.quarkus.cli.common.BuildOptions;
 import io.quarkus.cli.common.RunModeOption;
+import io.quarkus.cli.common.build.BuildSystemRunner;
 import io.quarkus.devtools.project.BuildTool;
 import picocli.CommandLine;
 import picocli.CommandLine.Parameters;
@@ -33,8 +32,11 @@ public class Build extends BaseBuildCommand implements Callable<Integer> {
             output.throwIfUnmatchedArguments(spec.commandLine());
 
             BuildSystemRunner runner = getRunner();
-            if (buildOptions.generateReport) {
-                params.add("-Dquarkus.debug.dump-build-metrics=true");
+            if (buildOptions.generateBuildReport) {
+                params.add("-Dquarkus.builder.metrics.enabled=true");
+                if (buildOptions.buildExtendedCapture) {
+                    params.add("-Dquarkus.builder.metrics.extended-capture=true");
+                }
             }
             BuildSystemRunner.BuildCommandArgs commandArgs = runner.prepareBuild(buildOptions, runMode, params);
 
@@ -44,7 +46,7 @@ public class Build extends BaseBuildCommand implements Callable<Integer> {
             }
 
             int exitCode = runner.run(commandArgs);
-            if (exitCode == CommandLine.ExitCode.OK && buildOptions.generateReport) {
+            if (exitCode == CommandLine.ExitCode.OK && buildOptions.generateBuildReport) {
                 output.printText(new String[] {
                         "\nBuild report available: " + new BuildReport(runner).generate().toPath().toAbsolutePath().toString()
                                 + "\n"

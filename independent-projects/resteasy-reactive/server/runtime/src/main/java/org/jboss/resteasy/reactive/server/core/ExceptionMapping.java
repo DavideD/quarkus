@@ -3,7 +3,8 @@ package org.jboss.resteasy.reactive.server.core;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -12,8 +13,12 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 import org.jboss.resteasy.reactive.common.model.ResourceExceptionMapper;
+import org.jboss.resteasy.reactive.server.ExceptionUnwrapStrategy;
 import org.jboss.resteasy.reactive.spi.BeanFactory;
 
+/**
+ * This instance is recorded, we need all elements to be ordered so that the builds can be reproducible.
+ */
 @SuppressWarnings({ "unchecked", "unused" })
 public class ExceptionMapping {
 
@@ -28,9 +33,14 @@ public class ExceptionMapping {
      * all the possible mappings and at runtime determine the one with the lowest priority
      * value that is active.
      */
-    final Map<String, ResourceExceptionMapper<? extends Throwable>> mappers = new HashMap<>();
+    final Map<String, ResourceExceptionMapper<? extends Throwable>> mappers = new LinkedHashMap<>();
     // this is going to be used when there are mappers that are removable at runtime
-    final Map<String, List<ResourceExceptionMapper<? extends Throwable>>> runtimeCheckMappers = new HashMap<>();
+    final Map<String, List<ResourceExceptionMapper<? extends Throwable>>> runtimeCheckMappers = new LinkedHashMap<>();
+
+    /**
+     * Exception mapper class names that should be disabled.
+     */
+    final Set<String> disabledMappers = new LinkedHashSet<>();
 
     /**
      * Exceptions that indicate an blocking operation was performed on an IO thread.
@@ -39,7 +49,7 @@ public class ExceptionMapping {
      */
     final List<Predicate<Throwable>> blockingProblemPredicates = new ArrayList<>();
     final List<Predicate<Throwable>> nonBlockingProblemPredicate = new ArrayList<>();
-    final Set<String> unwrappedExceptions = new HashSet<>();
+    final Map<String, ExceptionUnwrapStrategy> unwrappedExceptions = new LinkedHashMap<>();
 
     public void addBlockingProblem(Class<? extends Throwable> throwable) {
         blockingProblemPredicates.add(new ExceptionTypePredicate(throwable));
@@ -57,11 +67,11 @@ public class ExceptionMapping {
         nonBlockingProblemPredicate.add(predicate);
     }
 
-    public void addUnwrappedException(String className) {
-        unwrappedExceptions.add(className);
+    public void addUnwrappedException(String className, ExceptionUnwrapStrategy strategy) {
+        unwrappedExceptions.put(className, strategy);
     }
 
-    public Set<String> getUnwrappedExceptions() {
+    public Map<String, ExceptionUnwrapStrategy> getUnwrappedExceptions() {
         return unwrappedExceptions;
     }
 
@@ -127,9 +137,17 @@ public class ExceptionMapping {
         return runtimeCheckMappers;
     }
 
+    public Set<String> getDisabledMappers() {
+        return disabledMappers;
+    }
+
+    public void addDisabledMapper(String mapperClassName) {
+        disabledMappers.add(mapperClassName);
+    }
+
     public Map<String, ResourceExceptionMapper<? extends Throwable>> effectiveMappers() {
         if (runtimeCheckMappers.isEmpty()) {
-            return mappers;
+            return filterDisabledMappers(mappers);
         }
         Map<String, ResourceExceptionMapper<? extends Throwable>> result = new HashMap<>();
         for (var entry : runtimeCheckMappers.entrySet()) {
@@ -148,6 +166,20 @@ public class ExceptionMapping {
             }
         }
         result.putAll(mappers);
+        return filterDisabledMappers(result);
+    }
+
+    private Map<String, ResourceExceptionMapper<? extends Throwable>> filterDisabledMappers(
+            Map<String, ResourceExceptionMapper<? extends Throwable>> mappers) {
+        if (disabledMappers.isEmpty()) {
+            return mappers;
+        }
+        Map<String, ResourceExceptionMapper<? extends Throwable>> result = new HashMap<>();
+        for (Map.Entry<String, ResourceExceptionMapper<? extends Throwable>> entry : mappers.entrySet()) {
+            if (!disabledMappers.contains(entry.getValue().getClassName())) {
+                result.put(entry.getKey(), entry.getValue());
+            }
+        }
         return result;
     }
 

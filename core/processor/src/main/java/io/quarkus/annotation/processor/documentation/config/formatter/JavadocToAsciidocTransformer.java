@@ -96,7 +96,7 @@ public final class JavadocToAsciidocTransformer {
 
         // the parser expects all the lines to start with "* "
         // we add it as it has been previously removed
-        Javadoc parsedJavadoc = StaticJavaParser.parseJavadoc(START_OF_LINE.matcher(javadoc).replaceAll("* "));
+        Javadoc parsedJavadoc = StaticJavaParser.parseJavadoc(START_OF_LINE.matcher(javadoc).replaceAll("* "), false);
 
         StringBuilder htmlJavadoc = new StringBuilder(javadoc.length());
 
@@ -105,8 +105,7 @@ public final class JavadocToAsciidocTransformer {
         Map<Integer, String> inlineTagsReplacements = new TreeMap<>();
 
         for (JavadocDescriptionElement javadocDescriptionElement : parsedJavadoc.getDescription().getElements()) {
-            if (javadocDescriptionElement instanceof JavadocInlineTag) {
-                JavadocInlineTag inlineTag = (JavadocInlineTag) javadocDescriptionElement;
+            if (javadocDescriptionElement instanceof JavadocInlineTag inlineTag) {
                 String content = inlineTag.getContent().trim();
                 switch (inlineTag.getType()) {
                     case CODE:

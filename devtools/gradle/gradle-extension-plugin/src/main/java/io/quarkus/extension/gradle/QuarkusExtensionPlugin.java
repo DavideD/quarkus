@@ -36,8 +36,12 @@ public class QuarkusExtensionPlugin implements Plugin<Project> {
 
     public static final String EXTENSION_DESCRIPTOR_TASK_NAME = "extensionDescriptor";
     public static final String VALIDATE_EXTENSION_TASK_NAME = "validateExtension";
+    private static final String DEPLOYMENT_CLASSPATH_CONFIGURATION_NAME = "quarkusDeploymentClasspath";
 
     public static final String QUARKUS_ANNOTATION_PROCESSOR = "io.quarkus:quarkus-extension-processor";
+
+    public QuarkusExtensionPlugin() {
+    }
 
     @Override
     public void apply(Project project) {
@@ -84,9 +88,21 @@ public class QuarkusExtensionPlugin implements Plugin<Project> {
                         javaPlugin -> addAnnotationProcessorDependency(deploymentProject));
 
                 validateExtensionTask.configure(task -> {
-                    Configuration deploymentModuleClasspath = deploymentProject.getConfigurations()
-                            .getByName(JavaPlugin.RUNTIME_CLASSPATH_CONFIGURATION_NAME);
-                    task.setDeploymentModuleClasspath(deploymentModuleClasspath);
+                    // Create a local resolvable configuration that depends on the deployment project.
+                    // This avoids cross-project configuration resolution issues in Gradle 9.x.
+                    Configuration deploymentClasspath = project.getConfigurations()
+                            .findByName(DEPLOYMENT_CLASSPATH_CONFIGURATION_NAME);
+                    if (deploymentClasspath == null) {
+                        deploymentClasspath = project.getConfigurations().create(DEPLOYMENT_CLASSPATH_CONFIGURATION_NAME);
+                        deploymentClasspath.setCanBeConsumed(false);
+                        deploymentClasspath.setCanBeResolved(true);
+                        deploymentClasspath.setTransitive(true);
+                        // Add project dependency on deployment module
+                        project.getDependencies().add(DEPLOYMENT_CLASSPATH_CONFIGURATION_NAME,
+                                project.getDependencies().project(
+                                        java.util.Map.of("path", deploymentProject.getPath())));
+                    }
+                    task.setDeploymentModuleClasspath(deploymentClasspath);
                 });
 
                 deploymentProject.getTasks().withType(Test.class).configureEach(test -> {
@@ -102,7 +118,12 @@ public class QuarkusExtensionPlugin implements Plugin<Project> {
                         }
                     });
                 });
-                exportDeploymentClasspath(deploymentProject);
+                if (ApplicationDeploymentClasspathBuilder.isDisableComponentVariants(project)) {
+                    // This seems to override the deployment configuration that otherwise would be created
+                    // by the ApplicationDeploymentClasspathBuilder, which will not work
+                    // especially for the component variant-based approach.
+                    exportDeploymentClasspath(deploymentProject);
+                }
             }
         });
     }
@@ -111,10 +132,10 @@ public class QuarkusExtensionPlugin implements Plugin<Project> {
         DeploymentClasspathBuilder deploymentClasspathBuilder = new DeploymentClasspathBuilder(project);
         project.getConfigurations().getByName(JavaPlugin.COMPILE_CLASSPATH_CONFIGURATION_NAME).getIncoming()
                 .beforeResolve((dependencies) -> deploymentClasspathBuilder
-                        .exportDeploymentClasspath(JavaPlugin.IMPLEMENTATION_CONFIGURATION_NAME));
+                        .exportDeploymentClasspath(JavaPlugin.IMPLEMENTATION_CONFIGURATION_NAME, LaunchMode.NORMAL));
         project.getConfigurations().getByName(JavaPlugin.TEST_COMPILE_CLASSPATH_CONFIGURATION_NAME).getIncoming()
                 .beforeResolve((testDependencies) -> deploymentClasspathBuilder
-                        .exportDeploymentClasspath(JavaPlugin.TEST_IMPLEMENTATION_CONFIGURATION_NAME));
+                        .exportDeploymentClasspath(JavaPlugin.TEST_IMPLEMENTATION_CONFIGURATION_NAME, LaunchMode.TEST));
 
     }
 

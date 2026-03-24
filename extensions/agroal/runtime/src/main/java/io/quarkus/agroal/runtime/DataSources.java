@@ -1,8 +1,7 @@
 package io.quarkus.agroal.runtime;
 
-import java.sql.Connection;
 import java.sql.Driver;
-import java.sql.Statement;
+import java.time.Duration;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.Map;
@@ -141,7 +140,8 @@ public class DataSources {
     }
 
     @SuppressWarnings("resource")
-    public AgroalDataSource createDataSource(String dataSourceName, boolean otelEnabled) {
+    public AgroalDataSource createDataSource(String dataSourceName, boolean otelEnabled,
+            Map<String, String> buildTimeJdbcProperties) {
         if (!agroalDataSourceSupport.entries.containsKey(dataSourceName)) {
             throw new IllegalArgumentException("No datasource named '" + dataSourceName + "' exists");
         }
@@ -192,7 +192,7 @@ public class DataSources {
         applyNewConfiguration(dataSourceName, dataSourceConfiguration, poolConfiguration, connectionFactoryConfiguration,
                 driver, jdbcUrl,
                 dataSourceJdbcBuildTimeConfig, dataSourceRuntimeConfig, dataSourceJdbcRuntimeConfig, transactionRuntimeConfig,
-                mpMetricsPresent);
+                mpMetricsPresent, buildTimeJdbcProperties);
 
         if (agroalDataSourceSupport.disableSslSupport) {
             agroalConnectionConfigurer.disableSslSupport(resolvedDbKind, dataSourceConfiguration,
@@ -243,7 +243,7 @@ public class DataSources {
             AgroalConnectionFactoryConfigurationSupplier connectionFactoryConfiguration, Class<?> driver, String jdbcUrl,
             DataSourceJdbcBuildTimeConfig dataSourceJdbcBuildTimeConfig, DataSourceRuntimeConfig dataSourceRuntimeConfig,
             DataSourceJdbcRuntimeConfig dataSourceJdbcRuntimeConfig, TransactionManagerConfiguration transactionRuntimeConfig,
-            boolean mpMetricsPresent) {
+            boolean mpMetricsPresent, Map<String, String> buildTimeJdbcProperties) {
         connectionFactoryConfiguration.jdbcUrl(jdbcUrl);
         connectionFactoryConfiguration.connectionProviderClass(driver);
         connectionFactoryConfiguration.trackJdbcResources(dataSourceJdbcRuntimeConfig.detectStatementLeaks());
@@ -258,13 +258,14 @@ public class DataSources {
             TransactionIntegration txIntegration = new NarayanaTransactionIntegration(transactionManager,
                     transactionSynchronizationRegistry, null, false,
                     dataSourceJdbcBuildTimeConfig.transactions() == io.quarkus.agroal.runtime.TransactionIntegration.XA
-                            && transactionRuntimeConfig.enableRecovery()
+                            && transactionRuntimeConfig.enableRecovery().orElse(true)
                                     ? xaResourceRecoveryRegistry
                                     : null);
             if (dataSourceJdbcBuildTimeConfig.transactions() == io.quarkus.agroal.runtime.TransactionIntegration.XA
-                    && !transactionRuntimeConfig.enableRecovery()) {
+                    && !transactionRuntimeConfig.enableRecovery().orElse(true)) {
                 log.warnv(
-                        "Datasource {0} enables XA but transaction recovery is not enabled. Please enable transaction recovery by setting quarkus.transaction-manager.enable-recovery=true, otherwise data may be lost if the application is terminated abruptly",
+                        "Datasource {0} enables XA but transaction recovery is disabled."
+                                + " Data may be lost if the application is terminated abruptly",
                         dataSourceName);
             }
             poolConfiguration.transactionIntegration(txIntegration);
@@ -276,8 +277,8 @@ public class DataSources {
         }
 
         // metrics
-        if (dataSourceJdbcBuildTimeConfig.enableMetrics().isPresent()) {
-            dataSourceConfiguration.metricsEnabled(dataSourceJdbcBuildTimeConfig.enableMetrics().get());
+        if (dataSourceJdbcBuildTimeConfig.metrics().enabled().isPresent()) {
+            dataSourceConfiguration.metricsEnabled(dataSourceJdbcBuildTimeConfig.metrics().enabled().get());
         } else {
             // if the enable-metrics property is unspecified, treat it as true if MP Metrics are being exposed
             dataSourceConfiguration.metricsEnabled(dataSourcesBuildTimeConfig.metricsEnabled() && mpMetricsPresent);
@@ -304,6 +305,11 @@ public class DataSources {
                     .credential(new AgroalVaultCredentialsProviderPassword(name, credentialsProvider));
         }
 
+        // Additional JDBC properties from build time config
+        for (Map.Entry<String, String> entry : buildTimeJdbcProperties.entrySet()) {
+            connectionFactoryConfiguration.jdbcProperty(entry.getKey(), entry.getValue());
+        }
+
         // Extra JDBC properties
         for (Map.Entry<String, String> entry : dataSourceJdbcRuntimeConfig.additionalJdbcProperties().entrySet()) {
             connectionFactoryConfiguration.jdbcProperty(entry.getKey(), entry.getValue());
@@ -323,6 +329,9 @@ public class DataSources {
         } else {
             poolConfiguration.connectionValidator(ConnectionValidator.defaultValidator());
         }
+        if (dataSourceJdbcRuntimeConfig.loginTimeout().isPresent()) {
+            connectionFactoryConfiguration.loginTimeout(dataSourceJdbcRuntimeConfig.loginTimeout().get());
+        }
         if (dataSourceJdbcRuntimeConfig.acquisitionTimeout().isPresent()) {
             poolConfiguration.acquisitionTimeout(dataSourceJdbcRuntimeConfig.acquisitionTimeout().get());
         }
@@ -332,22 +341,8 @@ public class DataSources {
         }
         if (dataSourceJdbcRuntimeConfig.validationQuerySql().isPresent()) {
             String validationQuery = dataSourceJdbcRuntimeConfig.validationQuerySql().get();
-            poolConfiguration.connectionValidator(new ConnectionValidator() {
-
-                @Override
-                public boolean isValid(Connection connection) {
-                    try (Statement stmt = connection.createStatement()) {
-                        if (dataSourceJdbcRuntimeConfig.validationQueryTimeout().isPresent()) {
-                            stmt.setQueryTimeout((int) dataSourceJdbcRuntimeConfig.validationQueryTimeout().get().toSeconds());
-                        }
-                        stmt.execute(validationQuery);
-                        return true;
-                    } catch (Exception e) {
-                        log.warn("Connection validation failed", e);
-                    }
-                    return false;
-                }
-            });
+            int timeout = (int) dataSourceJdbcRuntimeConfig.validationQueryTimeout().orElse(Duration.ZERO).toSeconds();
+            poolConfiguration.connectionValidator(ConnectionValidator.sqlValidator(validationQuery, timeout));
         }
         poolConfiguration.validateOnBorrow(dataSourceJdbcRuntimeConfig.validateOnBorrow());
         poolConfiguration.reapTimeout(dataSourceJdbcRuntimeConfig.idleRemovalInterval());

@@ -1,15 +1,19 @@
 package io.quarkus.deployment.pkg;
 
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import io.quarkus.deployment.pkg.PackageConfig.JarConfig.AotConfig;
+import io.quarkus.deployment.pkg.PackageConfig.JarConfig.AppcdsConfig;
 import io.quarkus.maven.dependency.GACT;
 import io.quarkus.runtime.annotations.ConfigDocDefault;
 import io.quarkus.runtime.annotations.ConfigDocMapKey;
+import io.quarkus.runtime.annotations.ConfigDocSection;
 import io.quarkus.runtime.annotations.ConfigGroup;
 import io.quarkus.runtime.annotations.ConfigRoot;
 import io.smallrye.config.ConfigMapping;
@@ -24,8 +28,9 @@ import io.smallrye.config.WithDefault;
 @ConfigRoot
 public interface PackageConfig {
     /**
-     * Configuration which applies to building a JAR file for the project.
+     * Building a jar.
      */
+    @ConfigDocSection
     JarConfig jar();
 
     /**
@@ -48,6 +53,13 @@ public interface PackageConfig {
      * The name of the final artifact, excluding the suffix and file extension.
      */
     Optional<String> outputName();
+
+    /**
+     * The timestamp used as a reference for generating the packages (e.g. for the creation timestamp of ZIP entries).
+     * <p>
+     * The approach is similar to what is done by the maven-jar-plugin with `project.build.outputTimestamp`.
+     */
+    Optional<Instant> outputTimestamp();
 
     /**
      * Setting this switch to {@code true} will cause Quarkus to write the transformed application bytecode
@@ -95,16 +107,34 @@ public interface PackageConfig {
         JarType type();
 
         /**
+         * The JAR's manifest.
+         */
+        @ConfigDocSection
+        ManifestConfig manifest();
+
+        /**
+         * AOT file sub-configuration.
+         * This configuration only applies to certain JAR types.
+         */
+        @ConfigDocSection(generated = true)
+        AotConfig aot();
+
+        /**
+         * AppCDS archive sub-configuration.
+         * This configuration only applies to certain JAR types.
+         *
+         * @deprecated use {@link PackageConfig#jar#aot()} instead
+         */
+        @Deprecated(forRemoval = true, since = "3.32")
+        @ConfigDocSection
+        AppcdsConfig appcds();
+
+        /**
          * Whether the created jar will be compressed. This setting is not used when building a native image
          */
         @ConfigDocDefault("true")
         @WithDefault("true")
         boolean compress();
-
-        /**
-         * The JAR's manifest sub-configuration.
-         */
-        ManifestConfig manifest();
 
         /**
          * Files that should not be copied to the output artifact.
@@ -153,15 +183,33 @@ public interface PackageConfig {
         boolean addRunnerSuffix();
 
         /**
-         * AppCDS archive sub-configuration.
-         * This configuration only applies to certain JAR types.
+         * Indicates a list of dependency for which the jar will use artifactId.type filename scheme
+         * Each dependency needs to be expressed in the following format:
+         * <p>
+         * {@code groupId:artifactId[:[classifier][:[type]]]}
+         * <p>
+         * With the classifier and type being optional (note that the brackets ({@code []}) denote optionality and are
+         * not a part of the syntax specification).
+         * The group ID and artifact ID must be present and non-empty.
+         * <p>
+         * If the type is missing, the artifact is assumed to be of type {@code jar}.
+         * <p>
+         * This parameter is optional; if absent, jar names will use groupId.artifactId[-version][-classifier].type scheme
+         *
+         * Note that using this parameter is not recommended and only be used for specific corner cases when the jar name is
+         * enforced.
+         *
          */
-        AppcdsConfig appcds();
+        @WithDefault("com.sap.conn.jco:sapjco3::jar,com.sap.conn.idoc:sapidoc3::jar")
+        Optional<Set<GACT>> forceUseArtifactIdOnlyAsName();
 
         /**
          * Configuration for AppCDS generation.
+         *
+         * @Deprecated Use AotConfig instead
          */
         @ConfigGroup
+        @Deprecated(forRemoval = true, since = "3.32")
         interface AppcdsConfig {
             /**
              * Whether to automate the creation of AppCDS.
@@ -209,6 +257,77 @@ public interface PackageConfig {
              */
             @WithDefault("false")
             boolean useAot();
+        }
+
+        /**
+         * AOT file generation related configuration
+         */
+        interface AotConfig {
+            /**
+             * Whether to automate the creation of an AOT file.
+             */
+            @WithDefault("false")
+            boolean enabled();
+
+            /**
+             * The type of AOT file to generate
+             * <p>
+             * If {@code auto} is used, Quarkus will generate an AOT file for JDK 25+,
+             * for older JDKs it will generate an AppCDS file.
+             */
+            Optional<AotType> type();
+
+            /**
+             * Comma-separated list of additional recording arguments passed to the recording command line.
+             * <p>
+             * For instance, may be used to enable advanced logging with:
+             * {@code -Xlog:aot+map=trace,aot+map+oops=trace,aot=warning:file=aot-analysis.map:none:filesize=0 -Xlog:aot+resolve*=trace,aot+codecache+exit=debug:file=training.log:level,tags}
+             * <p>
+             * If an argument includes the {@code ,} symbol, it needs to be escaped, e.g. {@code \\,}
+             */
+            Optional<List<String>> additionalRecordingArgs();
+
+            /**
+             * The phase in which the AOT file should be generated.
+             * <p>
+             * For Leyden AOT, {@code auto} means {@code integration-tests}.
+             * <p>
+             * For AppCDS, {@code auto} means {@code build} (and an error will be thrown if set to {@code integration-tests}).
+             */
+            Optional<AotPhase> phase();
+
+            enum AotType {
+                AUTO,
+                AOT,
+                AppCDS
+            }
+
+            enum AotPhase {
+                AUTO,
+                BUILD,
+                INTEGRATION_TESTS
+            }
+        }
+
+        /**
+         * Whether CRaC checkpointing feature is enabled.
+         * <p>
+         * CRaC is a technology enabled in specific builds of Azul's JVM distribution.
+         */
+        CracConfig crac();
+
+        /**
+         * Configuration for CRaC checkpointing.
+         */
+        @ConfigGroup
+        interface CracConfig {
+            /**
+             * Whether to enable CRaC checkpointing feature.
+             * <p>
+             * Note that it is a no-op if not using a JVM distribution supporting CRaC.
+             */
+            @WithDefault("false")
+            boolean enabled();
         }
 
         /**
@@ -275,15 +394,22 @@ public interface PackageConfig {
             /**
              * The "fast JAR" packaging type.
              */
-            FAST_JAR("fast-jar", "jar"),
+            FAST_JAR(true, "fast-jar", "jar"),
+            /**
+             * The AOT-optimized packaging type.
+             * <p>
+             * Similar to fast-jar in the approach but taking into account the limitations of AOT class loading (i.e. all class
+             * loading delegated to JDK class loader).
+             */
+            AOT_JAR(true, "aot-jar", "aot-fast-jar"),
             /**
              * The "Uber-JAR" packaging type.
              */
-            UBER_JAR("uber-jar"),
+            UBER_JAR(false, "uber-jar"),
             /**
              * The "mutable JAR" packaging type (for remote development mode).
              */
-            MUTABLE_JAR("mutable-jar"),
+            MUTABLE_JAR(true, "mutable-jar"),
             /**
              * The "legacy JAR" packaging type.
              * This corresponds to the packaging type used in Quarkus before version 1.12.
@@ -291,7 +417,7 @@ public interface PackageConfig {
              * @deprecated This packaging type is no longer recommended for use.
              */
             @Deprecated
-            LEGACY_JAR("legacy-jar", "legacy"),
+            LEGACY_JAR(false, "legacy-jar", "legacy"),
             ;
 
             public static final List<JarType> values = List.of(JarType.values());
@@ -302,16 +428,19 @@ public interface PackageConfig {
 
             private final List<String> names;
 
-            JarType(final List<String> names) {
+            private final boolean fastJarLayout;
+
+            JarType(final boolean fastJarLayout, final List<String> names) {
+                this.fastJarLayout = fastJarLayout;
                 this.names = names;
             }
 
-            JarType(final String... names) {
-                this(List.of(names));
+            JarType(final boolean fastJarLayout, final String... names) {
+                this(fastJarLayout, List.of(names));
             }
 
-            JarType(final String name) {
-                this(List.of(name));
+            JarType(final boolean fastJarLayout, final String name) {
+                this(fastJarLayout, List.of(name));
             }
 
             /**
@@ -320,6 +449,10 @@ public interface PackageConfig {
              */
             public List<String> names() {
                 return names;
+            }
+
+            public boolean usesFastJarLayout() {
+                return fastJarLayout;
             }
 
             /**

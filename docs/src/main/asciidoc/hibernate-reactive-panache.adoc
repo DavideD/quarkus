@@ -125,7 +125,7 @@ quarkus.datasource.password = connor
 quarkus.datasource.reactive.url = vertx-reactive:postgresql://localhost:5432/mydatabase
 
 # drop and create the database at startup (use `update` to only update the schema)
-quarkus.hibernate-orm.database.generation = drop-and-create
+quarkus.hibernate-orm.schema-management.strategy = drop-and-create
 ----
 
 == Solution 1: using the active record pattern
@@ -538,11 +538,11 @@ public class Person extends PanacheEntity {
     }
 
     public static Uni<Long> countByStatus(Status status) {
-        return count("#Person.countByStatus", Parameters.with("status", status).map());
+        return count("#Person.countByStatus", Map.of("status", status);
     }
 
     public static Uni<Long> updateStatusById(Status status, Long id) {
-        return update("#Person.updateStatusById", Parameters.with("status", status).and("id", id));
+        return update("#Person.updateStatusById", Map.of("status", status, "id", id));
     }
 
     public static Uni<Long> deleteById(Long id) {
@@ -570,26 +570,10 @@ Or by name using a `Map`:
 
 [source,java]
 ----
-Map<String, Object> params = new HashMap<>();
-params.put("name", "stef");
-params.put("status", Status.Alive);
-Person.find("name = :name and status = :status", params);
+Person.find("name = :name and status = :status", Map.of("name", "stef", "status", Status.Alive));
 ----
 
-Or using the convenience class `Parameters` either as is or to build a `Map`:
-
-[source,java]
-----
-// generate a Map
-Person.find("name = :name and status = :status",
-         Parameters.with("name", "stef").and("status", Status.Alive).map());
-
-// use it as-is
-Person.find("name = :name and status = :status",
-         Parameters.with("name", "stef").and("status", Status.Alive));
-----
-
-Every query operation accepts passing parameters by index (`Object...`), or by name (`Map<String,Object>` or `Parameters`).
+Every query operation accepts passing parameters by index (`Object...`), or by name (`Map<String,Object>`).
 
 === Query projection
 
@@ -729,9 +713,53 @@ PanacheQuery<RaceWeight> query = Person.find("select new MyView(d.race, AVG(d.we
 ----
 ====
 
+If you need to have multiple constructors in your DTO, you must annotate the constructor intended to generate a SELECT clause with @ProjectedConstructor:
+
+[source,java]
+----
+import io.quarkus.runtime.annotations.RegisterForReflection;
+import io.quarkus.hibernate.reactive.panache.common.ProjectedConstructor;
+
+@RegisterForReflection
+public class PersonName {
+    public final String name;
+
+    @ProjectedConstructor // <1>
+    public PersonName(String name) {
+        this.name = name;
+    }
+
+    public PersonName(String name, String otherField) {
+        this.name = name;
+    }
+}
+
+// only 'name' will be loaded from the database
+PanacheQuery<PersonName> query = Person.find("status", Status.Alive).project(PersonName.class);
+----
+
+<1> This will use your annotated constructor to create the query. (`select new PersonName(name) from ...`)
+
+[WARNING]
+====
+If a DTO used in a projection has multiple constructors and is not properly annotated, it may lead to *unexpected behavior*.
+
+The constructor resolution process follows this order:
+
+1. Look for a constructor annotated with `@ProjectedConstructor`
+This is the most explicit and preferred way to indicate which constructor should be used.
+2. Look for parameters annotated with `@ProjectedFieldName`
+3. Use the first non-parameterless constructor
+If no annotations are found.
+4. Fallback to the first constructor it finds, this could lead to multiple problems or inconsistencies.
+====
+
 == Multiple Persistence Units
 
-Hibernate Reactive in Quarkus currently does not support multiple persistence units.
+Hibernate Reactive with Panache supports multiple persistence units. 
+When using multiple persistence units, Panache automatically uses the correct persistence unit based on the entity's configuration.
+
+For configuration details on setting up multiple persistence units, refer to the xref:hibernate-orm.adoc#multiple-persistence-units[Multiple Persistence Units] section in the Hibernate ORM guide.
 
 [[transactions]]
 == Sessions and Transactions
@@ -739,19 +767,34 @@ Hibernate Reactive in Quarkus currently does not support multiple persistence un
 First of all, most of the methods of a Panache entity must be invoked within the scope of a reactive `Mutiny.Session`.
 In some cases, the session is opened automatically on demand.
 For example, if a Panache entity method is invoked in a Jakarta REST resource method in an application that includes the `quarkus-rest` extension.
-For other cases, there are both a declarative and a programmatic way to ensure the session is opened.
-You can annotate a CDI business method that returns `Uni` with the `@WithSession` annotation.
-The method will be intercepted and the returned `Uni` will be triggered within a scope of a reactive session.
-Alternatively, you can use the `Panache.withSession()` method to achieve the same effect.
+For other cases, there are two declarative ways and a programmatic way to ensure a session is available:
+
+* The first method is to use a method annotated with `@Transactional`.
+* Alternatively, you can annotate a CDI business method that returns `Uni` with the `@WithSession` annotation.
+If you have multiple persistence units, you can specify which one to use by providing the persistence unit name as the annotation value: `@WithSession("my-persistence-unit")`. If not specified, the default persistence unit is used.
+* The programmatic way to achieve the same effect is to use the `Panache.withSession()` method.
 
 NOTE: Note that a Panache entity may not be used from a blocking thread. See also xref:getting-started-reactive.adoc[Getting Started With Reactive] guide that explains the basics of reactive principles in Quarkus.
 
 Also make sure to wrap methods that modify the database or involve multiple queries (e.g. `entity.persist()`) within a transaction.
-You can annotate a CDI business method that returns `Uni` with the `@WithTransaction` annotation.
+
+You can annotate the method with `@jakarta.transaction.Transactional` as you would in Hibernate ORM to specify declarative transaction management.
+
+You can also annotate a CDI business method that returns `Uni` with the `@WithTransaction` annotation.
 The method will be intercepted and the returned `Uni` is triggered within a transaction boundary.
+If you have multiple persistence units, you can specify which one to use by providing the persistence unit name as the annotation value: `@WithTransaction("my-persistence-unit")`. If not specified, the default persistence unit is used.
 Alternatively, you can use the `Panache.withTransaction()` method for the same effect.
 
-IMPORTANT: You cannot use the `@Transactional` annotation with Hibernate Reactive for your transactions: you must use `@WithTransaction`, and your annotated method must return a `Uni` to be non-blocking.
+[NOTE]
+====
+You should not mix `@Transactional` with Panache transaction annotations (`@WithTransaction`, `@WithSession`, `@WithSessionOnDemand`) in the same application. Choose one approach and use it consistently throughout your application. Mixing these annotations in a single reactive pipeline will result in an `UnsupportedOperationException`.
+
+See the xref:hibernate-reactive.adoc[Hibernate Reactive guide] for more details on using `@Transactional` with Hibernate Reactive.
+====
+[WARNING]
+====
+There are some limitations when using different pipelines with `@Transactional`, refer to xref:hibernate-reactive.adoc#transactional-different-pipelines[the limitations section in the Hibernate Reactive guide]
+====
 
 Hibernate Reactive batches changes you make to your entities and sends changes (it is called flush) at the end of the transaction or before a query.
 This is usually a good thing as it is more efficient.
@@ -1014,7 +1057,7 @@ what mock object to pass.
 
 === Using the repository pattern
 
-If you are using the repository pattern you can use Mockito directly, using the `quarkus-junit5-mockito` module,
+If you are using the repository pattern you can use Mockito directly, using the `quarkus-junit-mockito` module,
 which makes mocking beans much easier:
 
 [source,xml,role="primary asciidoc-tabs-target-sync-cli asciidoc-tabs-target-sync-maven"]
@@ -1022,7 +1065,7 @@ which makes mocking beans much easier:
 ----
 <dependency>
     <groupId>io.quarkus</groupId>
-    <artifactId>quarkus-junit5-mockito</artifactId>
+    <artifactId>quarkus-junit-mockito</artifactId>
     <scope>test</scope>
 </dependency>
 ----
@@ -1030,7 +1073,7 @@ which makes mocking beans much easier:
 [source,gradle,role="secondary asciidoc-tabs-target-sync-gradle"]
 .build.gradle
 ----
-testImplementation("io.quarkus:quarkus-junit5-mockito")
+testImplementation("io.quarkus:quarkus-junit-mockito")
 ----
 
 Given this simple entity:

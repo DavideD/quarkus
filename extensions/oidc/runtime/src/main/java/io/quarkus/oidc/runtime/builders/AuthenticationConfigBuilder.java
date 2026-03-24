@@ -4,15 +4,20 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 import io.quarkus.oidc.OidcTenantConfigBuilder;
 import io.quarkus.oidc.runtime.OidcTenantConfig.Authentication;
+import io.quarkus.oidc.runtime.OidcTenantConfig.Authentication.CacheControl;
 import io.quarkus.oidc.runtime.OidcTenantConfig.Authentication.CookieSameSite;
 import io.quarkus.oidc.runtime.OidcTenantConfig.Authentication.ResponseMode;
+import io.quarkus.oidc.runtime.OidcTenantConfig.PushedAuthorizationRequest;
+import io.quarkus.oidc.runtime.OidcTenantConfig.RichAuthorizationRequests;
 
 /**
  * Builder for the {@link Authentication} config.
@@ -25,12 +30,14 @@ public final class AuthenticationConfigBuilder {
             Optional<List<String>> scopes, Optional<String> scopeSeparator, boolean nonceRequired,
             Optional<Boolean> addOpenidScope, Map<String, String> extraParams, Optional<List<String>> forwardParams,
             boolean cookieForceSecure, Optional<String> cookieSuffix, String cookiePath, Optional<String> cookiePathHeader,
-            Optional<String> cookieDomain, CookieSameSite cookieSameSite, boolean allowMultipleCodeFlows,
-            boolean failOnMissingStateParam, boolean failOnUnresolvedKid, Optional<Boolean> userInfoRequired,
-            Duration sessionAgeExtension,
+            Optional<String> cookieDomain, CookieSameSite cookieSameSite, CookieSameSite stateCookieSameSite,
+            Optional<Set<CacheControl>> cacheControl,
+            boolean allowMultipleCodeFlows, boolean failOnMissingStateParam, boolean failOnUnresolvedKid,
+            Optional<Boolean> userInfoRequired, Optional<Duration> sessionAgeExtension,
             Duration stateCookieAge, boolean javaScriptAutoRedirect, Optional<Boolean> idTokenRequired,
             Optional<Duration> internalIdTokenLifespan, Optional<Boolean> pkceRequired, Optional<String> pkceSecret,
-            Optional<String> stateSecret) implements Authentication {
+            Optional<String> stateSecret, PushedAuthorizationRequest par,
+            Optional<RichAuthorizationRequests> rar) implements Authentication {
     }
 
     private final OidcTenantConfigBuilder builder;
@@ -54,11 +61,13 @@ public final class AuthenticationConfigBuilder {
     private Optional<String> cookiePathHeader;
     private Optional<String> cookieDomain;
     private CookieSameSite cookieSameSite;
+    private CookieSameSite stateCookieSameSite;
+    private Set<CacheControl> cacheControl = new HashSet<>();
     private boolean allowMultipleCodeFlows;
     private boolean failOnMissingStateParam;
     private boolean failOnUnresolvedKid;
     private Optional<Boolean> userInfoRequired;
-    private Duration sessionAgeExtension;
+    private Optional<Duration> sessionAgeExtension;
     private Duration stateCookieAge;
     private boolean javaScriptAutoRedirect;
     private Optional<Boolean> idTokenRequired;
@@ -66,6 +75,8 @@ public final class AuthenticationConfigBuilder {
     private Optional<Boolean> pkceRequired;
     private Optional<String> pkceSecret;
     private Optional<String> stateSecret;
+    private PushedAuthorizationRequest par;
+    private Optional<RichAuthorizationRequests> rar;
 
     public AuthenticationConfigBuilder() {
         this(new OidcTenantConfigBuilder());
@@ -98,6 +109,10 @@ public final class AuthenticationConfigBuilder {
         this.cookiePathHeader = authentication.cookiePathHeader();
         this.cookieDomain = authentication.cookieDomain();
         this.cookieSameSite = authentication.cookieSameSite();
+        this.stateCookieSameSite = authentication.stateCookieSameSite();
+        if (authentication.cacheControl().isPresent()) {
+            this.cacheControl.addAll(authentication.cacheControl().get());
+        }
         this.allowMultipleCodeFlows = authentication.allowMultipleCodeFlows();
         this.failOnMissingStateParam = authentication.failOnMissingStateParam();
         this.failOnUnresolvedKid = authentication.failOnUnresolvedKid();
@@ -110,6 +125,8 @@ public final class AuthenticationConfigBuilder {
         this.pkceRequired = authentication.pkceRequired();
         this.pkceSecret = authentication.pkceSecret();
         this.stateSecret = authentication.stateSecret();
+        this.par = authentication.par();
+        this.rar = authentication.rar();
     }
 
     /**
@@ -239,6 +256,15 @@ public final class AuthenticationConfigBuilder {
         if (scopes != null) {
             this.scopes.addAll(Arrays.asList(scopes));
         }
+        return this;
+    }
+
+    /**
+     * @param cacheControl {@link Authentication#cacheControl()}
+     * @return this builder
+     */
+    public AuthenticationConfigBuilder cacheControl(CacheControl directive) {
+        this.cacheControl.add(directive);
         return this;
     }
 
@@ -373,6 +399,15 @@ public final class AuthenticationConfigBuilder {
     }
 
     /**
+     * @param stateCookieSameSite {@link Authentication#stateCookieSameSite()}
+     * @return this builder
+     */
+    public AuthenticationConfigBuilder stateCookieSameSite(CookieSameSite cookieSameSite) {
+        this.stateCookieSameSite = Objects.requireNonNull(stateCookieSameSite);
+        return this;
+    }
+
+    /**
      * Sets {@link Authentication#allowMultipleCodeFlows()} to true.
      *
      * @return this builder
@@ -449,7 +484,7 @@ public final class AuthenticationConfigBuilder {
      * @return this builder
      */
     public AuthenticationConfigBuilder sessionAgeExtension(Duration sessionAgeExtension) {
-        this.sessionAgeExtension = Objects.requireNonNull(sessionAgeExtension);
+        this.sessionAgeExtension = Optional.of(Objects.requireNonNull(sessionAgeExtension));
         return this;
     }
 
@@ -558,6 +593,64 @@ public final class AuthenticationConfigBuilder {
     }
 
     /**
+     * Enables the pushed authorization request ({@link Authentication#par()}).
+     *
+     * @return this builder
+     */
+    public AuthenticationConfigBuilder par() {
+        return par(null);
+    }
+
+    /**
+     * Enables the pushed authorization request ({@link Authentication#par()}) and configures the endpoint URL.
+     *
+     * @param endpointPath {@link PushedAuthorizationRequest#path()}; Relative path or absolute URL of the PAR endpoint.
+     * @return this builder
+     */
+    public AuthenticationConfigBuilder par(String endpointPath) {
+        record PushedAuthorizationRequestImpl(Optional<Boolean> enabled,
+                Optional<String> path) implements PushedAuthorizationRequest {
+        }
+        this.par = new PushedAuthorizationRequestImpl(Optional.of(true), Optional.ofNullable(endpointPath));
+        return this;
+    }
+
+    /**
+     * Enables the rich authorization requests ({@link Authentication#rar()}) and configures the authorization details
+     * request parameter.
+     *
+     * @param type {@link RichAuthorizationRequests#type()}; must not be null
+     * @param simpleAuthorizationDetails {@link RichAuthorizationRequests#simple()}; must not be null
+     * @return this builder
+     */
+    public AuthenticationConfigBuilder rar(String type, Map<String, String> simpleAuthorizationDetails) {
+        return rar(type, simpleAuthorizationDetails, Map.of());
+    }
+
+    /**
+     * Enables the rich authorization requests ({@link Authentication#rar()}) and configures the authorization details
+     * request parameter.
+     *
+     * @param type {@link RichAuthorizationRequests#type()}; must not be null
+     * @param simpleAuthorizationDetails {@link RichAuthorizationRequests#simple()}; must not be null
+     * @param arrayAuthorizationDetails {@link RichAuthorizationRequests#array()}; must not be null
+     * @return this builder
+     */
+    public AuthenticationConfigBuilder rar(String type, Map<String, String> simpleAuthorizationDetails,
+            Map<String, List<String>> arrayAuthorizationDetails) {
+        Objects.requireNonNull(type);
+        Objects.requireNonNull(simpleAuthorizationDetails);
+        Objects.requireNonNull(arrayAuthorizationDetails);
+        record RichAuthorizationRequestsImpl(Map<String, String> simple, Map<String, List<String>> array, String type)
+                implements
+                    RichAuthorizationRequests {
+        }
+        this.rar = Optional.of(new RichAuthorizationRequestsImpl(Map.copyOf(simpleAuthorizationDetails),
+                Map.copyOf(arrayAuthorizationDetails), type));
+        return this;
+    }
+
+    /**
      * @return OidcTenantConfigBuilder with built {@link Authentication}
      */
     public OidcTenantConfigBuilder end() {
@@ -571,12 +664,16 @@ public final class AuthenticationConfigBuilder {
         Optional<List<String>> optionalScopes = scopes.isEmpty() ? Optional.empty() : Optional.of(List.copyOf(scopes));
         Optional<List<String>> optionalForwardParams = forwardParams.isEmpty() ? Optional.empty()
                 : Optional.of(List.copyOf(forwardParams));
+        Optional<Set<CacheControl>> optionalCacheControl = cacheControl.isEmpty() ? Optional.empty()
+                : Optional.of(Set.copyOf(cacheControl));
         return new AuthenticationImpl(responseMode, redirectPath, restorePathAfterRedirect, removeRedirectParameters, errorPath,
                 sessionExpiredPath, verifyAccessToken, forceRedirectHttpsScheme, optionalScopes, scopeSeparator, nonceRequired,
                 addOpenidScope, Map.copyOf(extraParams), optionalForwardParams, cookieForceSecure, cookieSuffix, cookiePath,
-                cookiePathHeader, cookieDomain, cookieSameSite, allowMultipleCodeFlows, failOnMissingStateParam,
+                cookiePathHeader, cookieDomain, cookieSameSite, stateCookieSameSite, optionalCacheControl,
+                allowMultipleCodeFlows,
+                failOnMissingStateParam,
                 failOnUnresolvedKid,
                 userInfoRequired, sessionAgeExtension, stateCookieAge, javaScriptAutoRedirect, idTokenRequired,
-                internalIdTokenLifespan, pkceRequired, pkceSecret, stateSecret);
+                internalIdTokenLifespan, pkceRequired, pkceSecret, stateSecret, par, rar);
     }
 }

@@ -4,7 +4,7 @@ import java.lang.annotation.Annotation;
 import java.util.Optional;
 import java.util.function.Predicate;
 
-import jakarta.inject.Named;
+import org.eclipse.microprofile.config.ConfigProvider;
 
 import io.quarkus.arc.Arc;
 import io.quarkus.arc.InjectableBean;
@@ -14,11 +14,13 @@ import io.quarkus.mongodb.panache.common.MongoDatabaseResolver;
 import io.quarkus.mongodb.panache.common.MongoEntity;
 import io.quarkus.mongodb.runtime.MongoClientBeanUtil;
 import io.quarkus.mongodb.runtime.MongoClientConfig;
-import io.quarkus.mongodb.runtime.MongoClients;
+import io.quarkus.mongodb.runtime.MongoConfig;
+import io.smallrye.config.SmallRyeConfig;
 
 public final class BeanUtils {
 
     private BeanUtils() {
+        throw new UnsupportedOperationException();
     }
 
     public static String beanName(MongoEntity entity) {
@@ -26,52 +28,30 @@ public final class BeanUtils {
             return entity.clientName();
         }
 
-        return MongoClientBeanUtil.DEFAULT_MONGOCLIENT_NAME;
+        return MongoConfig.DEFAULT_CLIENT_NAME;
     }
 
-    public static <T> T clientFromArc(MongoEntity entity,
-            Class<T> clientClass, boolean isReactive) {
-        T mongoClient = Arc.container()
-                .instance(clientClass, MongoClientBeanUtil.clientLiteral(beanName(entity), isReactive))
-                .get();
-        if (mongoClient != null) {
-            return mongoClient;
-        }
-
-        if ((entity == null || entity.clientName().isEmpty())) {
-            // this case happens when there are multiple instances because they are all annotated with @Named
-            for (InstanceHandle<T> handle : Arc.container().select(clientClass).handles()) {
-                InjectableBean<T> bean = handle.getBean();
-                boolean hasNamed = false;
-                for (Annotation qualifier : bean.getQualifiers()) {
-                    if (qualifier.annotationType().equals(Named.class)) {
-                        hasNamed = true;
-                    }
-                }
-                if (!hasNamed) {
-                    return handle.get();
-                }
-            }
-            throw new IllegalStateException(String.format("Unable to find default %s bean", clientClass.getSimpleName()));
+    @SuppressWarnings("unchecked")
+    @Deprecated(forRemoval = true, since = "3.33")
+    public static <T> T clientFromArc(MongoEntity entity, Class<T> clientClass, boolean isReactive) {
+        String clientName = beanName(entity);
+        if (isReactive) {
+            return (T) MongoClientBeanUtil.reactiveMongoClient(clientName);
         } else {
-            throw new IllegalStateException(
-                    String.format("Unable to find %s bean for entity %s", clientClass.getSimpleName(), entity));
+            return (T) MongoClientBeanUtil.mongoClient(clientName);
         }
     }
 
     public static String getDatabaseName(MongoEntity mongoEntity, String clientBeanName) {
-        MongoClients mongoClients = Arc.container().instance(MongoClients.class).get();
-        MongoClientConfig matchingMongoClientConfig = mongoClients.getMatchingMongoClientConfig(clientBeanName);
-        if (matchingMongoClientConfig.database().isPresent()) {
-            return matchingMongoClientConfig.database().get();
+        SmallRyeConfig config = ConfigProvider.getConfig().unwrap(SmallRyeConfig.class);
+        MongoConfig mongoConfig = config.getConfigMapping(MongoConfig.class);
+        MongoClientConfig mongoClientConfig = mongoConfig.clients().get(clientBeanName);
+        if (mongoClientConfig.database().isPresent()) {
+            return mongoClientConfig.database().get();
         }
-
-        if (!clientBeanName.equals(MongoClientBeanUtil.DEFAULT_MONGOCLIENT_NAME)) {
-            MongoClientConfig defaultMongoClientConfig = mongoClients
-                    .getMatchingMongoClientConfig(MongoClientBeanUtil.DEFAULT_MONGOCLIENT_NAME);
-            if (defaultMongoClientConfig.database().isPresent()) {
-                return defaultMongoClientConfig.database().get();
-            }
+        mongoClientConfig = mongoConfig.clients().get(MongoConfig.DEFAULT_CLIENT_NAME);
+        if (mongoClientConfig.database().isPresent()) {
+            return mongoClientConfig.database().get();
         }
 
         if (mongoEntity == null) {
@@ -93,5 +73,22 @@ public final class BeanUtils {
                 .map(InjectableInstance::get)
                 .map(MongoDatabaseResolver::resolve)
                 .filter(Predicate.not(String::isBlank));
+    }
+
+    private static <T> T firstInstanceWithoutQualifier(Iterable<InstanceHandle<T>> handles,
+            Class<? extends Annotation> qualifier) {
+        for (InstanceHandle<T> handle : handles) {
+            InjectableBean<T> bean = handle.getBean();
+            boolean match = false;
+            for (Annotation q : bean.getQualifiers()) {
+                if (q.annotationType().equals(qualifier)) {
+                    match = true;
+                }
+            }
+            if (!match) {
+                return handle.get();
+            }
+        }
+        return null;
     }
 }

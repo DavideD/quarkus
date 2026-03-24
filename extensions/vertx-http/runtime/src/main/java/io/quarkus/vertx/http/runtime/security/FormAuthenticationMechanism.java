@@ -5,6 +5,8 @@ import static io.quarkus.vertx.http.runtime.security.FormAuthenticationEvent.cre
 import static io.quarkus.vertx.http.runtime.security.RoutingContextAwareSecurityIdentity.addRoutingCtxToIdentityIfMissing;
 
 import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.Arrays;
@@ -15,16 +17,16 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import jakarta.enterprise.event.Event;
-import jakarta.enterprise.inject.spi.BeanManager;
-import jakarta.inject.Inject;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.eclipse.microprofile.config.ConfigProvider;
 import org.jboss.logging.Logger;
 
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpResponseStatus;
+import io.quarkus.arc.Arc;
 import io.quarkus.security.AuthenticationCompletionException;
 import io.quarkus.security.credential.PasswordCredential;
 import io.quarkus.security.identity.IdentityProviderManager;
@@ -34,9 +36,6 @@ import io.quarkus.security.identity.request.TrustedAuthenticationRequest;
 import io.quarkus.security.identity.request.UsernamePasswordAuthenticationRequest;
 import io.quarkus.security.spi.runtime.SecurityEventHelper;
 import io.quarkus.vertx.http.runtime.FormAuthConfig;
-import io.quarkus.vertx.http.runtime.FormAuthRuntimeConfig;
-import io.quarkus.vertx.http.runtime.VertxHttpBuildTimeConfig;
-import io.quarkus.vertx.http.runtime.VertxHttpConfig;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.subscription.UniEmitter;
 import io.vertx.core.Handler;
@@ -65,22 +64,21 @@ public class FormAuthenticationMechanism implements HttpAuthenticationMechanism 
     private final boolean redirectToLoginPage;
     private final CookieSameSite cookieSameSite;
     private final String cookiePath;
+    private final String cookieDomain;
     private final boolean isFormAuthEventObserver;
     private final PersistentLoginManager loginManager;
     private final Event<FormAuthenticationEvent> formAuthEvent;
+    private final Set<String> landingPageQueryParams;
+    private final Set<String> errorPageQueryParams;
+    private final Set<String> loginPageQueryParams;
+    private final int priority;
 
     //the temp encryption key, persistent across dev mode restarts
     static volatile String encryptionKey;
 
-    @Inject
-    FormAuthenticationMechanism(
-            VertxHttpConfig httpConfig,
-            VertxHttpBuildTimeConfig httpBuildTimeConfig,
-            Event<FormAuthenticationEvent> formAuthEvent,
-            BeanManager beanManager,
-            @ConfigProperty(name = "quarkus.security.events.enabled") boolean securityEventsEnabled) {
-        String key;
-        if (httpConfig.encryptionKey().isEmpty()) {
+    public FormAuthenticationMechanism(FormAuthConfig runtimeForm, Optional<String> encKey) {
+        final String key;
+        if (encKey.isEmpty()) {
             if (encryptionKey != null) {
                 //persist across dev mode restarts
                 key = encryptionKey;
@@ -91,35 +89,45 @@ public class FormAuthenticationMechanism implements HttpAuthenticationMechanism 
                 log.warn("Encryption key was not specified for persistent FORM auth, using temporary key " + key);
             }
         } else {
-            key = httpConfig.encryptionKey().get();
+            key = encKey.get();
         }
-        FormAuthConfig form = httpBuildTimeConfig.auth().form();
-        FormAuthRuntimeConfig runtimeForm = httpConfig.auth().form();
         this.loginManager = new PersistentLoginManager(key, runtimeForm.cookieName(), runtimeForm.timeout().toMillis(),
                 runtimeForm.newCookieInterval().toMillis(), runtimeForm.httpOnlyCookie(), runtimeForm.cookieSameSite().name(),
-                runtimeForm.cookiePath().orElse(null), runtimeForm.cookieMaxAge().map(Duration::toSeconds).orElse(-1L));
+                runtimeForm.cookiePath().orElse(null), runtimeForm.cookieMaxAge().map(Duration::toSeconds).orElse(-1L),
+                runtimeForm.cookieDomain().orElse(null));
         this.loginPage = startWithSlash(runtimeForm.loginPage().orElse(null));
         this.errorPage = startWithSlash(runtimeForm.errorPage().orElse(null));
         this.landingPage = startWithSlash(runtimeForm.landingPage().orElse(null));
-        this.postLocation = startWithSlash(form.postLocation());
+        this.postLocation = startWithSlash(runtimeForm.postLocation());
         this.usernameParameter = runtimeForm.usernameParameter();
         this.passwordParameter = runtimeForm.passwordParameter();
         this.locationCookie = runtimeForm.locationCookie();
         this.cookiePath = runtimeForm.cookiePath().orElse(null);
-        boolean redirectAfterLogin = runtimeForm.redirectAfterLogin();
-        this.redirectToLandingPage = landingPage != null && redirectAfterLogin;
+        this.cookieDomain = runtimeForm.cookieDomain().orElse(null);
+        this.redirectToLandingPage = landingPage != null;
         this.redirectToLoginPage = loginPage != null;
         this.redirectToErrorPage = errorPage != null;
         this.cookieSameSite = CookieSameSite.valueOf(runtimeForm.cookieSameSite().name());
-        this.isFormAuthEventObserver = SecurityEventHelper.isEventObserved(createLoginEvent(null), beanManager,
-                securityEventsEnabled);
-        this.formAuthEvent = this.isFormAuthEventObserver ? formAuthEvent : null;
+        this.isFormAuthEventObserver = SecurityEventHelper.isEventObserved(createLoginEvent(null),
+                Arc.container().beanManager(),
+                ConfigProvider.getConfig().getValue("quarkus.security.events.enabled", Boolean.class));
+        this.formAuthEvent = this.isFormAuthEventObserver
+                ? Arc.container().beanManager().getEvent().select(FormAuthenticationEvent.class)
+                : null;
+        this.landingPageQueryParams = runtimeForm.landingPageQueryParams().filter(p -> !p.isEmpty()).orElse(null);
+        this.loginPageQueryParams = runtimeForm.loginPageQueryParams().filter(p -> !p.isEmpty()).orElse(null);
+        this.errorPageQueryParams = runtimeForm.errorPageQueryParams().filter(p -> !p.isEmpty()).orElse(null);
+        this.priority = runtimeForm.priority();
     }
 
+    /**
+     * @deprecated use {@link #FormAuthenticationMechanism(FormAuthConfig, Optional)}
+     */
+    @Deprecated(forRemoval = true, since = "3.25")
     public FormAuthenticationMechanism(String loginPage, String postLocation,
             String usernameParameter, String passwordParameter, String errorPage, String landingPage,
             boolean redirectAfterLogin, String locationCookie, String cookieSameSite, String cookiePath,
-            PersistentLoginManager loginManager) {
+            String cookieDomain, PersistentLoginManager loginManager) {
         this.loginPage = loginPage;
         this.postLocation = postLocation;
         this.usernameParameter = usernameParameter;
@@ -132,9 +140,14 @@ public class FormAuthenticationMechanism implements HttpAuthenticationMechanism 
         this.redirectToErrorPage = errorPage != null;
         this.cookieSameSite = CookieSameSite.valueOf(cookieSameSite);
         this.cookiePath = cookiePath;
+        this.cookieDomain = cookieDomain;
         this.loginManager = loginManager;
         this.isFormAuthEventObserver = false;
         this.formAuthEvent = null;
+        this.landingPageQueryParams = null;
+        this.loginPageQueryParams = null;
+        this.errorPageQueryParams = null;
+        this.priority = HttpAuthenticationMechanism.DEFAULT_PRIORITY;
     }
 
     public Uni<SecurityIdentity> runFormAuth(final RoutingContext exchange,
@@ -219,7 +232,7 @@ public class FormAuthenticationMechanism implements HttpAuthenticationMechanism 
                 throw new IllegalStateException(
                         "Landing page is no set, please make sure 'quarkus.http.auth.form.landing-page' is configured properly.");
             }
-            location = exchange.request().scheme() + "://" + exchange.request().authority() + landingPage;
+            location = assembleRedirectLocation(exchange, landingPage, landingPageQueryParams);
         }
         exchange.response().setStatusCode(302);
         exchange.response().headers().add(HttpHeaderNames.LOCATION, location);
@@ -239,24 +252,66 @@ public class FormAuthenticationMechanism implements HttpAuthenticationMechanism 
     }
 
     protected void storeInitialLocation(final RoutingContext exchange) {
-        exchange.response().addCookie(Cookie.cookie(locationCookie, exchange.request().absoluteURI())
-                .setPath(cookiePath).setSameSite(cookieSameSite).setSecure(exchange.request().isSSL()));
+        Cookie cookie = Cookie.cookie(locationCookie, exchange.request().absoluteURI())
+                .setPath(cookiePath).setSameSite(cookieSameSite).setSecure(exchange.request().isSSL());
+        if (cookieDomain != null) {
+            cookie.setDomain(cookieDomain);
+        }
+        exchange.response().addCookie(cookie);
     }
 
+    /**
+     * @deprecated this method hasn't been used by this class for some time now; if you implement this mechanism
+     *             and have a use case with this method, please let us no so that we can document and test it
+     */
+    @Deprecated(since = "3.31", forRemoval = true)
     protected void servePage(final RoutingContext exchange, final String location) {
         sendRedirect(exchange, location);
     }
 
     static void sendRedirect(final RoutingContext exchange, final String location) {
-        String loc = exchange.request().scheme() + "://" + exchange.request().authority() + location;
+        String loc = assembleRedirectLocation(exchange, location, null);
         exchange.response().headers().add(HttpHeaderNames.LOCATION, loc);
         exchange.response().setStatusCode(302);
         exchange.response().end();
     }
 
-    static Uni<ChallengeData> getRedirect(final RoutingContext exchange, final String location) {
-        String loc = exchange.request().scheme() + "://" + exchange.request().authority() + location;
+    static Uni<ChallengeData> getRedirect(final RoutingContext exchange, final String location,
+            Set<String> redirectQueryParams) {
+        String loc = assembleRedirectLocation(exchange, location, redirectQueryParams);
         return Uni.createFrom().item(new ChallengeData(302, "Location", loc));
+    }
+
+    private static String assembleRedirectLocation(RoutingContext exchange, String path, Set<String> redirectQueryParams) {
+        var location = exchange.request().scheme() + "://" + exchange.request().authority() + path;
+        if (redirectQueryParams != null) {
+            // add certain query params from the active HTTP request to the redirect location
+            String queryString = exchange.queryParams().names().stream()
+                    .filter(redirectQueryParams::contains)
+                    .flatMap(queryName -> exchange.queryParam(queryName).stream()
+                            .map(queryValue -> queryName + "=" + urlEncode(queryValue)))
+                    .collect(Collectors.joining("&"));
+
+            if (!queryString.isEmpty()) {
+                if (path.contains("?")) {
+                    location += "&" + queryString;
+                } else {
+                    location += "?" + queryString;
+                }
+            }
+        }
+        return location;
+    }
+
+    private static String urlEncode(String value) {
+        try {
+            return URLEncoder.encode(value, StandardCharsets.UTF_8)
+                    // force stricter encoding (RFC 3986 uses %20) to have cookie 'quarkus-redirect-location'
+                    // and the header location encoded similarly
+                    .replace("+", "%20");
+        } catch (Exception ex) {
+            throw new RuntimeException(ex);
+        }
     }
 
     @Override
@@ -308,19 +363,19 @@ public class FormAuthenticationMechanism implements HttpAuthenticationMechanism 
             if (redirectToErrorPage) {
                 log.debugf("Serving form auth error page %s for %s", errorPage, context);
                 // This method would no longer be called if authentication had already occurred.
-                return getRedirect(context, errorPage);
+                return getRedirect(context, errorPage, errorPageQueryParams);
             }
         } else {
             if (redirectToLoginPage) {
                 log.debugf("Serving login form %s for %s", loginPage, context);
                 // we need to store the URL
                 storeInitialLocation(context);
-                return getRedirect(context, loginPage);
+                return getRedirect(context, loginPage, loginPageQueryParams);
             }
         }
 
         // redirect is disabled
-        return Uni.createFrom().item(new ChallengeData(HttpResponseStatus.UNAUTHORIZED.code(), null, null));
+        return Uni.createFrom().item(new ChallengeData(HttpResponseStatus.UNAUTHORIZED.code()));
     }
 
     @Override
@@ -331,6 +386,15 @@ public class FormAuthenticationMechanism implements HttpAuthenticationMechanism 
     @Override
     public Uni<HttpCredentialTransport> getCredentialTransport(RoutingContext context) {
         return Uni.createFrom().item(new HttpCredentialTransport(HttpCredentialTransport.Type.POST, postLocation, FORM));
+    }
+
+    @Override
+    public int getPriority() {
+        return priority;
+    }
+
+    String getPostLocation() {
+        return postLocation;
     }
 
     public static void logout(SecurityIdentity securityIdentity) {

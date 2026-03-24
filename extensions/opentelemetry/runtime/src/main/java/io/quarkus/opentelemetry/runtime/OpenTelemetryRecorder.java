@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.regex.Pattern;
 
 import jakarta.enterprise.inject.Instance;
 import jakarta.enterprise.util.TypeLiteral;
@@ -20,7 +21,6 @@ import org.eclipse.microprofile.config.spi.Converter;
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.Attributes;
-import io.opentelemetry.api.incubator.events.GlobalEventLoggerProvider;
 import io.opentelemetry.context.ContextStorage;
 import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk;
 import io.opentelemetry.sdk.resources.Resource;
@@ -37,13 +37,12 @@ import io.vertx.core.Vertx;
 
 @Recorder
 public class OpenTelemetryRecorder {
-
     public static final String OPEN_TELEMETRY_DRIVER = "io.opentelemetry.instrumentation.jdbc.OpenTelemetryDriver";
 
-    @StaticInit
-    public void resetGlobalOpenTelemetryForDevMode() {
-        GlobalOpenTelemetry.resetForTest();
-        GlobalEventLoggerProvider.resetForTest();
+    private final RuntimeValue<OTelRuntimeConfig> runtimeConfig;
+
+    public OpenTelemetryRecorder(final RuntimeValue<OTelRuntimeConfig> runtimeConfig) {
+        this.runtimeConfig = runtimeConfig;
     }
 
     @StaticInit
@@ -68,8 +67,13 @@ public class OpenTelemetryRecorder {
     }
 
     @RuntimeInit
-    public RuntimeValue<Boolean> isOtelSdkEnabled(OTelRuntimeConfig oTelRuntimeConfig) {
-        return new RuntimeValue<>(!oTelRuntimeConfig.sdkDisabled());
+    public void resetGlobalOpenTelemetryForDevMode() {
+        GlobalOpenTelemetry.resetForTest();
+    }
+
+    @RuntimeInit
+    public RuntimeValue<Boolean> isOtelSdkEnabled() {
+        return new RuntimeValue<>(!runtimeConfig.getValue().sdkDisabled());
     }
 
     @RuntimeInit
@@ -83,8 +87,7 @@ public class OpenTelemetryRecorder {
     }
 
     @RuntimeInit
-    public Function<SyntheticCreationalContext<OpenTelemetry>, OpenTelemetry> opentelemetryBean(
-            OTelRuntimeConfig oTelRuntimeConfig) {
+    public Function<SyntheticCreationalContext<OpenTelemetry>, OpenTelemetry> opentelemetryBean() {
         return new Function<>() {
             @Override
             public OpenTelemetry apply(SyntheticCreationalContext<OpenTelemetry> context) {
@@ -94,7 +97,7 @@ public class OpenTelemetryRecorder {
 
                 final Map<String, String> oTelConfigs = getOtelConfigs();
                 OtelConfigsSupplier propertiesSupplier = new OtelConfigsSupplier(oTelConfigs);
-                if (oTelRuntimeConfig.sdkDisabled()) {
+                if (runtimeConfig.getValue().sdkDisabled()) {
                     return AutoConfiguredOpenTelemetrySdk.builder()
                             .setResultAsGlobal()
                             .disableShutdownHook()
@@ -121,6 +124,9 @@ public class OpenTelemetryRecorder {
 
                 // instruct OTel that we are using the AutoConfiguredOpenTelemetrySdk
                 oTelConfigs.put("otel.java.global-autoconfigure.enabled", "true");
+                // Emit stable semantic conventions when available. It turns out this doesn't take effect because
+                // OTel instrumentation code does not use the OTel SDK configs.
+                oTelConfigs.put("otel.semconv-stability.opt-in", "true");
 
                 Map<String, String> otel = new HashMap<>();
                 Map<String, String> quarkus = new HashMap<>();
@@ -146,7 +152,7 @@ public class OpenTelemetryRecorder {
                     }
                 }
 
-                if (oTelRuntimeConfig.mpCompatibility()) {
+                if (runtimeConfig.getValue().mpCompatibility()) {
                     oTelConfigs.putAll(quarkus);
                     oTelConfigs.putAll(otel);
                 } else {
@@ -166,14 +172,16 @@ public class OpenTelemetryRecorder {
     private static class OTelDurationConverter implements Converter<String> {
         static OTelDurationConverter INSTANCE = new OTelDurationConverter();
 
+        private static final Pattern DIGITS = Pattern.compile("^[-+]?\\d+$");
+
         @Override
         public String convert(final String value) throws IllegalArgumentException, NullPointerException {
             if (value == null) {
                 throw new NullPointerException();
             }
 
-            if (DurationConverter.DIGITS.asPredicate().test(value)) {
-                // OTel regards values without a unit to me milliseconds instead of seconds
+            if (DIGITS.asPredicate().test(value)) {
+                // OTel regards values without a unit to be milliseconds instead of seconds
                 // that java.time.Duration assumes, so let's just not do any conversion and let OTel handle with it
                 return value;
             }

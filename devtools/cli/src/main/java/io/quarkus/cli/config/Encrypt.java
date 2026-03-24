@@ -21,13 +21,13 @@ import picocli.CommandLine.Parameters;
 
 @Command(name = "encrypt", aliases = "enc", header = "Encrypt Secrets", description = "Encrypt a Secret value using the AES/GCM/NoPadding algorithm as a default. The encryption key is generated unless a specific key is set with the --key option.")
 public class Encrypt extends BaseConfigCommand implements Callable<Integer> {
-    @Parameters(index = "0", paramLabel = "SECRET", description = "The Secret value to encrypt")
+    @Parameters(index = "0", paramLabel = "SECRET", description = "The secret value to encrypt")
     String secret;
 
-    @Option(names = { "-k", "--key" }, description = "The Encryption Key")
+    @Option(names = { "-k", "--key" }, description = "The encryption Key")
     String encryptionKey;
 
-    @Option(names = { "-f", "--format" }, description = "The Encryption Key Format (base64 / plain)", defaultValue = "base64")
+    @Option(names = { "-f", "--format" }, description = "The encryption key format (base64 / plain)", defaultValue = "base64")
     KeyFormat encryptionKeyFormat;
 
     @Option(hidden = true, names = { "-a", "--algorithm" }, description = "Algorithm", defaultValue = "AES")
@@ -51,6 +51,10 @@ public class Encrypt extends BaseConfigCommand implements Callable<Integer> {
             encryptionKey = encodeToString(generateEncryptionKey().getEncoded());
             generatedKey = true;
         } else {
+            if (encryptionKey.startsWith("\\\"") && encryptionKey.endsWith("\"\\")) {
+                encryptionKey = encryptionKey.substring(2, encryptionKey.length() - 2);
+            }
+
             if (encryptionKeyFormat.equals(KeyFormat.base64)) {
                 encryptionKey = encodeToString(encryptionKey.getBytes());
             }

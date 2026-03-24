@@ -1,15 +1,8 @@
 package io.quarkus.runtime.configuration;
 
-import java.util.ArrayList;
 import java.util.Collection;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
-import java.util.SortedSet;
-import java.util.TreeSet;
-import java.util.UUID;
-import java.util.function.IntFunction;
 
 import org.eclipse.microprofile.config.Config;
 import org.eclipse.microprofile.config.ConfigProvider;
@@ -21,61 +14,74 @@ import io.smallrye.config.SmallRyeConfig;
 import io.smallrye.config.SmallRyeConfigBuilder;
 
 /**
- *
+ * Utilities for Configuration.
  */
 public final class ConfigUtils {
-
-    /**
-     * The name of the property associated with a random UUID generated at launch time.
-     */
-    static final String UUID_KEY = "quarkus.uuid";
-
     private ConfigUtils() {
-    }
-
-    public static <T> IntFunction<List<T>> listFactory() {
-        return ArrayList::new;
-    }
-
-    public static <T> IntFunction<Set<T>> setFactory() {
-        return LinkedHashSet::new;
-    }
-
-    public static <T> IntFunction<SortedSet<T>> sortedSetFactory() {
-        return size -> new TreeSet<>();
-    }
-
-    public static SmallRyeConfigBuilder configBuilder(final boolean runTime, final LaunchMode launchMode) {
-        return configBuilder(runTime, true, launchMode);
+        throw new UnsupportedOperationException();
     }
 
     /**
-     * Get the basic configuration builder.
+     * Returns a {@link SmallRyeConfigBuilder} with the expected default configuration to build a
+     * {@link io.smallrye.config.Config} instance for the current {@link LaunchMode}.
+     * <p>
+     * See {@link ConfigUtils#configBuilder(LaunchMode)} for the builder defaults.
      *
-     * @param runTime {@code true} if the configuration is run time, {@code false} if build time
-     * @param addDiscovered {@code true} if the ConfigSource and Converter objects should be auto-discovered
-     * @return the configuration builder
+     * @return a {@link SmallRyeConfigBuilder}
+     * @see ConfigUtils#configBuilder() (LaunchMode)
+     * @see ConfigUtils#emptyConfigBuilder(LaunchMode)
      */
-    public static SmallRyeConfigBuilder configBuilder(final boolean runTime, final boolean addDiscovered,
-            final LaunchMode launchMode) {
-        SmallRyeConfigBuilder builder = emptyConfigBuilder();
-
-        if (launchMode.isDevOrTest() && runTime) {
-            builder.withSources(new RuntimeOverrideConfigSource(builder.getClassLoader()));
-        }
-        if (runTime) {
-            builder.withDefaultValue(UUID_KEY, UUID.randomUUID().toString());
-        }
-        if (addDiscovered) {
-            builder.addDiscoveredCustomizers().addDiscoveredSources();
-        }
-        return builder;
+    public static SmallRyeConfigBuilder configBuilder() {
+        return configBuilder(LaunchMode.current());
     }
 
+    /**
+     * Returns a {@link SmallRyeConfigBuilder} with the expected default configuration to build a
+     * {@link io.smallrye.config.Config} instance for the specified {@link LaunchMode}.
+     * <p>
+     * By default, this builder discovers {@link io.smallrye.config.SmallRyeConfigBuilderCustomizer} and
+     * {@link org.eclipse.microprofile.config.spi.ConfigSource} registered with the ServiceLoader mechanism.
+     * <p>
+     * See {@link ConfigUtils#emptyConfigBuilder(LaunchMode)} for additional builder defaults.
+     *
+     * @param mode the {@link LaunchMode}
+     * @return a {@link SmallRyeConfigBuilder}
+     * @see ConfigUtils#emptyConfigBuilder(LaunchMode)
+     */
+    public static SmallRyeConfigBuilder configBuilder(LaunchMode mode) {
+        return emptyConfigBuilder(mode).addDiscoveredCustomizers().addDiscoveredSources();
+    }
+
+    /**
+     * Returns a {@link SmallRyeConfigBuilder} with the expected default configuration to build a
+     * {@link io.smallrye.config.Config} instance for the current {@link LaunchMode}.
+     * <p>
+     * See {@link ConfigUtils#emptyConfigBuilder(LaunchMode)} for the builder defaults.
+     *
+     * @return a {@link SmallRyeConfigBuilder}
+     * @see ConfigUtils#emptyConfigBuilder(LaunchMode)
+     */
     public static SmallRyeConfigBuilder emptyConfigBuilder() {
+        return emptyConfigBuilder(LaunchMode.current());
+    }
+
+    /**
+     * Returns a {@link SmallRyeConfigBuilder} with the expected default configuration to build a
+     * {@link io.smallrye.config.Config} instance for the specified {@link LaunchMode}.
+     * <p>
+     * By default, this builder discovers {@link org.eclipse.microprofile.config.spi.Converter},
+     * {@link io.smallrye.config.ConfigSourceInterceptor} and {@link io.smallrye.config.SecretKeysHandler} registered
+     * with the ServiceLoader mechanism. It also adds the defaults {@link io.smallrye.config.ConfigSourceInterceptor}
+     * and {@link org.eclipse.microprofile.config.spi.ConfigSource}, namely, interceptors for profiles and expressions,
+     * and sources for {@code application.properties}, System Properties and Environment Variables.
+     *
+     * @param mode the {@link LaunchMode}
+     * @return a {@link SmallRyeConfigBuilder}
+     */
+    public static SmallRyeConfigBuilder emptyConfigBuilder(LaunchMode mode) {
         return new SmallRyeConfigBuilder()
                 .forClassLoader(Thread.currentThread().getContextClassLoader())
-                .withCustomizers(new QuarkusConfigBuilderCustomizer())
+                .withCustomizers(new QuarkusConfigBuilderCustomizer(mode))
                 .addDiscoveredConverters()
                 .addDefaultInterceptors()
                 .addDiscoveredInterceptors()
@@ -83,10 +89,26 @@ public final class ConfigUtils {
                 .addDefaultSources();
     }
 
+    /**
+     * Returns a {@code List} of the active profiles in Quarkus.
+     * <p>
+     * Profiles are sorted in reverse order according to how they were set in
+     * {@code quarkus.profile}, as the last profile overrides the previous one until there are
+     * no profiles left in the list.
+     *
+     * @return a {@code List} of the active profiles
+     * @see io.smallrye.config.SmallRyeConfig#getProfiles()
+     */
     public static List<String> getProfiles() {
         return ConfigProvider.getConfig().unwrap(SmallRyeConfig.class).getProfiles();
     }
 
+    /**
+     * Check if a configuration profile is active in Quarkus.
+     *
+     * @param profile the configuration profile to check
+     * @return true if the profile is active or false otherwise.
+     */
     public static boolean isProfileActive(final String profile) {
         return getProfiles().contains(profile);
     }
@@ -150,7 +172,7 @@ public final class ConfigUtils {
      * @param <T> The property type
      * @param propertyNames The configuration property names
      * @param propertyType The type that the resolved property value should be converted to
-     * @return true if the property is present or false otherwise.
+     * @return the first resolved property value as a {@code Optional} instance of the property type
      */
     public static <T> Optional<T> getFirstOptionalValue(List<String> propertyNames, Class<T> propertyType) {
         Config config = ConfigProvider.getConfig();

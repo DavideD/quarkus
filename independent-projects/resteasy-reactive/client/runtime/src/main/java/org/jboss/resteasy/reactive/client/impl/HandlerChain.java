@@ -3,6 +3,7 @@ package org.jboss.resteasy.reactive.client.impl;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import jakarta.ws.rs.client.ClientRequestFilter;
 import jakarta.ws.rs.client.ClientResponseFilter;
@@ -22,6 +23,9 @@ import org.jboss.resteasy.reactive.client.spi.ClientRestHandler;
 import org.jboss.resteasy.reactive.client.spi.MultipartResponseData;
 import org.jboss.resteasy.reactive.common.jaxrs.ConfigurationImpl;
 
+import io.vertx.core.http.HttpClientOptions;
+import io.vertx.core.http.HttpClientRequest;
+
 @SuppressWarnings("ForLoopReplaceableByForEach")
 class HandlerChain {
 
@@ -36,14 +40,18 @@ class HandlerChain {
 
     private ClientRestHandler preClientSendHandler = null;
 
-    public HandlerChain(boolean captureStacktrace, int maxChunkSize, int inputStreamChunkSize, boolean followRedirects,
+    public HandlerChain(HttpClientOptions httpClientOptions, boolean captureStacktrace,
+            boolean followRedirects,
             LoggingScope loggingScope,
-            Map<Class<?>, MultipartResponseData> multipartData, ClientLogger clientLogger) {
+            Map<Class<?>, MultipartResponseData> multipartData,
+            ClientLogger clientLogger,
+            List<Consumer<HttpClientRequest>> clientRequestCustomizers) {
         this.clientCaptureCurrentContextRestHandler = new ClientCaptureCurrentContextRestHandler(captureStacktrace);
         this.clientSwitchToRequestContextRestHandler = new ClientSwitchToRequestContextRestHandler();
-        this.clientSendHandler = new ClientSendRequestHandler(maxChunkSize, inputStreamChunkSize, followRedirects, loggingScope,
+        this.clientSendHandler = new ClientSendRequestHandler(httpClientOptions, followRedirects, loggingScope,
                 clientLogger,
-                multipartData);
+                multipartData,
+                clientRequestCustomizers);
         this.clientSetResponseEntityRestHandler = new ClientSetResponseEntityRestHandler();
         this.clientResponseCompleteRestHandler = new ClientResponseCompleteRestHandler();
         this.clientErrorHandler = new ClientErrorHandler(loggingScope);
@@ -96,7 +104,8 @@ class HandlerChain {
         result.add(clientSetResponseEntityRestHandler);
         result.add(new PreResponseFilterHandler());
         for (int i = 0; i < responseFilters.size(); i++) {
-            result.add(new ClientResponseFilterRestHandler(responseFilters.get(i)));
+            ClientResponseFilter filter = responseFilters.get(i);
+            result.add(new ClientResponseFilterRestHandler(filter, filter instanceof PreservesThreadClientResponseFilter));
         }
         result.add(clientResponseCompleteRestHandler);
         return result.toArray(EMPTY_REST_HANDLERS);
@@ -109,7 +118,7 @@ class HandlerChain {
         }
         List<ClientRestHandler> result = new ArrayList<>(1 + responseFilters.size());
         for (int i = 0; i < responseFilters.size(); i++) {
-            result.add(new ClientResponseFilterRestHandler(responseFilters.get(i)));
+            result.add(new ClientResponseFilterRestHandler(responseFilters.get(i), true));
         }
         result.add(clientErrorHandler);
         return result.toArray(EMPTY_REST_HANDLERS);

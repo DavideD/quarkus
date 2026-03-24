@@ -21,7 +21,7 @@ import org.testcontainers.utility.DockerImageName;
 
 import io.quarkus.builder.BuildException;
 import io.quarkus.deployment.Feature;
-import io.quarkus.deployment.IsNormal;
+import io.quarkus.deployment.IsDevServicesSupportedByLaunchMode;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.BuildSteps;
 import io.quarkus.deployment.builditem.CuratedApplicationShutdownBuildItem;
@@ -48,7 +48,7 @@ import io.quarkus.runtime.configuration.ConfigUtils;
 /**
  * Starts an Elasticsearch server as dev service if needed.
  */
-@BuildSteps(onlyIfNot = IsNormal.class, onlyIf = DevServicesConfig.Enabled.class)
+@BuildSteps(onlyIf = { IsDevServicesSupportedByLaunchMode.class, DevServicesConfig.Enabled.class })
 public class DevServicesElasticsearchProcessor {
     private static final Logger log = Logger.getLogger(DevServicesElasticsearchProcessor.class);
 
@@ -355,7 +355,7 @@ public class DevServicesElasticsearchProcessor {
             for (DevservicesElasticsearchBuildItem buildItem : buildItems) {
                 if (version == null) {
                     version = buildItem.getVersion();
-                } else if (!version.equals(buildItem.getVersion())) {
+                } else if (buildItem.getVersion() != null && !version.equals(buildItem.getVersion())) {
                     // safety guard but should never occur as only Hibernate Search ORM Elasticsearch configure the version
                     throw new BuildException(
                             "Multiple extensions request different versions of Elasticsearch for Dev Services.",
@@ -364,7 +364,7 @@ public class DevServicesElasticsearchProcessor {
 
                 if (distribution == null) {
                     distribution = buildItem.getDistribution();
-                } else if (!distribution.equals(buildItem.getDistribution())) {
+                } else if (buildItem.getDistribution() != null && !distribution.equals(buildItem.getDistribution())) {
                     // safety guard but should never occur as only Hibernate Search ORM Elasticsearch configure the distribution
                     throw new BuildException(
                             "Multiple extensions request different distributions of Elasticsearch for Dev Services.",

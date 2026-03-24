@@ -28,9 +28,24 @@
             <artifactId>quarkus-tls-registry</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-proxy-registry</artifactId>
+        </dependency>
+        <dependency>
             <groupId>io.smallrye.reactive</groupId>
             <artifactId>smallrye-mutiny-vertx-redis-client</artifactId>
         </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-devservices</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.graalvm.sdk</groupId>
+            <artifactId>nativeimage</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- Add the health extension as optional as we will produce the health check only if it's included -->
         <dependency>
             <groupId>io.quarkus</groupId>
@@ -50,11 +65,6 @@
         <dependency>
             <groupId>org.awaitility</groupId>
             <artifactId>awaitility</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-junit4-mock</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -163,6 +173,14 @@
             <id>redis-7.0</id>
             <properties>
                 <redis.base.image>redis/redis-stack:7.0.6-RC9</redis.base.image>
+            </properties>
+        </profile>
+
+        <!-- note that a small number of tests fail with Redis 8, so we don't use it by default yet -->
+        <profile>
+            <id>redis-8.4</id>
+            <properties>
+                <redis.base.image>redis:8</redis.base.image>
             </properties>
         </profile>
     </profiles>

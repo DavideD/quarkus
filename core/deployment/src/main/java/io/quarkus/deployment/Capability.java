@@ -41,6 +41,7 @@ public interface Capability {
 
     String JAXB = QUARKUS_PREFIX + ".jaxb";
     String JAXP = QUARKUS_PREFIX + ".jaxp";
+    String JFR = QUARKUS_PREFIX + ".jfr";
 
     String KOTLIN = QUARKUS_PREFIX + ".kotlin";
 
@@ -101,7 +102,7 @@ public interface Capability {
     String KUBERNETES_CLIENT = QUARKUS_PREFIX + ".kubernetes.client";
 
     /**
-     * @deprecated Use more precise capability {@link Capability#SMALLRYE_METRICS}
+     * @deprecated Use more precise capability
      * @see io.quarkus.deployment.metrics.MetricsCapabilityBuildItem
      */
     @Deprecated
@@ -116,18 +117,20 @@ public interface Capability {
     String HIBERNATE_REACTIVE = QUARKUS_PREFIX + ".hibernate.reactive";
     String HIBERNATE_VALIDATOR = QUARKUS_PREFIX + ".hibernate.validator";
     String OPENTELEMETRY_TRACER = QUARKUS_PREFIX + ".opentelemetry.tracer";
+    String OPENTELEMETRY_METRICS = QUARKUS_PREFIX + ".opentelemetry.metrics";
+    String OPENTELEMETRY_LOGS = QUARKUS_PREFIX + ".opentelemetry.logs";
 
     String OPENSHIFT = QUARKUS_PREFIX + ".openshift";
     String OPENSHIFT_CLIENT = OPENSHIFT + ".client";
 
     String OIDC = QUARKUS_PREFIX + ".oidc";
     String OIDC_CLIENT = OIDC + ".client";
+    String OIDC_CLIENT_REGISTRATION = QUARKUS_PREFIX + ".oidc-client-registration";
 
     String KEYCLOAK_AUTHORIZATION = QUARKUS_PREFIX + ".keycloak.authorization";
 
     String SCHEDULER = QUARKUS_PREFIX + ".scheduler";
 
-    String SMALLRYE_METRICS = QUARKUS_PREFIX + ".smallrye.metrics";
     String SMALLRYE_HEALTH = QUARKUS_PREFIX + ".smallrye.health";
     String SMALLRYE_OPENAPI = QUARKUS_PREFIX + ".smallrye.openapi";
     String SMALLRYE_GRAPHQL = QUARKUS_PREFIX + ".smallrye.graphql";

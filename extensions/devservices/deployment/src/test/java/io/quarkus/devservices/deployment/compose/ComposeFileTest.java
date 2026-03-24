@@ -19,7 +19,6 @@ public class ComposeFileTest {
         assertTrue(isComposeFile(Path.of("/dev", "some", "dir", "docker-compose-devservice-my-service.yml")));
         assertTrue(isComposeFile(Path.of("/dev", "some", "dir", "docker-compose-devservices-my-service.yaml")));
         assertTrue(isComposeFile(Path.of("/dev", "some", "dir", "compose-devservices.yml")));
-        assertTrue(isComposeFile(Path.of("/dev", "some", "dir", "compose-devservices.yaml")));
         assertTrue(isComposeFile(Path.of("/dev", "some", "dir", "compose-dev-service.yaml")));
         assertTrue(isComposeFile(Path.of("/dev", "some", "dir", "compose-dev-services.yaml")));
         assertTrue(isComposeFile(Path.of("/dev", "some", "dir", "compose-devservices.yaml")));
@@ -42,7 +41,7 @@ public class ComposeFileTest {
         assertNotNull(db);
         assertEquals("db", db.getServiceName());
         assertEquals("database system is ready to accept connections",
-                db.getLabels().get("io.quarkus.devservices.compose.wait_for.logs"));
+                db.getLabels().get("io.quarkus.devservices.compose.wait_for.logs.2"));
         assertFalse(db.hasHealthCheck());
 
         // Test Redis service
@@ -69,6 +68,14 @@ public class ComposeFileTest {
     }
 
     @Test
+    void testEmptyComposeFile() {
+        File emptyCompose = new File(getClass().getResource("/empty-compose.yml").getFile());
+        ComposeFile composeFile = new ComposeFile(emptyCompose);
+        assertNull(composeFile.getProjectName());
+        assertTrue(composeFile.getServiceDefinitions().isEmpty());
+    }
+
+    @Test
     void testServiceDefinitionExtraction() {
         File validCompose = new File(getClass().getResource("/valid-compose.yml").getFile());
         ComposeFile composeFile = new ComposeFile(validCompose);
@@ -83,7 +90,7 @@ public class ComposeFileTest {
         // Test labels
         Map<String, Object> labels = db.getLabels();
         assertEquals("database system is ready to accept connections",
-                labels.get("io.quarkus.devservices.compose.wait_for.logs"));
+                labels.get("io.quarkus.devservices.compose.wait_for.logs.2"));
 
         // Test container name (should be null for valid compose)
         assertNull(db.getContainerName());
@@ -120,4 +127,33 @@ public class ComposeFileTest {
         ComposeServiceDefinition service1 = composeFile.getServiceDefinitions().get("service1");
         assertFalse(service1.hasHealthCheck());
     }
+
+    @Test
+    void testLongPortFormat() {
+        File composeWithLongPortFormat = new File(
+                getClass().getResource("/compose-with-long-port-format.yml").getFile());
+        ComposeFile composeFile = new ComposeFile(composeWithLongPortFormat);
+
+        // Test postgres service with basic long port format
+        ComposeServiceDefinition postgres = composeFile.getServiceDefinitions().get("postgres");
+        assertNotNull(postgres);
+        assertEquals(2, postgres.getPorts().size());
+        assertTrue(postgres.getPorts().stream().anyMatch(p -> p.getPort() == 5432));
+        assertTrue(postgres.getPorts().stream().anyMatch(p -> p.getPort() == 5433));
+
+        // Test mixed service with both short and long port formats
+        ComposeServiceDefinition redis = composeFile.getServiceDefinitions().get("redis");
+        assertNotNull(redis);
+        assertEquals(2, redis.getPorts().size());
+        assertTrue(redis.getPorts().stream().anyMatch(p -> p.getPort() == 6379));
+        assertTrue(redis.getPorts().stream().anyMatch(p -> p.getPort() == 6380));
+
+        // Test web service with extended long port format (host_ip, name, app_protocol, mode, port ranges)
+        ComposeServiceDefinition web = composeFile.getServiceDefinitions().get("web");
+        assertNotNull(web);
+        assertEquals(2, web.getPorts().size());
+        assertTrue(web.getPorts().stream().anyMatch(p -> p.getPort() == 80));
+        assertTrue(web.getPorts().stream().anyMatch(p -> p.getPort() == 443));
+    }
+
 }

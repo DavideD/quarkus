@@ -35,8 +35,6 @@ public interface DataSourceJdbcBuildTimeConfig {
      * Enable datasource metrics collection. If unspecified, collecting metrics will be enabled by default if
      * a metrics extension is active.
      * <p>
-     * Deprecated. This was used by the now deprecated quarkus-smallrye-metrics and will be removed soon.
-     * <p>
      * Please use quarkus-micrometer and the quarkus.datasource.metrics.enabled property
      */
     @Deprecated(forRemoval = true)
@@ -47,4 +45,16 @@ public interface DataSourceJdbcBuildTimeConfig {
      */
     @WithDefault("false")
     boolean telemetry();
+
+    DataSourceJdbcMetrics metrics();
+
+    @ConfigGroup
+    interface DataSourceJdbcMetrics {
+
+        /**
+         * Enable metrics collection for this datasource.
+         */
+        Optional<Boolean> enabled();
+
+    }
 }

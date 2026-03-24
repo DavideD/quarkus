@@ -1,5 +1,6 @@
 package io.quarkus.redis.runtime.datasource;
 
+import java.time.Duration;
 import java.util.Collection;
 import java.util.Map;
 
@@ -109,6 +110,15 @@ public class Validation {
         }
     }
 
+    public static void validateTimeout(Duration value, String name) {
+        if (value == null) {
+            throw new IllegalArgumentException(String.format("`%s` must not be `null`", name));
+        }
+        if (value.isNegative()) {
+            throw new IllegalArgumentException(String.format("`%s` must be greater than or equal to zero", name));
+        }
+    }
+
     public static void positive(double amount, String name) {
         if (amount <= 0) {
             throw new IllegalArgumentException(String.format("`%s` must be greater than zero`", name));
@@ -117,13 +127,13 @@ public class Validation {
 
     public static void positiveOrZero(double amount, String name) {
         if (amount < 0) {
-            throw new IllegalArgumentException(String.format("`%s` must be greater or equal to zero`", name));
+            throw new IllegalArgumentException(String.format("`%s` must be greater or equal to zero", name));
         }
     }
 
     public static void isBit(int b, String name) {
         if (b != 0 && b != 1) {
-            throw new IllegalArgumentException(String.format("%s` must be either `0` or `1`", name));
+            throw new IllegalArgumentException(String.format("`%s` must be either `0` or `1`", name));
         }
     }
 

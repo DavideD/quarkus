@@ -19,7 +19,7 @@ import io.quarkus.arc.impl.EventMetadataImpl;
  *
  * @param <T>
  */
-public interface InjectableObserverMethod<T> extends ObserverMethod<T> {
+public interface InjectableObserverMethod<T> extends ObserverMethod<T>, Comparable<InjectableObserverMethod<?>> {
 
     @Override
     default Set<Annotation> getObservedQualifiers() {
@@ -38,7 +38,11 @@ public interface InjectableObserverMethod<T> extends ObserverMethod<T> {
 
     @Override
     default Bean<?> getDeclaringBean() {
-        return getDeclaringBeanIdentifier() != null ? Arc.container().bean(getDeclaringBeanIdentifier()) : null;
+        String id = getDeclaringBeanIdentifier();
+        if (id != null) {
+            return Arc.requireContainer().bean(id);
+        }
+        return null;
     }
 
     default void notify(T event) {
@@ -53,8 +57,9 @@ public interface InjectableObserverMethod<T> extends ObserverMethod<T> {
      */
     String getDeclaringBeanIdentifier();
 
-    static int compare(InjectableObserverMethod<?> o1, InjectableObserverMethod<?> o2) {
-        return Integer.compare(o1.getPriority(), o2.getPriority());
+    @Override
+    default int compareTo(InjectableObserverMethod<?> other) {
+        return Integer.compare(this.getPriority(), other.getPriority());
     }
 
 }

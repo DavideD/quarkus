@@ -16,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import io.quarkus.runtime.LaunchMode;
+import io.quarkus.runtime.RuntimeValue;
 import io.quarkus.runtime.ThreadPoolConfig;
 import io.quarkus.runtime.configuration.DurationConverter;
 import io.quarkus.vertx.core.runtime.VertxCoreRecorder.VertxOptionsCustomizer;
@@ -37,7 +38,7 @@ public class VertxCoreProducerTest {
 
     @BeforeEach
     public void setUp() throws Exception {
-        recorder = new VertxCoreRecorder();
+        recorder = new VertxCoreRecorder(new RuntimeValue<>(), new RuntimeValue<>(), new RuntimeValue<>());
     }
 
     @AfterEach
@@ -103,7 +104,8 @@ public class VertxCoreProducerTest {
 
         try {
 
-            VertxCoreRecorder.initialize(configuration, null, new DefaultThreadPoolConfig(), null, LaunchMode.TEST);
+            VertxCoreRecorder.initialize(configuration, null, new DefaultThreadPoolConfig(), null, LaunchMode.TEST, List.of(),
+                    List.of());
             Assertions.fail("It should not have a cluster manager on the classpath, and so fail the creation");
         } catch (IllegalStateException e) {
             Assertions.assertTrue(e.getMessage().contains("No ClusterManagerFactory"),
@@ -205,7 +207,8 @@ public class VertxCoreProducerTest {
                     }
                 }));
 
-        VertxCoreRecorder.initialize(configuration, customizers, new DefaultThreadPoolConfig(), null, LaunchMode.TEST);
+        VertxCoreRecorder.initialize(configuration, customizers, new DefaultThreadPoolConfig(), null, LaunchMode.TEST,
+                List.of(), List.of());
     }
 
     @Test
@@ -219,8 +222,7 @@ public class VertxCoreProducerTest {
                     }
                 }));
         Vertx v = VertxCoreRecorder.initialize(new DefaultVertxConfiguration(), customizers, new DefaultThreadPoolConfig(),
-                null,
-                LaunchMode.TEST);
+                null, LaunchMode.TEST, List.of(), List.of());
         Assertions.assertTrue(called.get(), "Customizer should get called during initialization");
     }
 
@@ -235,8 +237,7 @@ public class VertxCoreProducerTest {
                         Assertions.assertEquals(cacheDir, vertxOptions.getFileSystemOptions().getFileCacheDir());
                     }));
             VertxCoreRecorder.initialize(new DefaultVertxConfiguration(), customizers, new DefaultThreadPoolConfig(),
-                    null,
-                    LaunchMode.TEST);
+                    null, LaunchMode.TEST, List.of(), List.of());
         } finally {
             System.clearProperty(CACHE_DIR_BASE_PROP_NAME);
         }

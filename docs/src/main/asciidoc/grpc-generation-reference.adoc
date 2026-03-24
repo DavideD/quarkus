@@ -29,26 +29,8 @@ To enable gRPC code generation, add the following dependency to your project:
 </dependency>
 ----
 
-Next, ensure that the `generate-code` phase is enabled in the Quarkus Maven plugin:
-
-[source,xml,subs=attributes+]
-----
-<plugin>
-    <groupId>${quarkus.platform.group-id}</groupId>
-    <artifactId>quarkus-maven-plugin</artifactId>
-    <version>${quarkus.platform.version}</version>
-    <extensions>true</extensions>
-    <executions>
-        <execution>
-            <goals>
-                <goal>build</goal>
-                <goal>generate-code</goal>
-                <goal>generate-code-tests</goal>
-            </goals>
-        </execution>
-    </executions>
-</plugin>
-----
+The `quarkus:generate-code` goal is executed by default during the Quarkus Maven plugin default lifecycle when using the `quarkus` packaging,
+and will handle the code generation.
 
 === Using Gradle
 
@@ -75,11 +57,6 @@ With Maven, add the following configuration:
     <extensions>true</extensions>
     <executions>
         <execution>
-            <goals>
-                <goal>build</goal>
-                <goal>generate-code</goal>
-                <goal>generate-code-tests</goal>
-            </goals>
             <configuration>
                 <properties>
                     <quarkus.grpc.codegen.proto-directory>${project.basedir}/ext/proto</quarkus.grpc.codegen.proto-directory>
@@ -307,7 +284,7 @@ If you are using Gradle, you can use the following configuration:
 [source, gradle, subs=attributes+]
 ----
 plugins {
-    id 'org.kordamp.gradle.jandex' version '1.1.0'
+    id 'org.kordamp.gradle.jandex' version '{jandex-gradle-plugin-version}'
 }
 ----
 
@@ -347,6 +324,8 @@ The next table lists the different variants of the `protoc` and plugin artifacts
 |===
 
 Because of the packaging of `protoc` and the plugin (using classifier), it's not possible to exclude undesired platforms individually.
+
+WARNING: When using https://en.wikipedia.org/wiki/AArch64[AArch64] on macOS be aware of this https://github.com/grpc/grpc-java/issues/11844[issue]: meaning that the macOS https://en.wikipedia.org/wiki/X86[x86_64] protoc and macOS aarch_64 protoc are the `same` - both are macOS x86_64. So you need to enable https://en.wikipedia.org/wiki/Rosetta_(software)[Rosetta] (`softwareupdate --install-rosetta`) on your ARM based macOS if you want to generate protobuf classes.
 
 You can, however, exclude the `protoc` dependency altogether and use the `quarkus.grpc.protoc-path` system property to configure the path to the `protoc` executable installed on your machine.
 Thus, you don't need to download any `protoc` variants:

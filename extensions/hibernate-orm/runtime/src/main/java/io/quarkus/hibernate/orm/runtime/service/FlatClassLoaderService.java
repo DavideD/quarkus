@@ -12,17 +12,16 @@ import java.util.List;
 import java.util.ServiceLoader;
 
 import org.hibernate.AssertionFailure;
+import org.hibernate.boot.BootLogging;
 import org.hibernate.boot.registry.classloading.spi.ClassLoaderService;
 import org.hibernate.boot.registry.classloading.spi.ClassLoadingException;
-import org.hibernate.internal.CoreLogging;
-import org.hibernate.internal.CoreMessageLogger;
 
 /**
  * Replaces the ClassLoaderService in Hibernate ORM with one which should work in native mode.
  */
 public class FlatClassLoaderService implements ClassLoaderService {
 
-    private static final CoreMessageLogger log = CoreLogging.messageLogger(FlatClassLoaderService.class);
+    private static final BootLogging log = BootLogging.BOOT_LOGGER;
     public static final ClassLoaderService INSTANCE = new FlatClassLoaderService();
 
     private FlatClassLoaderService() {
@@ -93,8 +92,7 @@ public class FlatClassLoaderService implements ClassLoaderService {
     }
 
     @Override
-    @SuppressWarnings("rawtypes")
-    public <T> T generateProxy(InvocationHandler handler, Class... interfaces) {
+    public <T> T generateProxy(InvocationHandler handler, Class<?>... interfaces) {
         throw new AssertionFailure("Not implemented! generateProxy(InvocationHandler handler, Class... interfaces)");
     }
 

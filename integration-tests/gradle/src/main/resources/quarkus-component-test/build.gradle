@@ -17,11 +17,11 @@ dependencies {
     implementation enforcedPlatform("${quarkusPlatformGroupId}:${quarkusPlatformArtifactId}:${quarkusPlatformVersion}")
     implementation 'io.quarkus:quarkus-arc'
 
-    testImplementation 'io.quarkus:quarkus-junit5-component'
+    testImplementation 'io.quarkus:quarkus-junit-component'
 }
 
-group 'org.acme'
-version '1.0.0-SNAPSHOT'
+group = 'org.acme'
+version = '1.0.0-SNAPSHOT'
 
 compileJava {
     options.encoding = 'UTF-8'

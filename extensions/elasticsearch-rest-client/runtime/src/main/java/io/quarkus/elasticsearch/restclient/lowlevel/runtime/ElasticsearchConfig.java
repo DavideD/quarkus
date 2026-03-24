@@ -39,6 +39,11 @@ public interface ElasticsearchConfig {
     Optional<String> password();
 
     /**
+     * The API key for authentication.
+     */
+    Optional<String> apiKey();
+
+    /**
      * The connection timeout.
      */
     @WithDefault("1S")
@@ -53,13 +58,13 @@ public interface ElasticsearchConfig {
     /**
      * The maximum number of connections to all the Elasticsearch servers.
      */
-    @WithDefault("20")
+    @WithDefault("40")
     int maxConnections();
 
     /**
      * The maximum number of connections per Elasticsearch server.
      */
-    @WithDefault("10")
+    @WithDefault("20")
     int maxConnectionsPerRoute();
 
     /**

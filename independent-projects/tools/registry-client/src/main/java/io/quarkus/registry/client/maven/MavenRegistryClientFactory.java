@@ -17,9 +17,6 @@ import org.eclipse.aether.artifact.DefaultArtifact;
 import org.eclipse.aether.repository.RemoteRepository;
 import org.eclipse.aether.repository.RepositoryPolicy;
 import org.eclipse.aether.resolution.ArtifactResult;
-import org.eclipse.aether.transfer.TransferCancelledException;
-import org.eclipse.aether.transfer.TransferEvent;
-import org.eclipse.aether.transfer.TransferListener;
 
 import io.quarkus.bootstrap.resolver.maven.BootstrapMavenContext;
 import io.quarkus.bootstrap.resolver.maven.BootstrapMavenException;
@@ -40,6 +37,7 @@ import io.quarkus.registry.config.RegistryMavenConfig;
 import io.quarkus.registry.config.RegistryMavenRepoConfig;
 import io.quarkus.registry.config.RegistryNonPlatformExtensionsConfig;
 import io.quarkus.registry.config.RegistryPlatformsConfig;
+import io.quarkus.registry.config.RegistryQuarkusVersionsConfig;
 
 public class MavenRegistryClientFactory implements RegistryClientFactory {
 
@@ -57,15 +55,7 @@ public class MavenRegistryClientFactory implements RegistryClientFactory {
     public RegistryClient buildRegistryClient(RegistryConfig config) throws RegistryResolutionException {
         Objects.requireNonNull(config, "The registry config is null");
 
-        final RegistryDescriptorConfig descriptorConfig = config.getDescriptor();
-        if (descriptorConfig == null) {
-            throw new IllegalArgumentException("The registry descriptor configuration is missing for " + config.getId());
-        }
-
-        final ArtifactCoords originalDescrCoords = descriptorConfig.getArtifact();
-        final Artifact registryDescriptorCoords = new DefaultArtifact(originalDescrCoords.getGroupId(),
-                originalDescrCoords.getArtifactId(), originalDescrCoords.getClassifier(), originalDescrCoords.getType(),
-                originalDescrCoords.getVersion());
+        final Artifact registryDescriptorCoords = getDescriptorCoords(config);
 
         final boolean cleanupTimestampedArtifacts = isCleanupTimestampedArtifacts(config);
 
@@ -78,9 +68,7 @@ public class MavenRegistryClientFactory implements RegistryClientFactory {
         ArtifactResult result;
         if (!registryRepos.isEmpty()) {
             // first, we try applying the mirrors and proxies found in the user settings
-            final List<RemoteRepository> aggregatedRepos = originalResolver.getRemoteRepositoryManager().aggregateRepositories(
-                    originalResolver.getSession(),
-                    Collections.emptyList(), registryRepos, true);
+            final List<RemoteRepository> aggregatedRepos = applyMirrorsAndProxies(registryRepos);
             resolver = newResolver(originalResolver, aggregatedRepos, config, log);
             try {
                 result = MavenRegistryArtifactResolverWithCleanup.resolveAndCleanupOldTimestampedVersions(resolver,
@@ -145,31 +133,74 @@ public class MavenRegistryClientFactory implements RegistryClientFactory {
             config = completeRegistryConfig(config, descriptor);
         }
 
-        final MavenRegistryArtifactResolver defaultResolver = defaultResolver(resolver, cleanupTimestampedArtifacts);
-        final RegistryNonPlatformExtensionsResolver nonPlatformExtensionsResolver;
-        final RegistryNonPlatformExtensionsConfig nonPlatformExtensions = config.getNonPlatformExtensions();
-        if (nonPlatformExtensions == null || nonPlatformExtensions.isDisabled()) {
-            log.debug("Non-platform extension catalogs were disabled for registry %s", config.getId());
-            nonPlatformExtensionsResolver = null;
-        } else {
-            nonPlatformExtensionsResolver = new MavenNonPlatformExtensionsResolver(nonPlatformExtensions, defaultResolver, log);
-        }
+        final MavenRegistryArtifactResolver registryArtifactResolver = newRegistryArtifactResolver(resolver,
+                cleanupTimestampedArtifacts);
 
-        final RegistryPlatformsResolver platformsResolver;
+        return new RegistryClientDispatcher(config,
+                getPlatformsResolver(config, registryArtifactResolver),
+                getPlatformExtensionsResolver(config, registryArtifactResolver, cleanupTimestampedArtifacts),
+                getNonPlatformExtensionsResolver(config, registryArtifactResolver),
+                new MavenRegistryCache(config, registryArtifactResolver, log));
+    }
+
+    private List<RemoteRepository> applyMirrorsAndProxies(List<RemoteRepository> registryRepos) {
+        return originalResolver.getRemoteRepositoryManager().aggregateRepositories(
+                originalResolver.getSession(), List.of(), registryRepos, true);
+    }
+
+    private MavenPlatformExtensionsResolver getPlatformExtensionsResolver(RegistryConfig config,
+            MavenRegistryArtifactResolver registryArtifactResolver, boolean cleanupTimestampedArtifacts) {
+        var platformsConfig = config.getPlatforms();
+        if (platformsConfig != null && platformsConfig.getExtensionCatalogsIncluded() != null
+                && platformsConfig.getExtensionCatalogsIncluded()) {
+            // re-use the registry artifact resolver
+            return new MavenPlatformExtensionsResolver(registryArtifactResolver, log);
+        }
+        final RegistryMavenRepoConfig repoConfig = platformsConfig == null ? null
+                : (platformsConfig.getMaven() == null ? null
+                        : (platformsConfig.getMaven().getRepository() == null ? null
+                                : platformsConfig.getMaven().getRepository()));
+        if (repoConfig != null) {
+            // initialize a resolver with the repository configured by the registry
+            final List<RemoteRepository> resolverRepos = applyMirrorsAndProxies(List.of(
+                    new RemoteRepository.Builder(repoConfig.getId(), "default", repoConfig.getUrl()).build()));
+            return new MavenPlatformExtensionsResolver(newRegistryArtifactResolver(
+                    newResolver(originalResolver, resolverRepos, config, log), cleanupTimestampedArtifacts), log);
+        }
+        // use the original user Maven resolver
+        return new MavenPlatformExtensionsResolver(newRegistryArtifactResolver(originalResolver, cleanupTimestampedArtifacts),
+                log);
+    }
+
+    private RegistryPlatformsResolver getPlatformsResolver(RegistryConfig config,
+            MavenRegistryArtifactResolver registryArtifactResolver) {
         final RegistryPlatformsConfig platformsConfig = config.getPlatforms();
         if (platformsConfig == null || platformsConfig.isDisabled()) {
             log.debug("Platform catalogs were disabled for registry %s", config.getId());
-            platformsResolver = null;
-        } else {
-            platformsResolver = new MavenPlatformsResolver(platformsConfig, defaultResolver, log);
+            return null;
         }
-        return new RegistryClientDispatcher(config, platformsResolver,
-                Boolean.TRUE.equals(platformsConfig == null ? Boolean.FALSE : platformsConfig.getExtensionCatalogsIncluded())
-                        ? new MavenPlatformExtensionsResolver(defaultResolver, log)
-                        : new MavenPlatformExtensionsResolver(defaultResolver(originalResolver, cleanupTimestampedArtifacts),
-                                log),
-                nonPlatformExtensionsResolver,
-                new MavenRegistryCache(config, defaultResolver, log));
+        return new MavenPlatformsResolver(platformsConfig, registryArtifactResolver, log);
+    }
+
+    private RegistryNonPlatformExtensionsResolver getNonPlatformExtensionsResolver(RegistryConfig config,
+            MavenRegistryArtifactResolver registryArtifactResolver) {
+        final RegistryNonPlatformExtensionsConfig nonPlatformExtensions = config.getNonPlatformExtensions();
+        if (nonPlatformExtensions == null || nonPlatformExtensions.isDisabled()) {
+            log.debug("Non-platform extension catalogs were disabled for registry %s", config.getId());
+            return null;
+        }
+        return new MavenNonPlatformExtensionsResolver(nonPlatformExtensions, registryArtifactResolver, log);
+    }
+
+    private static Artifact getDescriptorCoords(RegistryConfig config) {
+        final RegistryDescriptorConfig descriptorConfig = config.getDescriptor();
+        if (descriptorConfig == null) {
+            throw new IllegalArgumentException("The registry descriptor configuration is missing for " + config.getId());
+        }
+        final ArtifactCoords originalDescrCoords = descriptorConfig.getArtifact();
+        return new DefaultArtifact(originalDescrCoords.getGroupId(),
+                originalDescrCoords.getArtifactId(), originalDescrCoords.getClassifier(), originalDescrCoords.getType(),
+                originalDescrCoords.getVersion());
     }
 
     private static boolean isCleanupTimestampedArtifacts(RegistryConfig config) {
@@ -177,93 +208,145 @@ public class MavenRegistryClientFactory implements RegistryClientFactory {
         return o == null || Boolean.parseBoolean(o.toString());
     }
 
-    private static MavenRegistryArtifactResolver defaultResolver(MavenArtifactResolver resolver,
+    private static MavenRegistryArtifactResolver newRegistryArtifactResolver(MavenArtifactResolver resolver,
             boolean cleanupTimestampedArtifacts) {
         return new MavenRegistryArtifactResolverWithCleanup(resolver, cleanupTimestampedArtifacts);
     }
 
-    static RegistryConfig.Mutable completeRegistryConfig(RegistryConfig original, RegistryConfig descriptor) {
+    /**
+     * Merges remote and local registry client configurations, prioritizing the local configuration values.
+     *
+     * @param local local client configuration
+     * @param remote default configuration provided by the registry itself
+     * @return complete registry client configuration
+     */
+    static RegistryConfig.Mutable completeRegistryConfig(RegistryConfig local, RegistryConfig remote) {
         RegistryConfig.Mutable complete = RegistryConfig.builder();
 
-        complete.setId(original.getId() == null ? descriptor.getId() : original.getId());
+        complete.setId(local.getId() == null ? remote.getId() : local.getId());
 
-        if (original.getDescriptor() == null) {
-            complete.setDescriptor(descriptor.getDescriptor());
+        if (local.getDescriptor() == null) {
+            complete.setDescriptor(remote.getDescriptor());
         } else {
-            complete.setDescriptor(original.getDescriptor());
+            complete.setDescriptor(local.getDescriptor());
         }
-        if (original.getPlatforms() == null) {
-            complete.setPlatforms(descriptor.getPlatforms());
+        if (local.getPlatforms() == null) {
+            complete.setPlatforms(remote.getPlatforms());
         } else {
-            complete.setPlatforms(completeRegistryPlatformConfig(original.getPlatforms(), descriptor.getPlatforms()));
+            complete.setPlatforms(completeRegistryPlatformConfig(local.getPlatforms(), remote.getPlatforms()));
         }
-        if (original.getNonPlatformExtensions() == null) {
-            complete.setNonPlatformExtensions(descriptor.getNonPlatformExtensions());
+        if (local.getNonPlatformExtensions() == null) {
+            complete.setNonPlatformExtensions(remote.getNonPlatformExtensions());
         } else {
-            complete.setNonPlatformExtensions(original.getNonPlatformExtensions());
+            complete.setNonPlatformExtensions(local.getNonPlatformExtensions());
         }
-        if (original.getUpdatePolicy() == null) {
-            complete.setUpdatePolicy(descriptor.getUpdatePolicy());
+        if (local.getUpdatePolicy() == null) {
+            complete.setUpdatePolicy(remote.getUpdatePolicy());
         } else {
-            complete.setUpdatePolicy(original.getUpdatePolicy());
+            complete.setUpdatePolicy(local.getUpdatePolicy());
         }
 
-        if (original.getMaven() == null) {
-            complete.setMaven(descriptor.getMaven());
-        } else if (isComplete(original.getMaven())) {
-            complete.setMaven(original.getMaven());
+        if (local.getMaven() == null) {
+            complete.setMaven(remote.getMaven());
+        } else if (isMavenConfigComplete(local.getMaven())) {
+            complete.setMaven(local.getMaven());
         } else {
             complete.setMaven(RegistryMavenConfig.builder()
-                    .setRepository(completeMavenRepoConfig(original.getMaven(), descriptor.getMaven())));
+                    .setRepository(
+                            completeMavenRepoConfig(local.getMaven().getRepository(), remote.getMaven().getRepository())));
         }
 
-        if (original.getQuarkusVersions() == null) {
-            complete.setQuarkusVersions(descriptor.getQuarkusVersions());
-        }
+        complete.setQuarkusVersions(complete(local.getQuarkusVersions(), remote.getQuarkusVersions()));
 
-        if (original.getExtra().isEmpty()) {
-            complete.setExtra(descriptor.getExtra());
-        } else if (descriptor.getExtra().isEmpty()) {
-            complete.setExtra(original.getExtra());
+        if (local.getExtra().isEmpty()) {
+            complete.setExtra(remote.getExtra());
+        } else if (remote.getExtra().isEmpty()) {
+            complete.setExtra(local.getExtra());
         } else {
-            var extra = new HashMap<>(descriptor.getExtra());
-            extra.putAll(original.getExtra());
+            var extra = new HashMap<>(remote.getExtra());
+            extra.putAll(local.getExtra());
             complete.setExtra(extra);
         }
         return complete;
     }
 
-    private static RegistryPlatformsConfig completeRegistryPlatformConfig(RegistryPlatformsConfig client,
-            RegistryPlatformsConfig descriptor) {
-        if (client == null) {
-            return descriptor;
+    /**
+     * Merges remote and local registry Quarkus versions configuration, prioritizing the local configuration values.
+     *
+     * @param local local configuration
+     * @param remote default configuration provided by the registry
+     * @return final configuration
+     */
+    private static RegistryQuarkusVersionsConfig complete(RegistryQuarkusVersionsConfig local,
+            RegistryQuarkusVersionsConfig remote) {
+        if (local == null) {
+            return remote;
         }
-        if (isComplete(client, descriptor)) {
-            return client;
+        if (remote == null || local.equals(remote)) {
+            return local;
+        }
+        var complete = RegistryQuarkusVersionsConfig.builder();
+        complete.setExclusiveProvider(local.isExclusiveProvider() || remote.isExclusiveProvider());
+        complete.setRecognizedGroupIds(local.getRecognizedGroupIds().isEmpty()
+                ? remote.getRecognizedGroupIds()
+                : local.getRecognizedGroupIds());
+        complete.setRecognizedVersionsExpression(local.getRecognizedVersionsExpression() == null
+                ? remote.getRecognizedVersionsExpression()
+                : local.getRecognizedVersionsExpression());
+        return complete;
+    }
+
+    private static RegistryPlatformsConfig completeRegistryPlatformConfig(RegistryPlatformsConfig local,
+            RegistryPlatformsConfig remote) {
+        if (local == null) {
+            return remote;
+        }
+        if (isPlatformsConfigComplete(local, remote)) {
+            return local;
+        }
+
+        Boolean extensionCatalogsIncluded = local.getExtensionCatalogsIncluded();
+        RegistryMavenConfig mavenConfig = null;
+        if (local.getMaven() != null && local.getMaven().getRepository() != null) {
+            if (extensionCatalogsIncluded != null && extensionCatalogsIncluded) {
+                throw new IllegalArgumentException(
+                        "Either extension-catalogs-included or mavenConfig/repository configuration can be enabled at the same time");
+            }
+            mavenConfig = local.getMaven();
+        }
+
+        if (mavenConfig == null) {
+            if (extensionCatalogsIncluded == null || !extensionCatalogsIncluded) {
+                if (extensionCatalogsIncluded == null) {
+                    extensionCatalogsIncluded = remote.getExtensionCatalogsIncluded();
+                    if (extensionCatalogsIncluded == null || !extensionCatalogsIncluded) {
+                        mavenConfig = remote.getMaven();
+                    }
+                }
+            }
+        } else if (remote.getMaven() != null && !isMavenConfigComplete(mavenConfig)) {
+            mavenConfig = RegistryMavenConfig.builder()
+                    .setRepository(completeMavenRepoConfig(mavenConfig.getRepository(), remote.getMaven().getRepository()));
         }
 
         return RegistryPlatformsConfig.builder()
-                .setArtifact(client.getArtifact() == null ? descriptor.getArtifact() : client.getArtifact())
-                .setDisabled(client.isDisabled())
-                .setExtensionCatalogsIncluded(
-                        client.getExtensionCatalogsIncluded() == null
-                                ? descriptor.getExtensionCatalogsIncluded()
-                                : client.getExtensionCatalogsIncluded());
+                .setArtifact(local.getArtifact() == null ? remote.getArtifact() : local.getArtifact())
+                .setDisabled(local.isDisabled())
+                .setExtensionCatalogsIncluded(extensionCatalogsIncluded)
+                .setMaven(mavenConfig);
     }
 
-    private static RegistryMavenRepoConfig completeMavenRepoConfig(RegistryMavenConfig original,
-            RegistryMavenConfig descriptor) {
-        RegistryMavenRepoConfig originalRepo = original.getRepository();
-        RegistryMavenRepoConfig descriptorRepo = descriptor.getRepository();
-        if (originalRepo == null) {
-            return descriptorRepo;
-        } else if (isComplete(originalRepo) || descriptorRepo == null) {
-            return originalRepo;
+    private static RegistryMavenRepoConfig completeMavenRepoConfig(RegistryMavenRepoConfig local,
+            RegistryMavenRepoConfig remote) {
+        if (local == null) {
+            return remote;
         }
-
+        if (isMavenRepoComplete(local) || remote == null) {
+            return local;
+        }
         return RegistryMavenRepoConfig.builder()
-                .setId(originalRepo.getId() == null ? descriptorRepo.getId() : originalRepo.getId())
-                .setUrl(originalRepo.getUrl() == null ? descriptorRepo.getUrl() : originalRepo.getUrl());
+                .setId(local.getId() != null ? local.getId() : remote.getId())
+                .setUrl(local.getUrl() != null ? local.getUrl() : remote.getUrl());
     }
 
     private static boolean isComplete(RegistryConfig client, RegistryConfig descriptor) {
@@ -273,13 +356,13 @@ public class MavenRegistryClientFactory implements RegistryClientFactory {
         if (client.getDescriptor() == null) {
             return false;
         }
-        if (!isComplete(client.getPlatforms(), descriptor.getPlatforms())) {
+        if (!isPlatformsConfigComplete(client.getPlatforms(), descriptor.getPlatforms())) {
             return false;
         }
-        if (!isComplete(client.getNonPlatformExtensions())) {
+        if (!isArtifactConfigComplete(client.getNonPlatformExtensions())) {
             return false;
         }
-        if (!isComplete(client.getMaven())) {
+        if (!isMavenConfigComplete(client.getMaven())) {
             return false;
         }
         if (client.getQuarkusVersions() == null && descriptor.getQuarkusVersions() != null) {
@@ -291,48 +374,31 @@ public class MavenRegistryClientFactory implements RegistryClientFactory {
         return true;
     }
 
-    private static boolean isComplete(RegistryMavenConfig config) {
-        if (config == null) {
+    private static boolean isMavenConfigComplete(RegistryMavenConfig config) {
+        return config != null && isMavenRepoComplete(config.getRepository());
+    }
+
+    private static boolean isPlatformsConfigComplete(RegistryPlatformsConfig client, RegistryPlatformsConfig descriptor) {
+        if (!isArtifactConfigComplete(client)) {
             return false;
         }
-        if (!isComplete(config.getRepository())) {
-            return false;
+        if (client.getMaven() != null && client.getMaven().getRepository() != null
+                && client.getMaven().getRepository().getUrl() != null
+                || client.getExtensionCatalogsIncluded() != null) {
+            return true;
+        }
+        if (descriptor != null) {
+            return !Boolean.TRUE.equals(descriptor.getExtensionCatalogsIncluded()) && descriptor.getMaven() == null;
         }
         return true;
     }
 
-    private static boolean isComplete(RegistryPlatformsConfig client, RegistryPlatformsConfig descriptor) {
-        if (!isComplete(client)) {
-            return false;
-        }
-        if (descriptor != null && Boolean.TRUE.equals(descriptor.getExtensionCatalogsIncluded())
-                && client.getExtensionCatalogsIncluded() == null) {
-            return false;
-        }
-        return true;
+    private static boolean isArtifactConfigComplete(RegistryArtifactConfig config) {
+        return config != null && (config.isDisabled() || config.getArtifact() != null);
     }
 
-    private static boolean isComplete(RegistryArtifactConfig config) {
-        if (config == null) {
-            return false;
-        }
-        if (!config.isDisabled() && config.getArtifact() == null) {
-            return false;
-        }
-        return true;
-    }
-
-    private static boolean isComplete(RegistryMavenRepoConfig config) {
-        if (config == null) {
-            return false;
-        }
-        if (config.getId() == null) {
-            return false;
-        }
-        if (config.getUrl() == null) {
-            return false;
-        }
-        return true;
+    private static boolean isMavenRepoComplete(RegistryMavenRepoConfig config) {
+        return config != null && config.getId() != null && config.getUrl() != null;
     }
 
     private static MavenArtifactResolver newResolver(MavenArtifactResolver resolver, List<RemoteRepository> aggregatedRepos,
@@ -358,58 +424,7 @@ public class MavenRegistryClientFactory implements RegistryClientFactory {
     private static DefaultRepositorySystemSession setRegistryTransferListener(RegistryConfig config, MessageWriter log,
             RepositorySystemSession session) {
         final DefaultRepositorySystemSession newSession = new DefaultRepositorySystemSession(session);
-        final TransferListener tl = newSession.getTransferListener();
-        newSession.setTransferListener(new TransferListener() {
-
-            boolean loggedCatalogRefreshMsg;
-
-            @Override
-            public void transferInitiated(TransferEvent event) throws TransferCancelledException {
-                if (!loggedCatalogRefreshMsg && !event.getResource().getResourceName()
-                        .contains(config.getDescriptor().getArtifact().getArtifactId())) {
-                    loggedCatalogRefreshMsg = true;
-                    log.info("Looking for the newly published extensions in " + config.getId());
-                }
-                if (tl != null) {
-                    tl.transferInitiated(event);
-                }
-            }
-
-            @Override
-            public void transferStarted(TransferEvent event) throws TransferCancelledException {
-                if (tl != null) {
-                    tl.transferStarted(event);
-                }
-            }
-
-            @Override
-            public void transferProgressed(TransferEvent event) throws TransferCancelledException {
-                if (tl != null) {
-                    tl.transferProgressed(event);
-                }
-            }
-
-            @Override
-            public void transferCorrupted(TransferEvent event) throws TransferCancelledException {
-                if (tl != null) {
-                    tl.transferCorrupted(event);
-                }
-            }
-
-            @Override
-            public void transferSucceeded(TransferEvent event) {
-                if (tl != null) {
-                    tl.transferSucceeded(event);
-                }
-            }
-
-            @Override
-            public void transferFailed(TransferEvent event) {
-                if (tl != null) {
-                    tl.transferFailed(event);
-                }
-            }
-        });
+        newSession.setTransferListener(new RegistryCacheRefreshLogger(config, log, newSession.getTransferListener()));
         return newSession;
     }
 
@@ -456,7 +471,7 @@ public class MavenRegistryClientFactory implements RegistryClientFactory {
             }
         }
 
-        return Collections.singletonList(repoBuilder.build());
+        return List.of(repoBuilder.build());
     }
 
     private static String getDescriptorResolutionFailureFromMirrorMessage(RegistryConfig config,

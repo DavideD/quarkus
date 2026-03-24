@@ -1,14 +1,22 @@
 import { LitElement, html, css} from 'lit';
+import { observeState } from 'lit-element-state'; 
+import { assistantState } from 'assistant-state'; 
 import { columnBodyRenderer } from '@vaadin/grid/lit.js';
+import { dialogHeaderRenderer, dialogRenderer } from '@vaadin/dialog/lit.js';
+import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { notifier } from 'notifier';
 import { JsonRpc } from 'jsonrpc';
+import MarkdownIt from 'markdown-it';
 import '@vaadin/grid';
 import '@vaadin/text-field';
+import '@vaadin/dialog';
+import '@vaadin/progress-bar';
+import { msg, updateWhenLocaleChanges } from 'localization';
 
 /**
  * This component shows the scheduled methods.
  */
-export class QwcSchedulerScheduledMethods extends LitElement {
+export class QwcSchedulerScheduledMethods extends observeState(LitElement) {
     
     jsonRpc = new JsonRpc(this);
 
@@ -46,14 +54,27 @@ export class QwcSchedulerScheduledMethods extends LitElement {
         .scheduler {
             padding-right: 20px;
         }
-        
         `;
 
     static properties = {
          _scheduledMethods: {state: true},
          _filteredScheduledMethods: {state: true},
-         _schedulerRunning: {state: true}
+         _schedulerRunning: {state: true},
+         _selectedCron: {state: true},
+         _interpretDialogOpened: {state: true},
+         _interpretCronLoading: {state: true},
+         _interpretResult: {state: true}
     };
+    
+    constructor() {
+        super();
+        updateWhenLocaleChanges(this);
+        this._interpretDialogOpened = false;
+        this._interpretCronLoading = false;
+        this._selectedCron = null;
+        this._interpretResult = null;
+        this.md = new MarkdownIt();
+    }
     
     connectedCallback() {
         super.connectedCallback();
@@ -74,13 +95,13 @@ export class QwcSchedulerScheduledMethods extends LitElement {
                                 if (schedule.identity === identity) {
                                     schedule.running = jsonResponse.result["running"];
                                 }
-                                }); 
+                            }); 
                             return sm; 
-                            });
+                        });
                         this._filteredScheduledMethods = this._scheduledMethods;
                     }
-            }
-        )}); 
+                });
+            }); 
     }
     
     disconnectedCallback() {
@@ -92,107 +113,256 @@ export class QwcSchedulerScheduledMethods extends LitElement {
         if (this._scheduledMethods){
             return this._renderScheduledMethods();
         } else {
-            return html`<span>Loading scheduled methods...</span>`;
+            return html`<span>
+                ${msg('Loading scheduled methods...', {
+                    id: 'quarkus-scheduler-loading-scheduled-methods'
+                })}
+            </span>`;
         }
     }
 
     _renderScheduledMethods(){
         let schedulerButton;
         if (this._schedulerRunning) {
-            schedulerButton = html`<vaadin-button class="scheduler" theme="tertiary" @click=${() => this._pauseScheduler()}>
-                <vaadin-icon icon="font-awesome-solid:circle-pause"></vaadin-icon>
-                Pause scheduler</vaadin-button>`;
+            schedulerButton = html`
+                <vaadin-button
+                    class="scheduler"
+                    theme="tertiary"
+                    @click=${() => this._pauseScheduler()}>
+                    <vaadin-icon icon="font-awesome-solid:circle-pause"></vaadin-icon>
+                    ${msg('Pause scheduler', { id: 'quarkus-scheduler-pause-scheduler' })}
+                </vaadin-button>`;
         } else {
-            schedulerButton = html`<vaadin-button class="scheduler" theme="tertiary" @click=${() => this._resumeScheduler()}>
-                <vaadin-icon icon="font-awesome-solid:circle-play"></vaadin-icon>
-                Resume scheduler</vaadin-button>`;
+            schedulerButton = html`
+                <vaadin-button
+                    class="scheduler"
+                    theme="tertiary"
+                    @click=${() => this._resumeScheduler()}>
+                    <vaadin-icon icon="font-awesome-solid:circle-play"></vaadin-icon>
+                    ${msg('Resume scheduler', { id: 'quarkus-scheduler-resume-scheduler' })}
+                </vaadin-button>`;
         }
 
         const searchBox = html`
-            <vaadin-text-field class="searchField"
-                placeholder="Search"
+            <vaadin-text-field
+                class="searchField"
+                .placeholder=${msg('Search', { id: 'quarkus-scheduler-search' })}
                 @value-changed="${e => {
-            const searchTerm = (e.detail.value || '').trim().toLowerCase();
-            this._filteredScheduledMethods = this._scheduledMethods.filter(method => this._matchesTerm(method, searchTerm));
-        }}"
-            >
-                <vaadin-icon slot="prefix" icon="font-awesome-solid:magnifying-glass"></vaadin-icon>
+                    const searchTerm = (e.detail.value || '').trim().toLowerCase();
+                    this._filteredScheduledMethods =
+                        this._scheduledMethods.filter(method => this._matchesTerm(method, searchTerm));
+                }}">
+                <vaadin-icon
+                    slot="prefix"
+                    icon="font-awesome-solid:magnifying-glass">
+                </vaadin-icon>
             </vaadin-text-field>
-            `
+        `;
 
         return html`
-                <div class="topBar">
-                    ${searchBox}
-                    ${schedulerButton}
-                </div>
-                <vaadin-grid .items="${this._filteredScheduledMethods}" class="schedules-table" theme="no-border">
-                    <vaadin-grid-column auto-width
-                        header="Scheduled Method"
-                        ${columnBodyRenderer(this._methodRenderer, [])}
-                        resizable>
-                    </vaadin-grid-column>
-                    <vaadin-grid-column auto-width
-                        header="Triggers"
-                        ${columnBodyRenderer(this._scheduleRenderer, [])}
-                        resizable>
-                    </vaadin-grid-column>
-                </vaadin-grid>
-                `;
+            ${this._renderLoadingDialog()}
+            ${this._renderInterpretDialog()}
+            <div class="topBar">
+                ${searchBox}
+                ${schedulerButton}
+            </div>
+            <vaadin-grid
+                .items="${this._filteredScheduledMethods}"
+                class="schedules-table"
+                theme="no-border">
+                <vaadin-grid-column
+                    auto-width
+                    .header=${msg('Scheduled Method', { id: 'quarkus-scheduler-scheduled-method' })}
+                    ${columnBodyRenderer(this._methodRenderer, [])}
+                    resizable>
+                </vaadin-grid-column>
+                <vaadin-grid-column
+                    auto-width
+                    .header=${msg('Triggers', { id: 'quarkus-scheduler-triggers' })}
+                    ${columnBodyRenderer(this._scheduleRenderer, [])}
+                    resizable>
+                </vaadin-grid-column>
+            </vaadin-grid>
+        `;
     }
     
     _scheduleRenderer(scheduledMethod) {
         if (scheduledMethod.schedules.length > 1) {
-            const triggers = scheduledMethod.schedules.map(s => this._trigger(s));
+            const triggers = scheduledMethod.schedules.map(s => this._trigger(scheduledMethod, s));
             return html`<ul>
-                ${triggers.map(trigger =>
-                    html`<li>${trigger}</li>`
-                )}</ul>`;
+                ${triggers.map(trigger => html`<li>${trigger}</li>`)}
+            </ul>`;
         } else {
-            return this._trigger(scheduledMethod.schedules[0]);
+            return this._trigger(scheduledMethod, scheduledMethod.schedules[0]);
         }
     }
     
-    _trigger(schedule) {
+    _trigger(scheduledMethod, schedule) {
         let trigger;
         if (schedule.identity) {
             if (schedule.running) {
-                trigger = html`<vaadin-button theme="small" @click=${() => this._pauseJob(schedule.identity)}>
-                <vaadin-icon icon="font-awesome-solid:circle-pause"></vaadin-icon>
-                Pause</vaadin-button>`;
+                trigger = html`
+                    <vaadin-button
+                        theme="small"
+                        @click=${() => this._pauseJob(schedule.identity)}>
+                        <vaadin-icon icon="font-awesome-solid:circle-pause"></vaadin-icon>
+                        ${msg('Pause', { id: 'quarkus-scheduler-pause' })}
+                    </vaadin-button>`;
             } else {
-                trigger = html`<vaadin-button theme="small" @click=${() => this._resumeJob(schedule.identity)}>
-                <vaadin-icon icon="font-awesome-solid:circle-play"></vaadin-icon>
-                Resume</vaadin-button>`;
+                trigger = html`
+                    <vaadin-button
+                        theme="small"
+                        @click=${() => this._resumeJob(schedule.identity)}>
+                        <vaadin-icon icon="font-awesome-solid:circle-play"></vaadin-icon>
+                        ${msg('Resume', { id: 'quarkus-scheduler-resume' })}
+                    </vaadin-button>`;
             }    
         }
         if (schedule.cron) {
-            trigger = schedule.cronConfig ? html`${trigger} <code>${schedule.cron}</code> configured as <code>${schedule.cronConfig}</code>` : html`${trigger} <code>${schedule.cron}</code>`;  
+            trigger = schedule.cronConfig
+                ? html`${trigger}
+                        <code>${schedule.cron}</code>
+                        ${msg('configured as', { id: 'quarkus-scheduler-configured-as' })}
+                        <code>${schedule.cronConfig}</code>
+                        ${this._renderInterpretCron(schedule.cronConfig)}`
+                : html`${trigger}
+                        <code>${schedule.cron}</code>
+                        ${this._renderInterpretCron(schedule.cron)}`;  
         } else {
-            trigger = schedule.everyConfig ? html`${trigger} Every <code>${schedule.every}</code> configured as <code>${schedule.everyConfig}</code>` : html`${trigger} Every <code>${schedule.every}</code>`;
+            trigger = schedule.everyConfig
+                ? html`${trigger}
+                        ${msg('Every', { id: 'quarkus-scheduler-every' })}
+                        <code>${schedule.every}</code>
+                        ${msg('configured as', { id: 'quarkus-scheduler-configured-as' })}
+                        <code>${schedule.everyConfig}</code>`
+                : html`${trigger}
+                        ${msg('Every', { id: 'quarkus-scheduler-every' })}
+                        <code>${schedule.every}</code>`;
         }
         if (schedule.identity) {
-            trigger = schedule.identityConfig ? html`${trigger} with identity <code>${schedule.identity}</code> configured as <code>${scheduledMethod.identityConfig}</code>` : html`${trigger} with identity <code>${schedule.identity}</code>`;
+            trigger = schedule.identityConfig
+                ? html`${trigger}
+                        ${msg('with identity', { id: 'quarkus-scheduler-with-identity' })}
+                        <code>${schedule.identity}</code>
+                        ${msg('configured as', { id: 'quarkus-scheduler-configured-as' })}
+                        <code>${scheduledMethod.identityConfig}</code>`
+                : html`${trigger}
+                        ${msg('with identity', { id: 'quarkus-scheduler-with-identity' })}
+                        <code>${schedule.identity}</code>`;
         }
         if (schedule.delayed > 0) {
-            trigger = html`${trigger} (with delay ${schedule.delayed} ${schedule.delayedUnit})`;
-        } else if(schedule.delayed) {
-            trigger = schedule.delayedConfig ? html`${trigger} (delayed for <code>${schedule.delayed}</code> configured as <code>${schedule.delayedConfig}</code>)` : html`${trigger} (delayed for <code>${schedule.delayed}</code>)`;
+            trigger = html`${trigger}
+                (${msg('with delay', { id: 'quarkus-scheduler-with-delay' })}
+                ${schedule.delayed} ${schedule.delayedUnit})`;
+        } else if (schedule.delayed) {
+            trigger = schedule.delayedConfig
+                ? html`${trigger}
+                        (${msg('delayed for', { id: 'quarkus-scheduler-delayed-for' })}
+                        <code>${schedule.delayed}</code>
+                        ${msg('configured as', { id: 'quarkus-scheduler-configured-as' })}
+                        <code>${schedule.delayedConfig}</code>)`
+                : html`${trigger}
+                        (${msg('delayed for', { id: 'quarkus-scheduler-delayed-for' })}
+                        <code>${schedule.delayed}</code>)`;
         }
         return trigger;
     }
 
+    _renderInterpretCron(cron){
+        if (assistantState.current.isConfigured && !this._interpretCronLoading) {
+            return html`
+                <qui-assistant-button
+                    .title=${`${msg('Interpret', { id: 'quarkus-scheduler-interpret' })} ${cron}`}
+                    @click="${(e) => this._interpretCron(e, cron)}">
+                </qui-assistant-button>`;
+        }
+    }
+    
+    _interpretCron(e, cron){
+        document.body.style.cursor = 'wait';
+        this._selectedCron = cron;
+        this._interpretCronLoading = true;
+        
+        this.jsonRpc.interpretCron({ cron: this._selectedCron }).then(jsonResponse => {
+            this._interpretCronLoading = false;
+            document.body.style.cursor = 'default';
+            this._interpretResult = jsonResponse.result.markdown;
+            this._interpretDialogOpened = true;
+        });
+    }
+    
+    _renderLoadingDialog(){
+        return html`
+            <vaadin-dialog
+              .opened="${this._interpretCronLoading}"
+              @closed="${() => {
+                this._interpretCronLoading = false;
+              }}"
+              ${dialogRenderer(
+                () => html`
+                    <label class="text-secondary" id="pblabel">
+                        ${msg(
+                            'Talking to the Dev Assistant ... please wait',
+                            { id: 'quarkus-scheduler-talking-to-dev-assistant' }
+                        )}
+                    </label>
+                    <vaadin-progress-bar
+                        indeterminate
+                        aria-labelledby="pblabel">
+                    </vaadin-progress-bar>`,
+                []
+              )}
+            ></vaadin-dialog>`;
+    }
+    
+    _renderInterpretDialog(){
+        return html`
+            <vaadin-dialog
+              .headerTitle=${this._selectedCron
+                ? `${msg('Interpret', { id: 'quarkus-scheduler-interpret' })} "${this._selectedCron}"`
+                : msg('Interpret cron', { id: 'quarkus-scheduler-interpret-cron-title' })
+              }
+              .opened="${this._interpretDialogOpened}"
+              @closed="${() => {
+                  this._closeInterpretDialog();
+              }}"
+              ${dialogRenderer(() => html`${this._renderInterpretDialogContents()}`, [])}
+              ${dialogHeaderRenderer(
+                () => html`
+                  <vaadin-button theme="tertiary" @click="${this._closeInterpretDialog}">
+                    <vaadin-icon icon="font-awesome-solid:xmark"></vaadin-icon>
+                  </vaadin-button>
+                `,
+                []
+              )}
+            ></vaadin-dialog>`;
+    }
+
+    _closeInterpretDialog(){
+        this._interpretDialogOpened = false;
+        this._selectedCron = null;
+        this._interpretResult = null;
+    }
+
+    _renderInterpretDialogContents(){
+        const htmlContent = this.md.render(this._interpretResult);
+        return html`${unsafeHTML(htmlContent)}`;
+    }
+
     _methodRenderer(scheduledMethod) {
       return html`
-        <vaadin-button theme="small" @click=${() => this._executeMethod(scheduledMethod.methodDescription)}>
+        <vaadin-button
+            theme="small"
+            @click=${() => this._executeMethod(scheduledMethod.methodDescription)}>
             <vaadin-icon icon="font-awesome-solid:bolt"></vaadin-icon>
-            Execute
+            ${msg('Execute', { id: 'quarkus-scheduler-execute' })}
         </vaadin-button>
         <code>${scheduledMethod.declaringClassName}.${scheduledMethod.methodName}()</code>
     `;
     }
     
     _pauseJob(identity) {
-        this.jsonRpc.pauseJob({"identity": identity}).then(jsonResponse => {
+        this.jsonRpc.pauseJob({ identity }).then(jsonResponse => {
             if (jsonResponse.result.success) {
                 notifier.showSuccessMessage(jsonResponse.result.message);
             } else {
@@ -202,7 +372,7 @@ export class QwcSchedulerScheduledMethods extends LitElement {
     }
     
     _resumeJob(identity) {
-        this.jsonRpc.resumeJob({"identity": identity}).then(jsonResponse => {
+        this.jsonRpc.resumeJob({ identity }).then(jsonResponse => {
             if (jsonResponse.result.success) {
                 notifier.showSuccessMessage(jsonResponse.result.message);
             } else {
@@ -232,7 +402,7 @@ export class QwcSchedulerScheduledMethods extends LitElement {
     }
     
     _executeMethod(methodDescription) {
-        this.jsonRpc.executeJob({"methodDescription": methodDescription}).then(jsonResponse => {
+        this.jsonRpc.executeJob({ methodDescription }).then(jsonResponse => {
             if (jsonResponse.result.success) {
                 notifier.showSuccessMessage(jsonResponse.result.message);
             } else {
@@ -249,13 +419,13 @@ export class QwcSchedulerScheduledMethods extends LitElement {
         }
         // schedules
         return scheduledMethod.schedules.filter(s => {
-            return s.identity && s.identity.toLowerCase().includes(searchTerm) ||
-                s.identityConfig && s.identityConfig.toLowerCase().includes(searchTerm) ||
-                s.cron && s.cron.toLowerCase().includes(searchTerm) ||
-                s.cronConfig && s.cronConfig.toLowerCase().includes(searchTerm) ||
-                s.every && s.every.toLowerCase().includes(searchTerm) ||
-                s.everyConfig && s.everyConfig.toLowerCase().includes(searchTerm)
-            }).length > 0;
+            return (s.identity && s.identity.toLowerCase().includes(searchTerm)) ||
+                (s.identityConfig && s.identityConfig.toLowerCase().includes(searchTerm)) ||
+                (s.cron && s.cron.toLowerCase().includes(searchTerm)) ||
+                (s.cronConfig && s.cronConfig.toLowerCase().includes(searchTerm)) ||
+                (s.every && s.every.toLowerCase().includes(searchTerm)) ||
+                (s.everyConfig && s.everyConfig.toLowerCase().includes(searchTerm));
+        }).length > 0;
     }
     
 }

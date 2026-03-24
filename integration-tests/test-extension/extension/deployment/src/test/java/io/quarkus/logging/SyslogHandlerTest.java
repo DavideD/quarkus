@@ -33,7 +33,7 @@ public class SyslogHandlerTest {
         Formatter formatter = handler.getFormatter();
         assertThat(formatter).isInstanceOf(PatternFormatter.class);
         PatternFormatter patternFormatter = (PatternFormatter) formatter;
-        assertThat(patternFormatter.getPattern()).isEqualTo("%d{yyyy-MM-dd HH:mm:ss,SSS} %-5p [%c{3.}] (%t) %s%e%n");
+        assertThat(patternFormatter.getPattern()).isEqualTo("%d{yyyy-MM-dd HH:mm:ss,SSS} %-5p [%c] (%t) %s%e%n");
 
         SyslogHandler syslogHandler = (SyslogHandler) handler;
         assertThat(syslogHandler.getPort()).isEqualTo(5140);
@@ -42,7 +42,7 @@ public class SyslogHandlerTest {
         assertThat(syslogHandler.getFacility()).isEqualTo(SyslogHandler.Facility.USER_LEVEL);
         assertThat(syslogHandler.getSyslogType()).isEqualTo(SyslogHandler.SyslogType.RFC5424);
         assertThat(syslogHandler.getProtocol()).isEqualTo(SyslogHandler.Protocol.TCP);
-        assertThat(syslogHandler.isUseCountingFraming()).isEqualTo(false);
+        assertThat(syslogHandler.isUseCountingFraming()).isEqualTo(true);
         assertThat(syslogHandler.isTruncate()).isEqualTo(true);
         assertThat(syslogHandler.isBlockOnReconnect()).isEqualTo(false);
     }

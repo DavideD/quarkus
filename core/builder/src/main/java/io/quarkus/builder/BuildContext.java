@@ -3,7 +3,6 @@ package io.quarkus.builder;
 import static io.quarkus.builder.Execution.log;
 
 import java.time.LocalTime;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -114,12 +113,10 @@ public final class BuildContext {
     }
 
     /**
-     * Consume all the values produced for the named item. If the
-     * item type implements {@link Comparable}, it will be sorted by natural order before return. The returned list
-     * is a mutable copy.
+     * Consume all the values produced for the named item.
      *
      * @param type the item element type (must not be {@code null})
-     * @return the produced items (may be empty, will not be {@code null})
+     * @return the produced items as an immutable list (may be empty, will not be {@code null})
      * @throws IllegalArgumentException if this deployer was not declared to consume {@code type}, or if {@code type} is
      *         {@code null}
      */
@@ -136,7 +133,7 @@ public final class BuildContext {
         if (!stepInfo.getConsumes().contains(id)) {
             throw Messages.msg.undeclaredItem(id);
         }
-        return new ArrayList<>((List<T>) (List) execution.getMultis().getOrDefault(id, Collections.emptyList()));
+        return Collections.unmodifiableList(execution.getMultis().get(id));
     }
 
     /**
@@ -149,10 +146,10 @@ public final class BuildContext {
      * @throws IllegalArgumentException if this deployer was not declared to consume {@code type}, or if {@code type} is
      *         {@code null}
      */
+    @Deprecated(since = "3.32", forRemoval = true)
     public <T extends MultiBuildItem> List<T> consumeMulti(Class<T> type, Comparator<? super T> comparator) {
-        final List<T> result = consumeMulti(type);
-        result.sort(comparator);
-        return result;
+        // you need to make a copy before sorting as the result of consumeMulti(type) is immutable
+        return consumeMulti(type).stream().sorted(comparator).toList();
     }
 
     /**
@@ -211,23 +208,13 @@ public final class BuildContext {
             throw Messages.msg.undeclaredItem(id);
         }
         if (id.isMulti()) {
-            final List<BuildItem> list = execution.getMultis().computeIfAbsent(id, x -> new ArrayList<>());
-            synchronized (list) {
-                if (Comparable.class.isAssignableFrom(id.getType())) {
-                    int pos = Collections.binarySearch((List) list, value);
-                    if (pos < 0)
-                        pos = -(pos + 1);
-                    list.add(pos, value);
-                } else {
-                    list.add(value);
-                }
-            }
+            execution.getMultis().put(stepInfo.getOrdinal(), id, (MultiBuildItem) value);
         } else {
             if (execution.getSingles().putIfAbsent(id, value) != null) {
                 throw Messages.msg.cannotMulti(id);
             }
         }
-        execution.getMetrics().buildItemProduced(value);
+        execution.getMetrics().buildItemProduced(stepInfo, value);
     }
 
     void depFinished() {

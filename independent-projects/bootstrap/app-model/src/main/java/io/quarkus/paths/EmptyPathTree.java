@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -35,21 +36,30 @@ public class EmptyPathTree implements OpenPathTree {
     }
 
     @Override
-    public void walkIfContains(String relativePath, PathVisitor visitor) {
+    public void walkRaw(PathVisitor visitor) {
     }
 
     @Override
-    public <T> T apply(String relativePath, Function<PathVisit, T> func) {
+    public void walkIfContains(String resourceDirName, PathVisitor visitor) {
+    }
+
+    @Override
+    public Set<String> getResourceNames() {
+        return Set.of();
+    }
+
+    @Override
+    public <T> T apply(String resourceName, Function<PathVisit, T> func) {
         return func.apply(null);
     }
 
     @Override
-    public void accept(String relativePath, Consumer<PathVisit> func) {
+    public void accept(String resourceName, Consumer<PathVisit> func) {
         func.accept(null);
     }
 
     @Override
-    public boolean contains(String relativePath) {
+    public boolean contains(String resourceName) {
         return false;
     }
 

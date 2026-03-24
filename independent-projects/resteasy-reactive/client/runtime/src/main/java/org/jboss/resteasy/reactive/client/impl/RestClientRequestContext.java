@@ -14,7 +14,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import jakarta.ws.rs.RuntimeType;
 import jakarta.ws.rs.WebApplicationException;
@@ -43,11 +45,13 @@ import org.jboss.resteasy.reactive.spi.ThreadSetupAction;
 
 import io.netty.handler.codec.http.multipart.InterfaceHttpData;
 import io.smallrye.mutiny.Multi;
+import io.smallrye.mutiny.Uni;
 import io.smallrye.stork.api.ServiceInstance;
 import io.vertx.core.Context;
 import io.vertx.core.MultiMap;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpClient;
+import io.vertx.core.http.HttpClientOptions;
 import io.vertx.core.http.HttpClientRequest;
 import io.vertx.core.http.HttpClientResponse;
 
@@ -94,6 +98,7 @@ public class RestClientRequestContext extends AbstractResteasyReactiveContext<Re
     // Changed by the request filter
     Map<String, Object> properties;
     private HttpClientRequest httpClientRequest;
+    private HttpClientOptions httpClientOptions;
 
     private int responseStatus;
     private String responseReasonPhrase;
@@ -106,6 +111,8 @@ public class RestClientRequestContext extends AbstractResteasyReactiveContext<Re
     private ServiceInstance callStatsCollector;
     private Map<Class<?>, MultipartResponseData> multipartResponsesData;
     private StackTraceElement[] callerStackTrace;
+
+    private final AtomicBoolean userCanceled = new AtomicBoolean();
 
     public RestClientRequestContext(ClientImpl restClient,
             HttpClient httpClient, String httpMethod, URI uri,
@@ -169,6 +176,16 @@ public class RestClientRequestContext extends AbstractResteasyReactiveContext<Re
             return (Method) o;
         }
         return null;
+    }
+
+    public boolean invokedMethodReturnsAsyncType() {
+        Method invokedMethod = getInvokedMethod();
+        if (invokedMethod == null) {
+            return false;
+        }
+        Class<?> returnType = invokedMethod.getReturnType();
+        return Uni.class.isAssignableFrom(returnType) || Multi.class.isAssignableFrom(returnType)
+                || CompletionStage.class.isAssignableFrom(returnType);
     }
 
     public Annotation[] getMethodDeclaredAnnotationsSafe() {
@@ -340,6 +357,15 @@ public class RestClientRequestContext extends AbstractResteasyReactiveContext<Re
 
     public RestClientRequestContext setHttpClientRequest(HttpClientRequest httpClientRequest) {
         this.httpClientRequest = httpClientRequest;
+        return this;
+    }
+
+    public HttpClientOptions getHttpClientOptions() {
+        return httpClientOptions;
+    }
+
+    public RestClientRequestContext setHttpClientOptions(HttpClientOptions httpClientOptions) {
+        this.httpClientOptions = httpClientOptions;
         return this;
     }
 
@@ -538,6 +564,14 @@ public class RestClientRequestContext extends AbstractResteasyReactiveContext<Re
         return InputStream.class.equals(rawType);
     }
 
+    public boolean isJakartaResponseDownload() {
+        if (responseType == null) {
+            return false;
+        }
+        Class<?> rawType = responseType.getRawType();
+        return Response.class.equals(rawType);
+    }
+
     public String getTmpFilePath() {
         return (String) getProperties().get(TMP_FILE_PATH_KEY);
     }
@@ -601,4 +635,13 @@ public class RestClientRequestContext extends AbstractResteasyReactiveContext<Re
     protected boolean isRequestScopeManagementRequired() {
         return false;
     }
+
+    public void setUserCanceled() {
+        userCanceled.set(true);
+    }
+
+    public boolean isUserCanceled() {
+        return userCanceled.get();
+    }
+
 }

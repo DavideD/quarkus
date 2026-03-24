@@ -9,12 +9,19 @@ import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.cert.CertificateException;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 import javax.net.ssl.HostnameVerifier;
@@ -37,9 +44,11 @@ import org.jboss.resteasy.reactive.common.jaxrs.MultiQueryParamMode;
 
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpClientOptions;
+import io.vertx.core.http.HttpClientRequest;
 import io.vertx.core.http.HttpVersion;
 import io.vertx.core.net.JksOptions;
 import io.vertx.core.net.ProxyOptions;
+import io.vertx.core.net.ProxyType;
 import io.vertx.core.net.SSLOptions;
 
 public class ClientBuilderImpl extends ClientBuilder {
@@ -56,6 +65,8 @@ public class ClientBuilderImpl extends ClientBuilder {
     private String proxyPassword;
     private String proxyUser;
     private String nonProxyHosts;
+    private Duration proxyConnectTimeout;
+    private ProxyType proxyType;
 
     private boolean followRedirects;
 
@@ -72,16 +83,20 @@ public class ClientBuilderImpl extends ClientBuilder {
     // overridden security settings
     private TlsConfig tlsConfig;
 
-    private LoggingScope loggingScope;
+    private ClientLogger clientLogger = new DefaultClientLogger();
+    private LoggingScope loggingScope = LoggingScope.NONE;
     private Integer loggingBodySize = 100;
+    private Set<String> maskedHeaders = Collections.emptySet();
 
     private int maxChunkSize = 8096;
     private MultiQueryParamMode multiQueryParamMode;
 
-    private ClientLogger clientLogger = new DefaultClientLogger();
     private String userAgent = RestClientRequestContext.DEFAULT_USER_AGENT_VALUE;
 
     private Boolean enableCompression;
+    private Integer http2UpgradeMaxContentLength;
+    private final List<Consumer<HttpClientOptions>> clientOptionsCustomizers = new ArrayList<>();
+    private final List<Consumer<HttpClientRequest>> clientRequestCustomizers = new ArrayList<>();
 
     public ClientBuilderImpl() {
         configuration = new ConfigurationImpl(RuntimeType.CLIENT);
@@ -155,6 +170,11 @@ public class ClientBuilderImpl extends ClientBuilder {
         return this;
     }
 
+    public ClientBuilder http2UpgradeMaxContentLength(int http2UpgradeMaxContentLength) {
+        this.http2UpgradeMaxContentLength = http2UpgradeMaxContentLength;
+        return this;
+    }
+
     public ClientBuilder alpn(boolean alpn) {
         this.alpn = alpn;
         return this;
@@ -196,6 +216,11 @@ public class ClientBuilderImpl extends ClientBuilder {
         return this;
     }
 
+    public ClientBuilder maskedHeaders(Set<String> maskedHeaders) {
+        this.maskedHeaders = maskedHeaders;
+        return this;
+    }
+
     public ClientBuilder clientLogger(ClientLogger clientLogger) {
         this.clientLogger = clientLogger;
         return this;
@@ -208,6 +233,16 @@ public class ClientBuilderImpl extends ClientBuilder {
 
     public ClientBuilder maxChunkSize(int maxChunkSize) {
         this.maxChunkSize = maxChunkSize;
+        return this;
+    }
+
+    public ClientBuilder clientOptionsCustomizer(Consumer<HttpClientOptions> clientOptionsCustomizer) {
+        this.clientOptionsCustomizers.add(clientOptionsCustomizer);
+        return this;
+    }
+
+    public ClientBuilder clientRequestCustomizer(Consumer<HttpClientRequest> clientRequestsCustomizer) {
+        this.clientRequestCustomizers.add(clientRequestsCustomizer);
         return this;
     }
 
@@ -228,6 +263,10 @@ public class ClientBuilderImpl extends ClientBuilder {
             options.setAlpnVersions(List.of(HttpVersion.HTTP_2, HttpVersion.HTTP_1_1));
         }
 
+        if (http2UpgradeMaxContentLength != null) {
+            options.setHttp2UpgradeMaxContentLength(http2UpgradeMaxContentLength);
+        }
+
         if (tlsConfig != null) {
             populateSecurityOptionsFromTlsConfig(options);
         } else {
@@ -244,6 +283,12 @@ public class ClientBuilderImpl extends ClientBuilder {
                 }
                 if (proxyUser != null && !proxyUser.isBlank()) {
                     proxyOptions.setUsername(proxyUser);
+                }
+                if (proxyConnectTimeout != null) {
+                    proxyOptions.setConnectTimeout(proxyConnectTimeout);
+                }
+                if (proxyType != null) {
+                    proxyOptions.setType(proxyType);
                 }
                 options.setProxyOptions(proxyOptions);
                 configureNonProxyHosts(options, nonProxyHosts);
@@ -287,7 +332,23 @@ public class ClientBuilderImpl extends ClientBuilder {
 
         clientLogger.setBodySize(loggingBodySize);
 
+        if (maskedHeaders == null || maskedHeaders.isEmpty()) {
+            clientLogger.setMaskedHeaders(Collections.emptySet());
+        } else {
+            Set<String> effectiveMaskedHeaders = new HashSet<>();
+            for (String maskedHeader : maskedHeaders) {
+                effectiveMaskedHeaders.add(maskedHeader.toLowerCase(Locale.ROOT));
+            }
+
+            clientLogger.setMaskedHeaders(Collections.unmodifiableSet(effectiveMaskedHeaders));
+        }
+
         options.setMaxChunkSize(maxChunkSize);
+
+        for (Consumer<HttpClientOptions> clientOptionsCustomizer : clientOptionsCustomizers) {
+            clientOptionsCustomizer.accept(options);
+        }
+
         return new ClientImpl(options,
                 new ConfigurationImpl(configuration),
                 CLIENT_CONTEXT_RESOLVER.resolve(Thread.currentThread().getContextClassLoader()),
@@ -296,7 +357,8 @@ public class ClientBuilderImpl extends ClientBuilder {
                 followRedirects,
                 multiQueryParamMode,
                 loggingScope,
-                clientLogger, userAgent);
+                clientLogger, userAgent, tlsConfig != null ? tlsConfig.getName().orElse(null) : null,
+                clientRequestCustomizers);
 
     }
 
@@ -479,6 +541,16 @@ public class ClientBuilderImpl extends ClientBuilder {
 
     public ClientBuilderImpl nonProxyHosts(String nonProxyHosts) {
         this.nonProxyHosts = nonProxyHosts;
+        return this;
+    }
+
+    public ClientBuilderImpl proxyConnectTimeout(Duration proxyConnectTimeout) {
+        this.proxyConnectTimeout = proxyConnectTimeout;
+        return this;
+    }
+
+    public ClientBuilderImpl proxyType(ProxyType proxyType) {
+        this.proxyType = proxyType;
         return this;
     }
 }

@@ -68,6 +68,7 @@ import io.quarkus.arc.runtime.LaunchModeProducer;
 import io.quarkus.arc.runtime.LoggerProducer;
 import io.quarkus.arc.runtime.appcds.JvmStartupOptimizerArchiveRecorder;
 import io.quarkus.arc.runtime.context.ArcContextProvider;
+import io.quarkus.arc.shutdown.ArcShutdownListener;
 import io.quarkus.bootstrap.BootstrapDebug;
 import io.quarkus.deployment.Capabilities;
 import io.quarkus.deployment.Capability;
@@ -89,11 +90,13 @@ import io.quarkus.deployment.builditem.GeneratedResourceBuildItem;
 import io.quarkus.deployment.builditem.LaunchModeBuildItem;
 import io.quarkus.deployment.builditem.LiveReloadBuildItem;
 import io.quarkus.deployment.builditem.ShutdownContextBuildItem;
+import io.quarkus.deployment.builditem.ShutdownListenerBuildItem;
 import io.quarkus.deployment.builditem.TestClassPredicateBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveFieldBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveMethodBuildItem;
 import io.quarkus.deployment.pkg.builditem.JvmStartupOptimizerArchiveRequestedBuildItem;
+import io.quarkus.deployment.shutdown.ShutdownBuildTimeConfig;
 import io.quarkus.runtime.LaunchMode;
 import io.quarkus.runtime.QuarkusApplication;
 import io.quarkus.runtime.annotations.QuarkusMain;
@@ -597,20 +600,21 @@ public class ArcProcessor {
                 TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start));
 
         // Register all qualifiers for reflection to support type-safe resolution at runtime in native image
-        for (ClassInfo qualifier : beanProcessor.getBeanDeployment().getQualifiers()) {
-            reflectiveClasses
-                    .produce(ReflectiveClassBuildItem.builder(qualifier.name().toString())
-                            .reason(getClass().getName())
-                            .methods().build());
+        final var qualifiers = beanProcessor.getBeanDeployment().getQualifiers();
+        final var bindings = beanProcessor.getBeanDeployment().getInterceptorBindings();
+        Collection<String> forReflection = new ArrayList<>(qualifiers.size() + bindings.size());
+        for (ClassInfo qualifier : qualifiers) {
+            forReflection.add(qualifier.name().toString());
         }
 
         // Register all interceptor bindings for reflection so that AnnotationLiteral.equals() works in a native image
-        for (ClassInfo binding : beanProcessor.getBeanDeployment().getInterceptorBindings()) {
-            reflectiveClasses
-                    .produce(ReflectiveClassBuildItem.builder(binding.name().toString())
-                            .reason(getClass().getName())
-                            .methods().build());
+        for (ClassInfo binding : bindings) {
+            forReflection.add(binding.name().toString());
         }
+
+        reflectiveClasses.produce(ReflectiveClassBuildItem.builder(forReflection)
+                .reason(getClass().getName())
+                .methods().build());
     }
 
     // PHASE 6 - initialize the container
@@ -618,11 +622,12 @@ public class ArcProcessor {
     @Consume(ResourcesGeneratedPhaseBuildItem.class)
     @Record(STATIC_INIT)
     public ArcContainerBuildItem initializeContainer(ArcConfig config, ArcRecorder recorder,
-            ShutdownContextBuildItem shutdown, Optional<CurrentContextFactoryBuildItem> currentContextFactory)
+            ShutdownContextBuildItem shutdown, Optional<CurrentContextFactoryBuildItem> currentContextFactory,
+            LaunchModeBuildItem launchMode)
             throws Exception {
         ArcContainer container = recorder.initContainer(shutdown,
                 currentContextFactory.isPresent() ? currentContextFactory.get().getFactory() : null,
-                config.strictCompatibility());
+                config.strictCompatibility(), launchMode.isTest());
         return new ArcContainerBuildItem(container);
     }
 
@@ -759,6 +764,14 @@ public class ArcProcessor {
         }
     }
 
+    @BuildStep
+    void registerPreShutdownListener(ShutdownBuildTimeConfig shutdownBuildTimeConfig,
+            BuildProducer<ShutdownListenerBuildItem> shutdownListenerBuildItemBuildProducer) {
+        if (shutdownBuildTimeConfig.delayEnabled()) {
+            shutdownListenerBuildItemBuildProducer.produce(new ShutdownListenerBuildItem(new ArcShutdownListener()));
+        }
+    }
+
     Predicate<ClassInfo> createQuarkusComponentTestExcludePredicate(IndexView index) {
         // Exlude static nested classed declared on a QuarkusComponentTest:
         // 1. Test class annotated with @QuarkusComponentTest
@@ -854,8 +867,15 @@ public class ArcProcessor {
         }
 
         @Override
-        public void accept(BytecodeTransformer t) {
-            bytecodeTransformer.produce(new BytecodeTransformerBuildItem(t.getClassToTransform(), t.getVisitorFunction()));
+        public void accept(BytecodeTransformer transformer) {
+            if (transformer.getVisitorFunction() != null) {
+                bytecodeTransformer.produce(
+                        new BytecodeTransformerBuildItem(transformer.getClassToTransform(), transformer.getVisitorFunction()));
+            } else if (transformer.getInputTransformer() != null) {
+                bytecodeTransformer.produce(new BytecodeTransformerBuildItem.Builder()
+                        .setClassToTransform(transformer.getClassToTransform())
+                        .setInputTransformer(transformer.getInputTransformer()).build());
+            }
         }
     }
 }

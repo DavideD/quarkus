@@ -21,11 +21,13 @@ import io.quarkus.deployment.builditem.ConsoleFormatterBannerBuildItem;
 import io.quarkus.deployment.dev.testing.TestHandler;
 import io.quarkus.deployment.dev.testing.TestSetupBuildItem;
 import io.quarkus.deployment.dev.testing.TestSupport;
+import io.quarkus.deployment.jvm.ResolvedJVMRequirements;
 import io.quarkus.deployment.logging.LoggingSetupBuildItem;
 import io.quarkus.deployment.steps.ClassTransformingBuildStep;
 import io.quarkus.dev.spi.DevModeType;
 import io.quarkus.dev.spi.HotReplacementSetup;
 import io.quarkus.runner.bootstrap.AugmentActionImpl;
+import io.quarkus.runtime.JVMUnsafeWarningsControl;
 import io.quarkus.runtime.Quarkus;
 
 /**
@@ -104,6 +106,9 @@ public class IsolatedTestModeMain extends IsolatedDevModeMain {
     //the main entry point, but loaded inside the augmentation class loader
     @Override
     public void accept(CuratedApplication o, Map<String, Object> params) {
+        // Ensure JVM warnings are suppressed for all dev mode entry points (idempotent)
+        JVMUnsafeWarningsControl.disableUnsafeRelatedWarnings();
+
         System.setProperty("java.nio.channels.DefaultThreadPool.threadFactory",
                 "io.quarkus.dev.io.NioThreadPoolThreadFactory");
         Timing.staticInitStarted(o.getOrCreateBaseRuntimeClassLoader(), false);
@@ -129,7 +134,8 @@ public class IsolatedTestModeMain extends IsolatedDevModeMain {
             }
             try {
                 augmentAction.performCustomBuild(TestHandler.class.getName(), null, TestSetupBuildItem.class.getName(),
-                        LoggingSetupBuildItem.class.getName(), ConsoleFormatterBannerBuildItem.class.getName());
+                        LoggingSetupBuildItem.class.getName(), ConsoleFormatterBannerBuildItem.class.getName(),
+                        ResolvedJVMRequirements.class.getName());
             } catch (Throwable t) {
                 //logging may not have been started, this is more reliable
                 System.err.println("Failed to start quarkus test mode");

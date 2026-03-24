@@ -205,6 +205,11 @@ List<Person> allPersons = Person.listAll();
 ObjectId personId = new ObjectId(idAsString);
 person = Person.findById(personId);
 
+// finding a specific persons by their ID
+ObjectId personId1 = new ObjectId(id1AsString);
+ObjectId personId2 = new ObjectId(id2AsString);
+List<Person> person = Person.findByIds(List.of(personId1, personId2);
+
 // finding a specific person by ID via an Optional
 Optional<Person> optional = Person.findByIdOptional(personId);
 person = optional.orElseThrow(() -> new NotFoundException());
@@ -372,6 +377,11 @@ List<Person> allPersons = personRepository.listAll();
 // here we build a new ObjectId, but you can also retrieve it from the existing entity after being persisted
 ObjectId personId = new ObjectId(idAsString);
 person = personRepository.findById(personId);
+
+// finding a specific persons by their ID
+ObjectId personId1 = new ObjectId(id1AsString);
+ObjectId personId2 = new ObjectId(id2AsString);
+List<Person> person = personRepository.findByIds(List.of(personId1, personId2);
 
 // finding a specific person by ID via an Optional
 Optional<Person> optional = personRepository.findByIdOptional(personId);
@@ -612,27 +622,12 @@ Or by name using a `Map`:
 
 [source,java]
 ----
-Map<String, Object> params = new HashMap<>();
-params.put("name", "Loïc");
-params.put("status", Status.Alive);
+Map<String, Object> params = Map.of("name", "Loïc", "status", Status.Alive);
 Person.find("name = :name and status = :status", params);
 Person.find("{'name': :name, 'status', :status}", params);
 ----
 
-Or using the convenience class `Parameters` either as is or to build a `Map`:
-
-[source,java]
-----
-// generate a Map
-Person.find("name = :name and status = :status",
-         Parameters.with("name", "Loïc").and("status", Status.Alive).map());
-
-// use it as-is
-Person.find("{'name': :name, 'status': :status}",
-         Parameters.with("name", "Loïc").and("status", Status.Alive));
-----
-
-Every query operation accepts passing parameters by index (`Object...`), or by name (`Map<String,Object>` or `Parameters`).
+Every query operation accepts passing parameters by index (`Object...`), or by name (`Map<String,Object>`).
 
 When you use query parameters, be careful that PanacheQL queries will refer to the Object parameters name but native queries will refer to MongoDB field names.
 
@@ -863,7 +858,7 @@ data class Person (
 
 [IMPORTANT]
 ====
-Unlike the @BsonCreator approach, `val` cannot be used here. Properties must be defined as `var`, otherwise, the system creates an object with 
+Unlike the @BsonCreator approach, `val` cannot be used here. Properties must be defined as `var`, otherwise, the system creates an object with
 `null` values for every property.
 ====
 
@@ -934,6 +929,11 @@ Uni<List<ReactivePerson>> allPersons = ReactivePerson.listAll();
 // here we build a new ObjectId, but you can also retrieve it from the existing entity after being persisted
 ObjectId personId = new ObjectId(idAsString);
 Uni<ReactivePerson> personById = ReactivePerson.findById(personId);
+
+// finding a specific persons by their ID
+ObjectId personId1 = new ObjectId(id1AsString);
+ObjectId personId2 = new ObjectId(id2AsString);
+Uni<List<Person>> person = ReactivePerson.findByIds(List.of(personId1, personId2);
 
 // finding a specific person by ID via an Optional
 Uni<Optional<ReactivePerson>> optional = ReactivePerson.findByIdOptional(personId);
@@ -1103,7 +1103,7 @@ what mock object to pass.
 
 === Using the repository pattern
 
-If you are using the repository pattern you can use Mockito directly, using the `quarkus-junit5-mockito` module,
+If you are using the repository pattern you can use Mockito directly, using the `quarkus-junit-mockito` module,
 which makes mocking beans much easier:
 
 [source,xml,role="primary asciidoc-tabs-target-sync-cli asciidoc-tabs-target-sync-maven"]
@@ -1111,7 +1111,7 @@ which makes mocking beans much easier:
 ----
 <dependency>
     <groupId>io.quarkus</groupId>
-    <artifactId>quarkus-junit5-mockito</artifactId>
+    <artifactId>quarkus-junit-mockito</artifactId>
     <scope>test</scope>
 </dependency>
 ----
@@ -1119,7 +1119,7 @@ which makes mocking beans much easier:
 [source,gradle,role="secondary asciidoc-tabs-target-sync-gradle"]
 .build.gradle
 ----
-testImplementation("io.quarkus:quarkus-junit5-mockito")
+testImplementation("io.quarkus:quarkus-junit-mockito")
 ----
 
 Given this simple entity:

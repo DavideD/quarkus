@@ -15,18 +15,20 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import jakarta.enterprise.inject.Instance;
-import jakarta.enterprise.inject.spi.CDI;
 
 import io.quarkus.arc.Arc;
 import io.quarkus.arc.ArcContainer;
 import io.quarkus.security.StringPermission;
+import io.quarkus.security.identity.AuthenticationRequestContext;
 import io.quarkus.security.identity.SecurityIdentity;
 import io.quarkus.security.identity.SecurityIdentityAugmentor;
 import io.quarkus.security.runtime.QuarkusPermissionSecurityIdentityAugmentor;
 import io.quarkus.security.runtime.QuarkusPrincipal;
 import io.quarkus.security.runtime.QuarkusSecurityIdentity;
+import io.quarkus.security.spi.runtime.BlockingSecurityExecutor;
 import io.quarkus.test.junit.callback.QuarkusTestAfterEachCallback;
 import io.quarkus.test.junit.callback.QuarkusTestBeforeEachCallback;
 import io.quarkus.test.junit.callback.QuarkusTestMethodContext;
@@ -39,7 +41,7 @@ public class QuarkusSecurityTestExtension implements QuarkusTestBeforeEachCallba
     @Override
     public void afterEach(QuarkusTestMethodContext context) {
         try {
-            if (getAnnotationContainer(context).isPresent()) {
+            if (getTestSecurityContext(context).isPresent()) {
                 final ArcContainer container = Arc.container();
                 container.select(TestAuthController.class).get().setEnabled(true);
                 for (var testMechanism : container.select(AbstractTestHttpAuthenticationMechanism.class)) {
@@ -60,14 +62,13 @@ public class QuarkusSecurityTestExtension implements QuarkusTestBeforeEachCallba
     @Override
     public void beforeEach(QuarkusTestMethodContext context) {
         try {
-            Optional<AnnotationContainer<TestSecurity>> annotationContainerOptional = getAnnotationContainer(context);
-            if (annotationContainerOptional.isEmpty()) {
+            var testSecurityContext = getTestSecurityContext(context);
+            if (!testSecurityContext.isPresent()) {
                 return;
             }
-            var annotationContainer = annotationContainerOptional.get();
-            Annotation[] allAnnotations = annotationContainer.getElement().getAnnotations();
-            TestSecurity testSecurity = annotationContainer.getAnnotation();
-            final ArcContainer container = Arc.container();
+            Annotation[] allAnnotations = testSecurityContext.allAnnotations();
+            TestSecurity testSecurity = testSecurityContext.annotationContainer.getAnnotation();
+            final ArcContainer container = Arc.requireContainer();
             container.select(TestAuthController.class).get().setEnabled(testSecurity.authorizationEnabled());
             if (testSecurity.user().isEmpty()) {
                 if (testSecurity.roles().length != 0) {
@@ -90,7 +91,7 @@ public class QuarkusSecurityTestExtension implements QuarkusTestBeforeEachCallba
                             .collect(Collectors.toMap(s -> s.key(), s -> s.type().convert(s.value()))));
                 }
 
-                SecurityIdentity userIdentity = augment(user.build(), allAnnotations);
+                SecurityIdentity userIdentity = augment(user.build(), allAnnotations, container);
                 container.select(TestIdentityAssociation.class).get().setTestIdentity(userIdentity);
                 if (!testSecurity.authMechanism().isEmpty()) {
                     for (var testMechanism : container.select(AbstractTestHttpAuthenticationMechanism.class)) {
@@ -163,7 +164,7 @@ public class QuarkusSecurityTestExtension implements QuarkusTestBeforeEachCallba
                 possessedPermissions.stream().anyMatch(possessedPermission -> possessedPermission.implies(requiredPermission)));
     }
 
-    private Optional<AnnotationContainer<TestSecurity>> getAnnotationContainer(QuarkusTestMethodContext context)
+    private TestSecurityContext getTestSecurityContext(QuarkusTestMethodContext context)
             throws Exception {
         //the usual ClassLoader hacks to get our copy of the TestSecurity annotation
         ClassLoader cl = Thread.currentThread().getContextClassLoader();
@@ -183,15 +184,48 @@ public class QuarkusSecurityTestExtension implements QuarkusTestBeforeEachCallba
                 TestSecurity.class);
         if (annotationContainerOptional.isEmpty()) {
             annotationContainerOptional = AnnotationUtils.findAnnotation(original, TestSecurity.class);
+            return new TestSecurityContext(annotationContainerOptional.orElse(null), method);
         }
-        return annotationContainerOptional;
+        return new TestSecurityContext(annotationContainerOptional.orElse(null), null);
     }
 
-    private SecurityIdentity augment(SecurityIdentity identity, Annotation[] annotations) {
-        Instance<TestSecurityIdentityAugmentor> producer = CDI.current().select(TestSecurityIdentityAugmentor.class);
+    private SecurityIdentity augment(SecurityIdentity identity, Annotation[] annotations, ArcContainer container) {
+        SecurityIdentity augmentedIdentity = identity;
+
+        Instance<TestSecurityIdentityAugmentor> producer = container.select(TestSecurityIdentityAugmentor.class);
         if (producer.isResolvable()) {
-            return producer.get().augment(identity, annotations);
+            augmentedIdentity = producer.get().augment(identity, annotations);
         }
-        return identity;
+
+        try (var quarkusPermissionAugmentorInstance = container.instance(QuarkusPermissionSecurityIdentityAugmentor.class)) {
+            if (quarkusPermissionAugmentorInstance.isAvailable()) {
+                AuthenticationRequestContext authenticationRequestContext = blockingCode -> container
+                        .select(BlockingSecurityExecutor.class).get().executeBlocking(blockingCode);
+                augmentedIdentity = quarkusPermissionAugmentorInstance.get()
+                        .augment(augmentedIdentity, authenticationRequestContext,
+                                Map.of())
+                        .await().indefinitely();
+            }
+        }
+
+        return augmentedIdentity;
+    }
+
+    private record TestSecurityContext(AnnotationContainer<TestSecurity> annotationContainer, Method method) {
+        private Annotation[] allAnnotations() {
+            Annotation[] testSecurityElementAnnotations = annotationContainer.getElement().getAnnotations();
+            boolean classLevelTestSecurity = method != null;
+            if (classLevelTestSecurity && method.getAnnotations().length > 0) {
+                // add method-level annotations as there could be for example @OidcSecurity
+                return Stream.concat(
+                        Arrays.stream(method.getAnnotations()),
+                        Arrays.stream(testSecurityElementAnnotations)).toArray(Annotation[]::new);
+            }
+            return testSecurityElementAnnotations;
+        }
+
+        private boolean isPresent() {
+            return annotationContainer != null;
+        }
     }
 }

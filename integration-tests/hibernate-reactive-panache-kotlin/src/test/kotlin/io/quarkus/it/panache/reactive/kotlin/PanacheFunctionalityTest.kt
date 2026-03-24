@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import io.quarkus.hibernate.reactive.panache.Panache
 import io.quarkus.hibernate.reactive.panache.common.WithSession
 import io.quarkus.hibernate.reactive.panache.common.WithTransaction
-import io.quarkus.hibernate.reactive.panache.common.runtime.ReactiveTransactional
 import io.quarkus.test.TestReactiveTransaction
 import io.quarkus.test.junit.DisabledOnIntegrationTest
 import io.quarkus.test.junit.QuarkusTest
@@ -15,7 +14,6 @@ import io.restassured.RestAssured.`when`
 import io.restassured.http.ContentType
 import io.smallrye.mutiny.Uni
 import jakarta.json.bind.JsonbBuilder
-import jakarta.persistence.PersistenceException
 import java.util.function.Supplier
 import org.hamcrest.Matchers.`is`
 import org.junit.jupiter.api.Assertions
@@ -267,7 +265,7 @@ open class PanacheFunctionalityTest {
         asserter.assertEquals({ testReactiveTransactional3() }, 1L)
     }
 
-    @ReactiveTransactional
+    @WithTransaction
     fun testReactiveTransactional3(): Uni<Long> {
         return Panache.currentTransaction()
             .invoke { tx -> Assertions.assertNotNull(tx) }
@@ -281,10 +279,16 @@ open class PanacheFunctionalityTest {
     @Order(300)
     @RunOnVertxContext
     @DisabledOnIntegrationTest
-    fun testPersistenceException(asserter: UniAsserter) {
+    fun testDeleteUnmanaged(asserter: UniAsserter) {
+        // This used to throw PersistenceException but that was invalid,
+        // see
+        // https://github.com/hibernate/hibernate-reactive/commit/10b0d421ae6a554528f1239ad74cde5a4400bf5d
+        // If you're wondering why we're testing this:
+        // apparently we're actually testing UniAsserter here, see
+        // https://github.com/quarkusio/quarkus/pull/18794
         asserter.assertFailedWith(
             { Panache.withSession { Person().delete() } },
-            PersistenceException::class.java,
+            IllegalArgumentException::class.java,
         )
     }
 }

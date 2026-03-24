@@ -1,6 +1,7 @@
 package io.quarkus.hibernate.validator.deployment;
 
 import static io.quarkus.deployment.annotations.ExecutionTime.STATIC_INIT;
+import static org.jboss.jandex.gizmo2.Jandex2Gizmo.classDescOf;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -14,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
@@ -65,7 +67,6 @@ import io.quarkus.arc.deployment.AnnotationsTransformerBuildItem;
 import io.quarkus.arc.deployment.AutoAddScopeBuildItem;
 import io.quarkus.arc.deployment.BeanArchiveIndexBuildItem;
 import io.quarkus.arc.deployment.BeanContainerBuildItem;
-import io.quarkus.arc.deployment.BeanContainerListenerBuildItem;
 import io.quarkus.arc.deployment.SyntheticBeanBuildItem;
 import io.quarkus.arc.deployment.UnremovableBeanBuildItem;
 import io.quarkus.arc.processor.BeanInfo;
@@ -76,7 +77,7 @@ import io.quarkus.builder.item.SimpleBuildItem;
 import io.quarkus.deployment.Capabilities;
 import io.quarkus.deployment.Capability;
 import io.quarkus.deployment.Feature;
-import io.quarkus.deployment.GeneratedClassGizmoAdaptor;
+import io.quarkus.deployment.GeneratedClassGizmo2Adaptor;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.ExecutionTime;
@@ -86,6 +87,7 @@ import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
 import io.quarkus.deployment.builditem.ConfigClassBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.GeneratedClassBuildItem;
+import io.quarkus.deployment.builditem.GeneratedResourceBuildItem;
 import io.quarkus.deployment.builditem.HotDeploymentWatchedFileBuildItem;
 import io.quarkus.deployment.builditem.NativeImageFeatureBuildItem;
 import io.quarkus.deployment.builditem.RunTimeConfigBuilderBuildItem;
@@ -95,17 +97,18 @@ import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBundleBuil
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveFieldBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveMethodBuildItem;
-import io.quarkus.deployment.builditem.nativeimage.RuntimeReinitializedClassBuildItem;
-import io.quarkus.deployment.builditem.nativeimage.ServiceProviderBuildItem;
+import io.quarkus.deployment.builditem.nativeimage.RuntimeInitializedClassBuildItem;
 import io.quarkus.deployment.logging.LogCleanupFilterBuildItem;
 import io.quarkus.deployment.pkg.steps.NativeOrNativeSourcesBuild;
 import io.quarkus.deployment.recording.RecorderContext;
-import io.quarkus.gizmo.ClassCreator;
-import io.quarkus.gizmo.FieldDescriptor;
-import io.quarkus.gizmo.Gizmo;
-import io.quarkus.gizmo.MethodCreator;
-import io.quarkus.gizmo.MethodDescriptor;
-import io.quarkus.gizmo.ResultHandle;
+import io.quarkus.deployment.util.AsmUtil;
+import io.quarkus.gizmo2.Const;
+import io.quarkus.gizmo2.Gizmo;
+import io.quarkus.gizmo2.LocalVar;
+import io.quarkus.gizmo2.ParamVar;
+import io.quarkus.gizmo2.StaticFieldVar;
+import io.quarkus.gizmo2.desc.ConstructorDesc;
+import io.quarkus.gizmo2.desc.MethodDesc;
 import io.quarkus.hibernate.validator.ValidatorFactoryCustomizer;
 import io.quarkus.hibernate.validator.runtime.DisableLoggingFeature;
 import io.quarkus.hibernate.validator.runtime.HibernateBeanValidationConfigValidator;
@@ -120,6 +123,7 @@ import io.quarkus.hibernate.validator.runtime.jaxrs.ViolationReport;
 import io.quarkus.hibernate.validator.runtime.locale.LocaleResolversWrapper;
 import io.quarkus.hibernate.validator.spi.AdditionalConstrainedClassBuildItem;
 import io.quarkus.hibernate.validator.spi.BeanValidationAnnotationsBuildItem;
+import io.quarkus.hibernate.validator.spi.BeanValidationTraversableResolverBuildItem;
 import io.quarkus.jaxrs.spi.deployment.AdditionalJaxRsResourceMethodAnnotationsBuildItem;
 import io.quarkus.resteasy.common.spi.ResteasyConfigBuildItem;
 import io.quarkus.resteasy.common.spi.ResteasyDotNames;
@@ -169,6 +173,11 @@ class HibernateValidatorProcessor {
     private static final DotName GRAALVM_FEATURE = DotName.createSimple("org.graalvm.nativeimage.hosted.Feature");
 
     private static final Pattern BUILT_IN_CONSTRAINT_REPEATABLE_CONTAINER_PATTERN = Pattern.compile("\\$List$");
+
+    @BuildStep
+    void feature(BuildProducer<FeatureBuildItem> features) {
+        features.produce(new FeatureBuildItem(Feature.HIBERNATE_VALIDATOR));
+    }
 
     @BuildStep
     HotDeploymentWatchedFileBuildItem configFile() {
@@ -241,7 +250,9 @@ class HibernateValidatorProcessor {
             CombinedIndexBuildItem combinedIndex,
             List<ConfigClassBuildItem> configClasses,
             BeanValidationAnnotationsBuildItem beanValidationAnnotations,
+            BuildProducer<UnremovableBeanBuildItem> unremovableBeans,
             BuildProducer<GeneratedClassBuildItem> generatedClass,
+            BuildProducer<GeneratedResourceBuildItem> generatedResource,
             BuildProducer<ReflectiveClassBuildItem> reflectiveClass,
             BuildProducer<StaticInitConfigBuilderBuildItem> staticInitConfigBuilder,
             BuildProducer<RunTimeConfigBuilderBuildItem> runTimeConfigBuilder) {
@@ -263,8 +274,8 @@ class HibernateValidatorProcessor {
                     });
         }
 
-        Set<DotName> constrainedConfigMappings = new HashSet<>();
-        Set<String> configMappingsConstraints = new HashSet<>();
+        Set<DotName> constrainedConfigMappings = new TreeSet<>();
+        Set<String> configMappingsConstraints = new TreeSet<>();
 
         for (DotName consideredAnnotation : beanValidationAnnotations.getAllAnnotations()) {
             Collection<AnnotationInstance> annotationInstances = combinedIndex.getIndex().getAnnotations(consideredAnnotation);
@@ -318,11 +329,13 @@ class HibernateValidatorProcessor {
                 continue;
             }
 
-            embeddingMap.get(constrainedConfigMapping).values().stream()
-                    .map(c -> c.getConfigComponentInterfaces())
-                    .flatMap(Collection::stream)
-                    .map(DotName::createSimple)
-                    .forEach(configComponentsInterfacesToRegisterForReflection::add);
+            for (ConfigClassBuildItem configClass : embeddingMap.get(constrainedConfigMapping).values()) {
+                unremovableBeans.produce(UnremovableBeanBuildItem.beanTypes(configClass.getConfigClass()));
+                configClass.getConfigComponentInterfaces()
+                        .stream()
+                        .map(DotName::createSimple)
+                        .forEach(configComponentsInterfacesToRegisterForReflection::add);
+            }
         }
         reflectiveClass.produce(ReflectiveClassBuildItem
                 .builder(configComponentsInterfacesToRegisterForReflection.stream().map(DotName::toString)
@@ -331,57 +344,45 @@ class HibernateValidatorProcessor {
                 .methods().build());
 
         String builderClassName = HibernateBeanValidationConfigValidator.class.getName() + "Builder";
-        try (ClassCreator classCreator = ClassCreator.builder()
-                .classOutput(new GeneratedClassGizmoAdaptor(generatedClass, true))
-                .className(builderClassName)
-                .interfaces(ConfigBuilder.class)
-                .setFinal(true)
-                .build()) {
+        Gizmo gizmo = Gizmo.create(new GeneratedClassGizmo2Adaptor(generatedClass, generatedResource, true))
+                .withDebugInfo(false)
+                .withParameters(false);
+        gizmo.class_(builderClassName, cc -> {
+            cc.final_();
+            cc.implements_(ConfigBuilder.class);
 
-            // Static Init Validator
-            MethodCreator clinit = classCreator
-                    .getMethodCreator(MethodDescriptor.ofMethod(builderClassName, "<clinit>", void.class));
-            clinit.setModifiers(Opcodes.ACC_STATIC);
+            StaticFieldVar configValidator = cc.staticField("configValidator", fc -> {
+                fc.private_();
+                fc.final_();
+                fc.setType(BeanValidationConfigValidator.class);
+                fc.setInitializer(bc -> {
+                    LocalVar constraints = bc.localVar("constraints", bc.setOf(
+                            new ArrayList<>(configMappingsConstraints),
+                            Const::of));
 
-            ResultHandle constraints = clinit.newInstance(MethodDescriptor.ofConstructor(HashSet.class));
-            for (String configMappingsConstraint : configMappingsConstraints) {
-                clinit.invokeVirtualMethod(MethodDescriptor.ofMethod(HashSet.class, "add", boolean.class, Object.class),
-                        constraints, clinit.load(configMappingsConstraint));
-            }
+                    LocalVar classes = bc.localVar("classes", bc.setOf(
+                            new ArrayList<>(configClassesToValidate),
+                            c -> Const.of(classDescOf(c))));
 
-            ResultHandle classes = clinit.newInstance(MethodDescriptor.ofConstructor(HashSet.class));
-            for (DotName configClassToValidate : configClassesToValidate) {
-                clinit.invokeVirtualMethod(MethodDescriptor.ofMethod(HashSet.class, "add", boolean.class, Object.class),
-                        classes, clinit.loadClass(configClassToValidate.toString()));
-            }
+                    bc.yield(bc.new_(ConstructorDesc.of(HibernateBeanValidationConfigValidator.class, Set.class, Set.class),
+                            constraints, classes));
+                });
+            });
 
-            ResultHandle configValidator = clinit.newInstance(
-                    MethodDescriptor.ofConstructor(HibernateBeanValidationConfigValidator.class, Set.class, Set.class),
-                    constraints, classes);
+            cc.defaultConstructor();
 
-            FieldDescriptor configValidatorField = FieldDescriptor.of(builderClassName, "configValidator",
-                    BeanValidationConfigValidator.class);
-            classCreator.getFieldCreator(configValidatorField)
-                    .setModifiers(Opcodes.ACC_STATIC | Opcodes.ACC_FINAL | Opcodes.ACC_PRIVATE);
-            clinit.writeStaticField(configValidatorField, configValidator);
+            cc.method("configBuilder", mc -> {
+                mc.returning(SmallRyeConfigBuilder.class);
+                ParamVar builder = mc.parameter("builder", SmallRyeConfigBuilder.class);
+                mc.body(bc -> {
+                    MethodDesc withValidator = MethodDesc.of(SmallRyeConfigBuilder.class, "withValidator",
+                            SmallRyeConfigBuilder.class, ConfigValidator.class);
 
-            clinit.returnNull();
-            clinit.close();
-
-            MethodCreator configBuilderMethod = classCreator.getMethodCreator(
-                    MethodDescriptor.ofMethod(
-                            ConfigBuilder.class, "configBuilder",
-                            SmallRyeConfigBuilder.class, SmallRyeConfigBuilder.class));
-            ResultHandle configBuilder = configBuilderMethod.getMethodParam(0);
-
-            // Add Validator to the builder
-            configBuilderMethod.invokeVirtualMethod(
-                    MethodDescriptor.ofMethod(SmallRyeConfigBuilder.class, "withValidator", SmallRyeConfigBuilder.class,
-                            ConfigValidator.class),
-                    configBuilder, configBuilderMethod.readStaticField(configValidatorField));
-
-            configBuilderMethod.returnValue(configBuilder);
-        }
+                    bc.invokeVirtual(withValidator, builder, configValidator);
+                    bc.return_(builder);
+                });
+            });
+        });
 
         reflectiveClass.produce(ReflectiveClassBuildItem.builder(builderClassName).build());
         staticInitConfigBuilder.produce(new StaticInitConfigBuilderBuildItem(builderClassName));
@@ -462,24 +463,16 @@ class HibernateValidatorProcessor {
             BeanValidationAnnotationsBuildItem beanValidationAnnotations,
             BuildProducer<ReflectiveFieldBuildItem> reflectiveFields,
             BuildProducer<ReflectiveMethodBuildItem> reflectiveMethods,
-            BuildProducer<ReflectiveClassBuildItem> reflectiveClass,
-            BuildProducer<ServiceProviderBuildItem> serviceProvider,
             BuildProducer<AnnotationsTransformerBuildItem> annotationsTransformers,
             BuildProducer<SyntheticBeanBuildItem> syntheticBeans,
             BeanArchiveIndexBuildItem beanArchiveIndexBuildItem,
             CombinedIndexBuildItem combinedIndexBuildItem,
             Optional<AdditionalConstrainedClassesIndexBuildItem> additionalConstrainedClassesIndexBuildItem,
-            BuildProducer<FeatureBuildItem> feature,
-            BuildProducer<BeanContainerListenerBuildItem> beanContainerListener,
             BuildProducer<UnremovableBeanBuildItem> unremovableBeans,
-            ShutdownContextBuildItem shutdownContext,
-            List<ConfigClassBuildItem> configClasses,
             List<AdditionalJaxRsResourceMethodAnnotationsBuildItem> additionalJaxRsResourceMethodAnnotations,
-            Capabilities capabilities,
+            Optional<BeanValidationTraversableResolverBuildItem> beanValidationTraversableResolver,
             LocalesBuildTimeConfig localesBuildTimeConfig,
             HibernateValidatorBuildTimeConfig hibernateValidatorBuildTimeConfig) throws Exception {
-
-        feature.produce(new FeatureBuildItem(Feature.HIBERNATE_VALIDATOR));
 
         IndexView indexView;
 
@@ -607,7 +600,8 @@ class HibernateValidatorProcessor {
                 .createWith(recorder.hibernateValidatorFactory(classesToBeValidated, detectedBuiltinConstraints,
                         valueExtractorClassProxies,
                         hasXmlConfiguration(),
-                        capabilities.isPresent(Capability.HIBERNATE_ORM),
+                        beanValidationTraversableResolver
+                                .map(BeanValidationTraversableResolverBuildItem::getAttributeLoadedPredicate),
                         localesBuildTimeConfig,
                         hibernateValidatorBuildTimeConfig))
                 .addQualifier().annotation(DotNames.NAMED).addValue("value", VALIDATOR_FACTORY_NAME).done()
@@ -652,8 +646,8 @@ class HibernateValidatorProcessor {
     }
 
     @BuildStep
-    public RuntimeReinitializedClassBuildItem reinitClockProviderSystemTimezone() {
-        return new RuntimeReinitializedClassBuildItem(
+    public RuntimeInitializedClassBuildItem reinitClockProviderSystemTimezone() {
+        return new RuntimeInitializedClassBuildItem(
                 "io.quarkus.hibernate.validator.runtime.clockprovider.HibernateValidatorClockProviderSystemZoneIdHolder");
     }
 
@@ -715,14 +709,14 @@ class HibernateValidatorProcessor {
                 .setClassToTransform(Validation.class.getName())
                 .setCacheable(true)
                 .setVisitorFunction(
-                        (className, classVisitor) -> new ClassVisitor(Gizmo.ASM_API_VERSION, classVisitor) {
+                        (className, classVisitor) -> new ClassVisitor(AsmUtil.ASM_API_VERSION, classVisitor) {
                             @Override
                             public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
                                     String[] exceptions) {
                                 MethodVisitor visitor = super.visitMethod(access, name, descriptor, signature, exceptions);
 
                                 if (name.equals("buildDefaultValidatorFactory")) {
-                                    return new MethodVisitor(Gizmo.ASM_API_VERSION, visitor) {
+                                    return new MethodVisitor(AsmUtil.ASM_API_VERSION, visitor) {
                                         @Override
                                         public void visitCode() {
                                             super.visitCode();

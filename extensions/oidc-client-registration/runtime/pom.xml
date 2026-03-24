@@ -26,9 +26,14 @@
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-oidc-common</artifactId>
         </dependency>
+        <!-- Required because deployment module depends on quarkus-devservices-keycloak -->
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-junit5-internal</artifactId>
+            <artifactId>quarkus-devservices</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-junit-internal</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

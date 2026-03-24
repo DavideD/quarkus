@@ -3,8 +3,11 @@ package io.quarkus.rest.client.reactive.runtime;
 import java.net.URI;
 import java.net.URL;
 import java.security.KeyStore;
+import java.time.Duration;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SSLContext;
@@ -17,11 +20,12 @@ import org.eclipse.microprofile.rest.client.ext.QueryParamStyle;
 import org.jboss.resteasy.reactive.client.api.ClientLogger;
 import org.jboss.resteasy.reactive.client.api.LoggingScope;
 
+import io.quarkus.proxy.ProxyType;
 import io.quarkus.rest.client.reactive.QuarkusRestClientBuilder;
 import io.quarkus.rest.client.reactive.runtime.context.ClientHeadersFactoryContextResolver;
-import io.quarkus.rest.client.reactive.runtime.context.HttpClientOptionsContextResolver;
 import io.quarkus.tls.TlsConfiguration;
 import io.vertx.core.http.HttpClientOptions;
+import io.vertx.core.http.HttpClientRequest;
 
 public class QuarkusRestClientBuilderImpl implements QuarkusRestClientBuilder {
 
@@ -128,6 +132,18 @@ public class QuarkusRestClientBuilderImpl implements QuarkusRestClientBuilder {
     }
 
     @Override
+    public QuarkusRestClientBuilder proxyConnectTimeout(Duration connectTimeout) {
+        delegate.proxyConnectTimeout(connectTimeout);
+        return this;
+    }
+
+    @Override
+    public QuarkusRestClientBuilder proxyType(ProxyType proxyType) {
+        delegate.proxyType(proxyType);
+        return this;
+    }
+
+    @Override
     public QuarkusRestClientBuilder multipartPostEncoderMode(String mode) {
         delegate.multipartPostEncoderMode(mode);
         return this;
@@ -217,18 +233,27 @@ public class QuarkusRestClientBuilderImpl implements QuarkusRestClientBuilder {
 
     @Override
     public QuarkusRestClientBuilder httpClientOptions(Class<? extends HttpClientOptions> httpClientOptionsClass) {
-        HttpClientOptions bean = BeanGrabber.getBeanIfDefined(httpClientOptionsClass);
-        if (bean == null) {
-            throw new IllegalArgumentException("Failed to instantiate the HTTP client options " + httpClientOptionsClass
-                    + ". Make sure the bean is properly configured for CDI injection.");
-        }
-
-        return httpClientOptions(bean);
+        delegate.httpClientOptions(httpClientOptionsClass);
+        return this;
     }
 
     @Override
     public QuarkusRestClientBuilder httpClientOptions(HttpClientOptions httpClientOptions) {
-        delegate.register(new HttpClientOptionsContextResolver(httpClientOptions));
+        delegate.httpClientOptions(httpClientOptions);
+        return this;
+    }
+
+    @Override
+    public QuarkusRestClientBuilder httpClientOptionsCustomizer(
+            Consumer<HttpClientOptions> httpClientOptionsCustomizer) {
+        delegate.clientOptionsCustomizer(httpClientOptionsCustomizer);
+        return this;
+    }
+
+    @Override
+    public QuarkusRestClientBuilder httpClientRequestCustomizer(
+            Consumer<HttpClientRequest> httpClientOptionsCustomizer) {
+        delegate.clientRequestCustomizer(httpClientOptionsCustomizer);
         return this;
     }
 
@@ -247,6 +272,12 @@ public class QuarkusRestClientBuilderImpl implements QuarkusRestClientBuilder {
     @Override
     public QuarkusRestClientBuilder loggingBodyLimit(Integer limit) {
         delegate.loggingBodyLimit(limit);
+        return this;
+    }
+
+    @Override
+    public QuarkusRestClientBuilder loggingMaskedHeaders(Set<String> maskedHeaders) {
+        delegate.loggingMaskedHeaders(maskedHeaders);
         return this;
     }
 

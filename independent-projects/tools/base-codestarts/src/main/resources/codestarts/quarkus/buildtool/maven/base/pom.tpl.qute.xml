@@ -4,6 +4,9 @@
     <groupId>{project.group-id}</groupId>
     <artifactId>{project.artifact-id}</artifactId>
     <version>{project.version}</version>
+    {#if quarkus.version == null || quarkus.version.compareVersionTo("3.30.999") > 0}
+    <packaging>quarkus</packaging>
+    {/if}
     {#if project.name }
     <name>{project.name}</name>
     {/if}
@@ -103,7 +106,11 @@
         <!-- Test dependencies -->
         <dependency>
             <groupId>io.quarkus</groupId>
+            {#if quarkus.version == null || quarkus.version.compareVersionTo("3.30.999") > 0}
+            <artifactId>quarkus-junit</artifactId>
+            {#else}
             <artifactId>quarkus-junit5</artifactId>
+            {/if}
             <scope>test</scope>
         </dependency>
         {#each test-dependencies}
@@ -134,6 +141,7 @@
                 <version>$\{quarkus.platform.version}</version>
             {/if}
                 <extensions>true</extensions>
+                {#if quarkus.version != null && quarkus.version.compareVersionTo("3.30.999") < 0}
                 <executions>
                     <execution>
                         <goals>
@@ -146,6 +154,7 @@
                         </goals>
                     </execution>
                 </executions>
+                {/if}
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>     
@@ -154,6 +163,22 @@
                 <configuration>
                     <parameters>true</parameters>
                 </configuration>
+                {#if input.selected-extensions-ga.contains('io.quarkus:quarkus-hibernate-panache-next')}
+                <executions>
+                    <execution>
+                        <id>default-compile</id>
+                        <configuration>
+                            <annotationProcessorPathsUseDepMgmt>true</annotationProcessorPathsUseDepMgmt>
+                            <annotationProcessorPaths>
+                                <annotationProcessorPath>
+                                    <groupId>org.hibernate.orm</groupId>
+                                    <artifactId>hibernate-processor</artifactId>
+                                </annotationProcessorPath>
+                            </annotationProcessorPaths>
+                        </configuration>
+                    </execution>
+                </executions>
+                {/if}
             </plugin>
             <!-- Run the tests in JVM mode -->
             <plugin>
@@ -161,6 +186,9 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>$\{surefire-plugin.version}</version>
                 <configuration>
+                    {#if quarkus.platform.version.compareVersionTo("3.30.999") > 0}
+                    <argLine>@\{argLine}</argLine>
+                    {/if}
                     <systemPropertyVariables>
                         <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
                         <maven.home>$\{maven.home}</maven.home>
@@ -181,6 +209,9 @@
                     </execution>
                 </executions>
                 <configuration>
+                    {#if quarkus.platform.version.compareVersionTo("3.30.999") > 0}
+                    <argLine>@\{argLine}</argLine>
+                    {/if}
                     <systemPropertyVariables>
                         {#if generate-native}
                         <native.image.path>$\{project.build.directory}/$\{project.build.finalName}-runner</native.image.path>
@@ -204,6 +235,7 @@
             </activation>
             <properties>
                 <quarkus.native.enabled>true</quarkus.native.enabled>
+                <quarkus.package.jar.enabled>false</quarkus.package.jar.enabled>
                 <skipITs>false</skipITs>
             </properties>
         </profile>

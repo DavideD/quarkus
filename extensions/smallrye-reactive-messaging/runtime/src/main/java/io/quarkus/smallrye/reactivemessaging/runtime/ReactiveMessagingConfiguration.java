@@ -32,9 +32,40 @@ public interface ReactiveMessagingConfiguration {
     @WithDefault("worker")
     ExecutionMode blockingSignaturesExecutionMode();
 
-    public enum ExecutionMode {
+    enum ExecutionMode {
         EVENT_LOOP,
         WORKER,
         VIRTUAL_THREAD
+    }
+
+    /**
+     * Normalize the name of a given channel.
+     *
+     * Concatenate the channel name with double quotes when it contains dots.
+     * <p>
+     * Otherwise, the SmallRye Reactive Messaging only considers the
+     * text up to the first occurrence of a dot as the channel name.
+     *
+     * @param name the channel name.
+     * @return normalized channel name.
+     */
+    static String normalizeChannelName(String name) {
+        return name != null && !name.startsWith("\"") && name.contains(".") ? "\"" + name + "\"" : name;
+    }
+
+    String CHANNEL_INCOMING_PROPERTY = "mp.messaging.incoming.%s.%s";
+    String CHANNEL_OUTGOING_PROPERTY = "mp.messaging.outgoing.%s.%s";
+
+    static String getChannelIncomingPropertyName(final String channelName, final String attribute) {
+        return String.format(CHANNEL_INCOMING_PROPERTY, normalizeChannelName(channelName), attribute);
+    }
+
+    static String getChannelOutgoingPropertyName(final String channelName, final String attribute) {
+        return String.format(CHANNEL_OUTGOING_PROPERTY, normalizeChannelName(channelName), attribute);
+    }
+
+    static String getChannelPropertyName(final String channelName, final String attribute, final boolean incoming) {
+        return incoming ? getChannelIncomingPropertyName(channelName, attribute)
+                : getChannelOutgoingPropertyName(channelName, attribute);
     }
 }

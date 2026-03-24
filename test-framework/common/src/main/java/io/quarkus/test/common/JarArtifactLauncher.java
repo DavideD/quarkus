@@ -1,6 +1,7 @@
 package io.quarkus.test.common;
 
 import java.nio.file.Path;
+import java.util.List;
 
 /**
  * If an implementation of this class is found using the ServiceLoader mechanism, then it is used.
@@ -11,5 +12,9 @@ public interface JarArtifactLauncher extends ArtifactLauncher<JarArtifactLaunche
     interface JarInitContext extends InitContext {
 
         Path jarPath();
+
+        boolean generateAotFile();
+
+        List<String> additionalRecordingArgs();
     }
 }

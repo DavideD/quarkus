@@ -3,7 +3,6 @@ package io.quarkus.csrf.reactive.runtime;
 import java.security.SecureRandom;
 import java.util.Base64;
 
-import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.container.ContainerRequestContext;
 import jakarta.ws.rs.container.ContainerResponseContext;
@@ -17,6 +16,7 @@ import org.jboss.resteasy.reactive.server.WithFormRead;
 import org.jboss.resteasy.reactive.server.core.ResteasyReactiveRequestContext;
 import org.jboss.resteasy.reactive.server.spi.ResteasyReactiveContainerRequestContext;
 
+import io.quarkus.runtime.LaunchMode;
 import io.vertx.core.http.Cookie;
 import io.vertx.core.http.impl.CookieImpl;
 import io.vertx.core.http.impl.ServerCookie;
@@ -40,7 +40,7 @@ public class CsrfRequestResponseReactiveFilter {
     private final SecureRandom secureRandom = new SecureRandom();
 
     @Inject
-    Instance<RestCsrfConfig> configInstance;
+    RestCsrfConfigHolder configHolder;
 
     public CsrfRequestResponseReactiveFilter() {
     }
@@ -63,7 +63,7 @@ public class CsrfRequestResponseReactiveFilter {
     @ServerRequestFilter
     @WithFormRead
     public void filter(ResteasyReactiveContainerRequestContext requestContext, RoutingContext routing) {
-        final RestCsrfConfig config = this.configInstance.get();
+        final RestCsrfConfig config = this.configHolder.getConfig();
 
         String cookieToken = getCookieToken(routing, config);
         if (cookieToken != null) {
@@ -72,8 +72,14 @@ public class CsrfRequestResponseReactiveFilter {
                 // HMAC SHA256 output is 32 bytes long
                 int expectedCookieTokenSize = config.tokenSignatureKey().isPresent() ? 32 : config.tokenSize();
                 if (cookieTokenSize != expectedCookieTokenSize) {
-                    LOG.debugf("Invalid CSRF token cookie size: expected %d, got %d", expectedCookieTokenSize,
-                            cookieTokenSize);
+                    if (LaunchMode.current() == LaunchMode.DEVELOPMENT) {
+                        LOG.infof(
+                                "Invalid CSRF token cookie size: expected %d, got %d. Make sure the browser cache is cleared.",
+                                expectedCookieTokenSize, cookieTokenSize);
+                    } else {
+                        LOG.debugf("Invalid CSRF token cookie size: expected %d, got %d", expectedCookieTokenSize,
+                                cookieTokenSize);
+                    }
                     requestContext.abortWith(badClientRequest());
                     return;
                 }
@@ -224,7 +230,7 @@ public class CsrfRequestResponseReactiveFilter {
             ContainerResponseContext responseContext, RoutingContext routing) {
         if (routing.get(NEW_COOKIE_REQUIRED) != null) {
 
-            final RestCsrfConfig config = configInstance.get();
+            final RestCsrfConfig config = configHolder.getConfig();
 
             String cookieValue = null;
             if (config.tokenSignatureKey().isPresent()) {

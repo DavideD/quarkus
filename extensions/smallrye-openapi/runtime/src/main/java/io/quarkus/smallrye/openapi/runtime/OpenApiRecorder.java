@@ -1,14 +1,15 @@
 package io.quarkus.smallrye.openapi.runtime;
 
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
-import java.util.function.Supplier;
 
-import org.eclipse.microprofile.openapi.OASFilter;
-
+import io.quarkus.arc.Arc;
 import io.quarkus.runtime.RuntimeValue;
 import io.quarkus.runtime.ShutdownContext;
 import io.quarkus.runtime.annotations.Recorder;
+import io.quarkus.smallrye.openapi.OpenApiFilter;
+import io.quarkus.smallrye.openapi.runtime.filter.AutoSecurityFilter;
 import io.quarkus.vertx.http.runtime.VertxHttpConfig;
 import io.quarkus.vertx.http.runtime.filters.Filter;
 import io.vertx.core.Handler;
@@ -17,15 +18,18 @@ import io.vertx.ext.web.RoutingContext;
 
 @Recorder
 public class OpenApiRecorder {
+    private final RuntimeValue<OpenApiRuntimeConfig> openApiConfig;
+    private final RuntimeValue<VertxHttpConfig> httpConfig;
 
-    final RuntimeValue<VertxHttpConfig> httpConfig;
-
-    public OpenApiRecorder(RuntimeValue<VertxHttpConfig> httpConfig) {
+    public OpenApiRecorder(
+            final RuntimeValue<OpenApiRuntimeConfig> openApiConfig,
+            final RuntimeValue<VertxHttpConfig> httpConfig) {
+        this.openApiConfig = openApiConfig;
         this.httpConfig = httpConfig;
     }
 
     public Consumer<Route> corsFilter(Filter filter) {
-        if (httpConfig.getValue().corsEnabled() && filter.getHandler() != null) {
+        if (httpConfig.getValue().cors().enabled() && filter.getHandler() != null) {
             return new Consumer<Route>() {
                 @Override
                 public void accept(Route route) {
@@ -36,9 +40,9 @@ public class OpenApiRecorder {
         return null;
     }
 
-    public Handler<RoutingContext> handler(OpenApiRuntimeConfig runtimeConfig) {
-        if (runtimeConfig.enable()) {
-            return new OpenApiHandler();
+    public Handler<RoutingContext> handler(String documentName, boolean alwaysRunFilter) {
+        if (openApiConfig.getValue().enable().orElse(openApiConfig.getValue().enabled())) {
+            return new OpenApiHandler(documentName, alwaysRunFilter);
         } else {
             return new OpenApiNotFoundHandler();
         }
@@ -54,30 +58,9 @@ public class OpenApiRecorder {
         });
     }
 
-    public Supplier<OASFilter> autoSecurityFilterSupplier(OASFilter autoSecurityFilter) {
-        return new Supplier<>() {
-            @Override
-            public OASFilter get() {
-                return autoSecurityFilter;
-            }
-        };
-    }
-
-    public Supplier<?> createUserDefinedRuntimeFilters(List<String> filters) {
-        return new Supplier<Object>() {
-            @Override
-            public UserDefinedRuntimeFilters get() {
-                return new UserDefinedRuntimeFilters() {
-                    @Override
-                    public List<String> filters() {
-                        return filters;
-                    }
-                };
-            }
-        };
-    }
-
-    public interface UserDefinedRuntimeFilters {
-        List<String> filters();
+    public void prepareDocument(AutoSecurityFilter autoSecurityFilter,
+            Map<OpenApiFilter.RunStage, List<String>> filtersByStage, String documentName) {
+        OpenApiDocumentService openApiDocumentService = Arc.container().select(OpenApiDocumentService.class).get();
+        openApiDocumentService.prepareDocument(autoSecurityFilter, filtersByStage, documentName);
     }
 }

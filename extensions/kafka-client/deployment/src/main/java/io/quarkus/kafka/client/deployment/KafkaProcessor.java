@@ -26,30 +26,13 @@ import org.apache.kafka.common.security.auth.SecurityProtocol;
 import org.apache.kafka.common.security.authenticator.AbstractLogin;
 import org.apache.kafka.common.security.authenticator.DefaultLogin;
 import org.apache.kafka.common.security.authenticator.SaslClientCallbackHandler;
+import org.apache.kafka.common.security.oauthbearer.DefaultJwtValidator;
+import org.apache.kafka.common.security.oauthbearer.JwtRetriever;
 import org.apache.kafka.common.security.oauthbearer.OAuthBearerToken;
 import org.apache.kafka.common.security.oauthbearer.internals.OAuthBearerRefreshingLogin;
 import org.apache.kafka.common.security.oauthbearer.internals.OAuthBearerSaslClient;
 import org.apache.kafka.common.security.scram.internals.ScramSaslClient;
-import org.apache.kafka.common.serialization.ByteArrayDeserializer;
-import org.apache.kafka.common.serialization.ByteArraySerializer;
-import org.apache.kafka.common.serialization.ByteBufferDeserializer;
-import org.apache.kafka.common.serialization.ByteBufferSerializer;
-import org.apache.kafka.common.serialization.BytesDeserializer;
-import org.apache.kafka.common.serialization.BytesSerializer;
-import org.apache.kafka.common.serialization.Deserializer;
-import org.apache.kafka.common.serialization.DoubleDeserializer;
-import org.apache.kafka.common.serialization.DoubleSerializer;
-import org.apache.kafka.common.serialization.FloatDeserializer;
-import org.apache.kafka.common.serialization.FloatSerializer;
-import org.apache.kafka.common.serialization.IntegerDeserializer;
-import org.apache.kafka.common.serialization.IntegerSerializer;
-import org.apache.kafka.common.serialization.LongDeserializer;
-import org.apache.kafka.common.serialization.LongSerializer;
-import org.apache.kafka.common.serialization.Serializer;
-import org.apache.kafka.common.serialization.ShortDeserializer;
-import org.apache.kafka.common.serialization.ShortSerializer;
-import org.apache.kafka.common.serialization.StringDeserializer;
-import org.apache.kafka.common.serialization.StringSerializer;
+import org.apache.kafka.common.serialization.*;
 import org.eclipse.microprofile.config.ConfigProvider;
 import org.jboss.jandex.ClassInfo;
 import org.jboss.jandex.DotName;
@@ -61,13 +44,14 @@ import io.quarkus.deployment.Capabilities;
 import io.quarkus.deployment.Capability;
 import io.quarkus.deployment.Feature;
 import io.quarkus.deployment.IsDevelopment;
-import io.quarkus.deployment.IsNormal;
+import io.quarkus.deployment.IsProduction;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.Consume;
 import io.quarkus.deployment.annotations.ExecutionTime;
 import io.quarkus.deployment.annotations.Record;
 import io.quarkus.deployment.builditem.AdditionalIndexedClassesBuildItem;
+import io.quarkus.deployment.builditem.BytecodeTransformerBuildItem;
 import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
 import io.quarkus.deployment.builditem.ConfigDescriptionBuildItem;
 import io.quarkus.deployment.builditem.ExtensionSslNativeSupportBuildItem;
@@ -75,6 +59,7 @@ import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.IndexDependencyBuildItem;
 import io.quarkus.deployment.builditem.LaunchModeBuildItem;
 import io.quarkus.deployment.builditem.LogCategoryBuildItem;
+import io.quarkus.deployment.builditem.ModuleEnableNativeAccessBuildItem;
 import io.quarkus.deployment.builditem.NativeImageFeatureBuildItem;
 import io.quarkus.deployment.builditem.RunTimeConfigurationDefaultBuildItem;
 import io.quarkus.deployment.builditem.RuntimeConfigSetupCompleteBuildItem;
@@ -84,9 +69,12 @@ import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBundleBuil
 import io.quarkus.deployment.builditem.nativeimage.NativeImageSecurityProviderBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassConditionBuildItem;
+import io.quarkus.deployment.builditem.nativeimage.ReflectiveMethodBuildItem;
+import io.quarkus.deployment.builditem.nativeimage.RuntimeInitializedPackageBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ServiceProviderBuildItem;
 import io.quarkus.deployment.logging.LogCleanupFilterBuildItem;
 import io.quarkus.deployment.pkg.builditem.CurateOutcomeBuildItem;
+import io.quarkus.deployment.pkg.steps.NativeImageFutureDefault;
 import io.quarkus.deployment.pkg.steps.NativeOrNativeSourcesBuild;
 import io.quarkus.kafka.client.runtime.KafkaAdminClient;
 import io.quarkus.kafka.client.runtime.KafkaBindingConverter;
@@ -170,7 +158,23 @@ public class KafkaProcessor {
         log.produce(new LogCategoryBuildItem("org.apache.kafka.clients", Level.WARNING));
         log.produce(new LogCategoryBuildItem("org.apache.kafka.common.utils", Level.WARNING));
         log.produce(new LogCategoryBuildItem("org.apache.kafka.common.metrics", Level.WARNING));
+        log.produce(new LogCategoryBuildItem("org.apache.kafka.common.config", Level.WARNING));
         log.produce(new LogCategoryBuildItem("org.apache.kafka.common.telemetry", Level.WARNING));
+    }
+
+    @BuildStep
+    void removeAppInfoJmxRegistration(KafkaBuildTimeConfig config,
+            BuildProducer<BytecodeTransformerBuildItem> transformers,
+            BuildProducer<RunTimeConfigurationDefaultBuildItem> runtimeConfig) {
+        if (config.jmxEnabled()) {
+            return;
+        }
+        transformers.produce(new BytecodeTransformerBuildItem.Builder()
+                .setClassToTransform("org.apache.kafka.common.utils.AppInfoParser")
+                .setCacheable(true)
+                .setVisitorFunction((className, classVisitor) -> new AppInfoClassVisitor(classVisitor))
+                .build());
+        runtimeConfig.produce(new RunTimeConfigurationDefaultBuildItem("kafka.metric.reporters", ""));
     }
 
     @BuildStep
@@ -231,7 +235,10 @@ public class KafkaProcessor {
     public void build(
             KafkaBuildTimeConfig config, CurateOutcomeBuildItem curateOutcomeBuildItem,
             BuildProducer<ConfigDescriptionBuildItem> configDescBuildItems,
-            CombinedIndexBuildItem indexBuildItem, BuildProducer<ReflectiveClassBuildItem> reflectiveClass,
+            CombinedIndexBuildItem indexBuildItem,
+            BuildProducer<ReflectiveClassBuildItem> reflectiveClass,
+            BuildProducer<ReflectiveMethodBuildItem> reflectiveMethod,
+            BuildProducer<ReflectiveClassConditionBuildItem> reflectiveClassCondition,
             BuildProducer<ServiceProviderBuildItem> serviceProviders,
             BuildProducer<NativeImageProxyDefinitionBuildItem> proxies,
             Capabilities capabilities,
@@ -250,6 +257,7 @@ public class KafkaProcessor {
         collectImplementors(toRegister, indexBuildItem, ConsumerInterceptor.class);
         collectImplementors(toRegister, indexBuildItem, ProducerInterceptor.class);
         collectImplementors(toRegister, indexBuildItem, MetricsReporter.class);
+        collectImplementors(toRegister, indexBuildItem, JwtRetriever.class);
 
         reflectiveClass.produce(ReflectiveClassBuildItem.builder(OAuthBearerSaslClient.class,
                 OAuthBearerSaslClient.OAuthBearerSaslClientFactory.class,
@@ -257,6 +265,12 @@ public class KafkaProcessor {
                 OAuthBearerRefreshingLogin.class)
                 .reason(getClass().getName() + " OAuthBearerSaslClient classes")
                 .build());
+
+        // Register DefaultJwtValidator only when jose4j is present to avoid NoClassDefFoundError
+        // with GraalVM 25's --future-defaults=complete-reflection-types flag
+        reflectiveClassCondition.produce(new ReflectiveClassConditionBuildItem(
+                DefaultJwtValidator.class.getName(),
+                "org.jose4j.keys.resolvers.VerificationKeyResolver"));
 
         for (Class<?> i : BUILT_INS) {
             reflectiveClass.produce(ReflectiveClassBuildItem.builder(i.getName())
@@ -290,7 +304,7 @@ public class KafkaProcessor {
 
         for (DotName s : toRegister) {
             reflectiveClass.produce(ReflectiveClassBuildItem.builder(s.toString())
-                    .reason(getClass().getName() + " Jackson and " + Capability.JSONB + " support")
+                    .reason(getClass().getName() + ": Kafka Client instantiation")
                     .build());
         }
 
@@ -331,8 +345,13 @@ public class KafkaProcessor {
         recorder.loadSnappy(loadFromSharedClassLoader);
     }
 
+    @BuildStep(onlyIf = HasSnappy.class)
+    ModuleEnableNativeAccessBuildItem snappyEnableNativeAccess() {
+        return new ModuleEnableNativeAccessBuildItem("org.xerial.snappy");
+    }
+
     @Consume(RuntimeConfigSetupCompleteBuildItem.class)
-    @BuildStep(onlyIf = IsNormal.class)
+    @BuildStep(onlyIf = IsProduction.class)
     @Record(ExecutionTime.RUNTIME_INIT)
     void checkBoostrapServers(KafkaRecorder recorder, Capabilities capabilities) {
         if (capabilities.isPresent(Capability.KUBERNETES_SERVICE_BINDING)) {
@@ -382,14 +401,14 @@ public class KafkaProcessor {
         if (QuarkusClassLoader.isClassPresentAtRuntime("io.apicurio.registry.serde.avro.AvroKafkaDeserializer")
                 && !capabilities.isPresent(Capability.APICURIO_REGISTRY_AVRO)) {
             throw new RuntimeException(
-                    "Apicurio Registry 2.x Avro classes detected, please use the quarkus-apicurio-registry-avro extension");
+                    "Apicurio Registry 3.x Avro classes detected, please use the quarkus-apicurio-registry-avro extension");
         }
 
         // --- Apicurio Registry 2.x Json Schema ---
         if (QuarkusClassLoader.isClassPresentAtRuntime("io.apicurio.registry.serde.avro.JsonKafkaDeserializer")
                 && !capabilities.isPresent(Capability.APICURIO_REGISTRY_JSON_SCHEMA)) {
             throw new RuntimeException(
-                    "Apicurio Registry 2.x Json classes detected, please use the quarkus-apicurio-registry-json extension");
+                    "Apicurio Registry 3.x Json classes detected, please use the quarkus-apicurio-registry-json extension");
         }
     }
 
@@ -507,7 +526,9 @@ public class KafkaProcessor {
                         "org.apache.kafka.common.security.oauthbearer.internals.expiring.ExpiringCredentialRefreshingLogin")
                 // VerificationKeyResolver is value on static map in OAuthBearerValidatorCallbackHandler
                 .addRuntimeInitializedClass("org.apache.kafka.common.security.oauthbearer.OAuthBearerValidatorCallbackHandler")
-                .addRuntimeReinitializedClass("org.apache.kafka.shaded.com.google.protobuf.UnsafeUtil");
+                .addRuntimeInitializedClass("org.apache.kafka.common.security.oauthbearer.DefaultJwtValidator")
+                .addRuntimeInitializedClass("org.apache.kafka.common.security.oauthbearer.ClientJwtValidator")
+                .addRuntimeInitializedClass("org.apache.kafka.shaded.com.google.protobuf.UnsafeUtil");
         return builder.build();
     }
 
@@ -527,6 +548,11 @@ public class KafkaProcessor {
                 .addBeanClass(KafkaAdminClient.class)
                 .setUnremovable()
                 .build();
+    }
+
+    @BuildStep(onlyIf = NativeImageFutureDefault.RunTimeInitializeSecurityProvider.class)
+    RuntimeInitializedPackageBuildItem runtimeInitializedClasses() {
+        return new RuntimeInitializedPackageBuildItem("org.apache.kafka.common.security.ssl");
     }
 
     // Kafka UI related stuff

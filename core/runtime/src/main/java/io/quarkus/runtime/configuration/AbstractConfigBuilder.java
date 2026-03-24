@@ -17,15 +17,30 @@ import io.smallrye.config.SecretKeysHandlerFactory;
 import io.smallrye.config.SmallRyeConfig;
 import io.smallrye.config.SmallRyeConfigBuilder;
 import io.smallrye.config.SmallRyeConfigBuilderCustomizer;
+import io.smallrye.config.common.MapBackedConfigSource;
 
 /**
  * Convenience helper to generate the {@link SmallRyeConfigBuilderCustomizer} bytecode, by wrapping methods that
  * require varargs or collections as parameters.
+ * <p>
+ * Methods are used for bytecode generation.
+ *
+ * @see "io.quarkus.deployment.steps.ConfigGenerationBuildStep#generateSharedConfig"
  */
+@SuppressWarnings("unused")
 public abstract class AbstractConfigBuilder implements SmallRyeConfigBuilderCustomizer {
+
+    protected static void withSharedBuilder(SmallRyeConfigBuilder builder) {
+        builder.addDefaultInterceptors().withCustomizers(new QuarkusConfigBuilderCustomizer());
+    }
 
     protected static void withDefaultValues(SmallRyeConfigBuilder builder, Map<String, String> values) {
         builder.withDefaultValues(values);
+    }
+
+    protected static void withRuntimeValues(SmallRyeConfigBuilder builder, Map<String, String> values) {
+        builder.withSources(new MapBackedConfigSource("Runtime Values", values, 0) {
+        });
     }
 
     @SuppressWarnings("unchecked")
@@ -82,9 +97,17 @@ public abstract class AbstractConfigBuilder implements SmallRyeConfigBuilderCust
         }
     }
 
+    protected static void withMappingInstance(SmallRyeConfigBuilder builder, ConfigClass configClass, Object instance) {
+        builder.getMappingsBuilder().mappingInstance(configClass, instance);
+    }
+
     protected static void withMappingInstance(SmallRyeConfigBuilder builder, ConfigClass mapping) {
         SmallRyeConfig config = ConfigProvider.getConfig().unwrap(SmallRyeConfig.class);
-        builder.getMappingsBuilder().mappingInstance(mapping, config.getConfigMapping(mapping.getType()));
+        builder.getMappingsBuilder().mappingInstance(mapping, config.getConfigMapping(mapping.getType(), mapping.getPrefix()));
+    }
+
+    protected static void withMappingIgnore(SmallRyeConfigBuilder builder, String path) {
+        builder.withMappingIgnore(path);
     }
 
     protected static void withBuilder(SmallRyeConfigBuilder builder, ConfigBuilder configBuilder) {
@@ -101,7 +124,7 @@ public abstract class AbstractConfigBuilder implements SmallRyeConfigBuilderCust
         });
     }
 
-    protected static void withCustomizer(SmallRyeConfigBuilder builder, SmallRyeConfigBuilderCustomizer customizer) {
+    public static void withCustomizer(SmallRyeConfigBuilder builder, SmallRyeConfigBuilderCustomizer customizer) {
         builder.withCustomizers(customizer);
     }
 
@@ -119,7 +142,8 @@ public abstract class AbstractConfigBuilder implements SmallRyeConfigBuilderCust
     public static ConfigClass configClass(final String mappingClass, final String prefix) {
         try {
             // To support mappings that are not public
-            return ConfigClass.configClass(Thread.currentThread().getContextClassLoader().loadClass(mappingClass), prefix);
+            Class<?> klass = Thread.currentThread().getContextClassLoader().loadClass(mappingClass);
+            return ConfigClass.configClass(klass, prefix);
         } catch (ClassNotFoundException e) {
             throw new RuntimeException(e);
         }
@@ -128,7 +152,8 @@ public abstract class AbstractConfigBuilder implements SmallRyeConfigBuilderCust
     public static void ensureLoaded(final String mappingClass) {
         try {
             // To support mappings that are not public
-            ConfigMappingLoader.ensureLoaded(Thread.currentThread().getContextClassLoader().loadClass(mappingClass));
+            Class<?> klass = Thread.currentThread().getContextClassLoader().loadClass(mappingClass);
+            ConfigMappingLoader.ensureLoaded(klass);
         } catch (ClassNotFoundException e) {
             throw new RuntimeException(e);
         }

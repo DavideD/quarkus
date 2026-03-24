@@ -23,6 +23,7 @@ import io.quarkus.bootstrap.logging.InitialConfigurator;
 import io.quarkus.bootstrap.runner.RunnerClassLoader;
 import io.quarkus.runtime.configuration.ConfigurationException;
 import io.quarkus.runtime.graal.DiagnosticPrinter;
+import io.quarkus.runtime.graal.GraalVM;
 import io.quarkus.runtime.util.ExceptionUtil;
 import io.quarkus.runtime.util.StringUtil;
 import io.smallrye.config.ConfigValidationException;
@@ -86,6 +87,13 @@ public class ApplicationLifecycleManager {
 
     private static final boolean IS_WINDOWS = System.getProperty("os.name").toLowerCase(Locale.ENGLISH).contains("windows");
     private static final boolean IS_MAC = System.getProperty("os.name").toLowerCase(Locale.ENGLISH).contains("mac");
+    /*
+     * After GraalVM/Mandrel 24.2, JCMD becomes available. The Quarkus thread dumper handles SIGQUIT which
+     * interferes with JCMD. To avoid this problem, Quarkus must disable its signal handler and instead use the thread
+     * dumper built into GraalVM for versions beyond 24.2.
+     */
+    private static final boolean shouldRegisterHandler = ImageMode.current() == ImageMode.NATIVE_BUILD
+            && GraalVM.Version.getCurrent().compareTo(GraalVM.Version.VERSION_24_2_0) < 0;
 
     public static final String QUARKUS_APPCDS_GENERATE_PROP = "quarkus.appcds.generate";
 
@@ -164,8 +172,8 @@ public class ApplicationLifecycleManager {
                     stateLock.unlock();
                 }
             }
-        } catch (Exception e) {
-            Throwable rootCause = ExceptionUtil.getRootCause(e);
+        } catch (Throwable t) {
+            Throwable rootCause = ExceptionUtil.getRootCause(t);
             if (exitCodeHandler == null) {
                 Logger applicationLogger = Logger.getLogger(Application.class);
                 if (rootCause instanceof QuarkusBindException qbe) {
@@ -198,7 +206,7 @@ public class ApplicationLifecycleManager {
                         && !StringUtil.isNullOrEmpty(rootCause.getMessage())) {
                     System.err.println(rootCause.getMessage());
                 } else {
-                    applicationLogger.errorv(e, "Failed to start application");
+                    applicationLogger.errorv(t, "Failed to start application");
                     ensureConsoleLogsDrained();
                 }
             }
@@ -214,7 +222,7 @@ public class ApplicationLifecycleManager {
                     ? ((PreventFurtherStepsException) rootCause).getExitCode()
                     : 1;
             currentApplication = null;
-            (exitCodeHandler == null ? defaultExitCodeHandler : exitCodeHandler).accept(exceptionExitCode, e);
+            (exitCodeHandler == null ? defaultExitCodeHandler : exitCodeHandler).accept(exceptionExitCode, t);
             return;
         } finally {
             try {
@@ -272,14 +280,14 @@ public class ApplicationLifecycleManager {
      */
     private static void longLivedPostBootCleanup() {
         final ClassLoader cl = Thread.currentThread().getContextClassLoader();
-        if (cl instanceof RunnerClassLoader) {
-            RunnerClassLoader rcl = (RunnerClassLoader) cl;
+        if (cl instanceof RunnerClassLoader rcl) {
             rcl.resetInternalCaches();
         }
     }
 
     private static void registerHooks(final BiConsumer<Integer, Throwable> exitCodeHandler) {
-        if (ImageMode.current() == ImageMode.NATIVE_RUN && System.getenv(DISABLE_SIGNAL_HANDLERS) == null) {
+        if (shouldRegisterHandler && ImageMode.current() == ImageMode.NATIVE_RUN
+                && System.getenv(DISABLE_SIGNAL_HANDLERS) == null) {
             registerSignalHandlers(exitCodeHandler);
         }
         shutdownHookThread = new ShutdownHookThread();
@@ -287,28 +295,17 @@ public class ApplicationLifecycleManager {
     }
 
     private static void registerSignalHandlers(final BiConsumer<Integer, Throwable> exitCodeHandler) {
-        final SignalHandler exitHandler = new SignalHandler() {
-            @Override
-            public void handle(Signal signal) {
-                Logger applicationLogger = Logger.getLogger(Application.class);
-                applicationLogger.debugf("Received signed %s, shutting down", signal.getNumber());
-                exitCodeHandler.accept(signal.getNumber() + 0x80, null);
-            }
-        };
         final SignalHandler diagnosticsHandler = new SignalHandler() {
             @Override
             public void handle(Signal signal) {
                 DiagnosticPrinter.printDiagnostics(System.out);
             }
         };
-        handleSignal("INT", exitHandler);
-        handleSignal("TERM", exitHandler);
         // the HUP and QUIT signals are not defined for the Windows OpenJDK implementation:
         // https://hg.openjdk.java.net/jdk8u/jdk8u-dev/hotspot/file/7d5c800dae75/src/os/windows/vm/jvm_windows.cpp
         if (IS_WINDOWS) {
             handleSignal("BREAK", diagnosticsHandler);
         } else {
-            handleSignal("HUP", exitHandler);
             handleSignal("QUIT", diagnosticsHandler);
         }
     }

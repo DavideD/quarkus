@@ -8,6 +8,7 @@ import java.io.File;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,7 +38,6 @@ import io.quarkus.deployment.GeneratedClassGizmoAdaptor;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.builditem.AllowJNDIBuildItem;
-import io.quarkus.deployment.builditem.ApplicationArchivesBuildItem;
 import io.quarkus.deployment.builditem.ApplicationClassNameBuildItem;
 import io.quarkus.deployment.builditem.ApplicationInfoBuildItem;
 import io.quarkus.deployment.builditem.BytecodeRecorderConstantDefinitionBuildItem;
@@ -46,16 +46,19 @@ import io.quarkus.deployment.builditem.BytecodeTransformerBuildItem;
 import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.GeneratedClassBuildItem;
+import io.quarkus.deployment.builditem.GeneratedRuntimeSystemPropertyBuildItem;
 import io.quarkus.deployment.builditem.JavaLibraryPathAdditionalPathBuildItem;
 import io.quarkus.deployment.builditem.LaunchModeBuildItem;
 import io.quarkus.deployment.builditem.LiveReloadBuildItem;
 import io.quarkus.deployment.builditem.MainBytecodeRecorderBuildItem;
 import io.quarkus.deployment.builditem.MainClassBuildItem;
 import io.quarkus.deployment.builditem.ObjectSubstitutionBuildItem;
+import io.quarkus.deployment.builditem.PreInitBuildItem;
 import io.quarkus.deployment.builditem.QuarkusApplicationClassBuildItem;
 import io.quarkus.deployment.builditem.RecordableConstructorBuildItem;
 import io.quarkus.deployment.builditem.StaticBytecodeRecorderBuildItem;
 import io.quarkus.deployment.builditem.SystemPropertyBuildItem;
+import io.quarkus.deployment.builditem.ValueRegistryRuntimeInfoProviderBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveFieldBuildItem;
 import io.quarkus.deployment.configuration.RunTimeConfigurationGenerator;
@@ -76,6 +79,7 @@ import io.quarkus.gizmo.ResultHandle;
 import io.quarkus.gizmo.TryBlock;
 import io.quarkus.runtime.Application;
 import io.quarkus.runtime.ExecutionModeManager;
+import io.quarkus.runtime.JVMUnsafeWarningsControl;
 import io.quarkus.runtime.LaunchMode;
 import io.quarkus.runtime.NativeImageRuntimePropertiesRecorder;
 import io.quarkus.runtime.PreventFurtherStepsException;
@@ -83,9 +87,13 @@ import io.quarkus.runtime.Quarkus;
 import io.quarkus.runtime.QuarkusApplication;
 import io.quarkus.runtime.StartupContext;
 import io.quarkus.runtime.StartupTask;
+import io.quarkus.runtime.ValueRegistryImpl.ConfigRuntimeSource;
 import io.quarkus.runtime.annotations.QuarkusMain;
 import io.quarkus.runtime.configuration.ConfigUtils;
 import io.quarkus.runtime.util.StepTiming;
+import io.quarkus.value.registry.RuntimeInfoProvider;
+import io.quarkus.value.registry.RuntimeInfoProvider.RuntimeSource;
+import io.quarkus.value.registry.ValueRegistry;
 
 public class MainClassBuildStep {
 
@@ -121,10 +129,13 @@ public class MainClassBuildStep {
     private static final Type STRING_ARRAY = Type.create(DotName.createSimple(String[].class.getName()), Type.Kind.ARRAY);
 
     @BuildStep
-    void build(List<StaticBytecodeRecorderBuildItem> staticInitTasks,
+    void build(
+            List<StaticBytecodeRecorderBuildItem> staticInitTasks,
             List<ObjectSubstitutionBuildItem> substitutions,
+            List<ValueRegistryRuntimeInfoProviderBuildItem> runtimeInfoProviders,
             List<MainBytecodeRecorderBuildItem> mainMethod,
             List<SystemPropertyBuildItem> properties,
+            List<GeneratedRuntimeSystemPropertyBuildItem> generatedRuntimeSystemProperties,
             List<JavaLibraryPathAdditionalPathBuildItem> javaLibraryPathAdditionalPaths,
             List<FeatureBuildItem> features,
             BuildProducer<ApplicationClassNameBuildItem> appClassNameProducer,
@@ -136,6 +147,7 @@ public class MainClassBuildStep {
             LiveReloadBuildItem liveReloadBuildItem,
             ApplicationInfoBuildItem applicationInfo,
             List<AllowJNDIBuildItem> allowJNDIBuildItems,
+            Optional<PreInitBuildItem> preInitBuildItem,
             NamingConfig namingConfig) {
 
         appClassNameProducer.produce(new ApplicationClassNameBuildItem(Application.APP_CLASS_NAME));
@@ -166,12 +178,30 @@ public class MainClassBuildStep {
         if (!namingConfig.enableJndi() && allowJNDIBuildItems.isEmpty()) {
             mv.invokeStaticMethod(ofMethod(DisabledInitialContextManager.class, "register", void.class));
         }
+        mv.invokeStaticMethod(ofMethod(JVMUnsafeWarningsControl.class, "disableUnsafeRelatedWarnings", void.class));
 
-        //very first thing is to set system props (for build time)
-        for (SystemPropertyBuildItem i : properties) {
+        // very first thing is to set system props (for build time)
+        // make sure we record the system properties in order for build reproducibility
+        for (SystemPropertyBuildItem i : properties.stream().sorted(Comparator.comparing(SystemPropertyBuildItem::getKey))
+                .toList()) {
             mv.invokeStaticMethod(ofMethod(System.class, "setProperty", String.class, String.class, String.class),
                     mv.load(i.getKey()), mv.load(i.getValue()));
         }
+
+        if (preInitBuildItem.isPresent()) {
+            // we need to initialize JBoss Logging before starting any parallel work, it's too central
+            ResultHandle tccl = mv.invokeVirtualMethod(
+                    MethodDescriptor.ofMethod(Thread.class, "getContextClassLoader", ClassLoader.class),
+                    mv.invokeStaticMethod(MethodDescriptor.ofMethod(Thread.class, "currentThread", Thread.class)));
+            mv.invokeStaticMethod(
+                    MethodDescriptor.ofMethod(Class.class, "forName", Class.class, String.class, boolean.class,
+                            ClassLoader.class),
+                    mv.load("org.jboss.logging.LoggerProviders"), mv.load(true), tccl);
+
+            // then we can preinitialize
+            mv.invokeStaticMethod(PreInitBuildStep.PRE_INIT_RUNNER_EXECUTE_PRE_INIT_TASKS_GIZMO1_METHOD);
+        }
+
         //set the launch mode
         ResultHandle lm = mv
                 .readStaticField(FieldDescriptor.of(LaunchMode.class, launchMode.getLaunchMode().name(), LaunchMode.class));
@@ -184,11 +214,9 @@ public class MainClassBuildStep {
         mv.invokeStaticMethod(ofMethod(Timing.class, "staticInitStarted", void.class, boolean.class),
                 mv.load(launchMode.isAuxiliaryApplication()));
 
-        // ensure that the config class is initialized
-        mv.invokeStaticMethod(RunTimeConfigurationGenerator.C_ENSURE_INITIALIZED);
-        if (liveReloadBuildItem.isLiveReload()) {
-            mv.invokeStaticMethod(RunTimeConfigurationGenerator.REINIT);
-        }
+        // Create Static Init Config and associate it with the current classloader
+        mv.invokeStaticMethod(RunTimeConfigurationGenerator.C_STATIC_INIT_CONFIG);
+
         // Init the LOG instance
         mv.writeStaticField(logField.getFieldDescriptor(), mv.invokeStaticMethod(
                 ofMethod(Logger.class, "getLogger", Logger.class, String.class), mv.load("io.quarkus.application")));
@@ -218,12 +246,31 @@ public class MainClassBuildStep {
         mv = file.getMethodCreator("doStart", void.class, String[].class);
         mv.setModifiers(Modifier.PROTECTED | Modifier.FINAL);
 
+        startupContext = mv.readStaticField(scField.getFieldDescriptor());
+
+        // Register ValueRegistry with StartupContext, so it can be injected into Recorders
+        ResultHandle valueRegistry = mv
+                .invokeVirtualMethod(ofMethod(Application.class, "getValueRegistry", ValueRegistry.class), mv.getThis());
+        MethodDescriptor putValueInStartupContext = ofMethod(StartupContext.class, "putValue", void.class, String.class,
+                Object.class);
+        mv.invokeVirtualMethod(putValueInStartupContext, startupContext, mv.load(ValueRegistry.class.getName()), valueRegistry);
+
         // Make sure we set properties in doStartup as well. This is necessary because setting them in the static-init
-        // sets them at build-time, on the host JVM, while SVM has substitutions for System. get/ setProperty at
+        // sets them at build-time, on the host JVM, while SVM has substitutions for System. get/setProperty at
         // run-time which will never see those properties unless we also set them at run-time.
-        for (SystemPropertyBuildItem i : properties) {
+        // make sure we record the system properties in order for build reproducibility
+        for (SystemPropertyBuildItem i : properties.stream().sorted(Comparator.comparing(SystemPropertyBuildItem::getKey))
+                .toList()) {
             mv.invokeStaticMethod(ofMethod(System.class, "setProperty", String.class, String.class, String.class),
                     mv.load(i.getKey()), mv.load(i.getValue()));
+        }
+        // make sure we record the system properties in order for build reproducibility
+        for (GeneratedRuntimeSystemPropertyBuildItem i : generatedRuntimeSystemProperties.stream()
+                .sorted(Comparator.comparing(GeneratedRuntimeSystemPropertyBuildItem::getKey)).toList()) {
+            mv.invokeStaticMethod(ofMethod(System.class, "setProperty", String.class, String.class, String.class),
+                    mv.load(i.getKey()),
+                    mv.invokeVirtualMethod(MethodDescriptor.ofMethod(i.getGeneratorClass(), "get", String.class.getName()),
+                            mv.newInstance(MethodDescriptor.ofConstructor(i.getGeneratorClass()))));
         }
         mv.invokeStaticMethod(ofMethod(NativeImageRuntimePropertiesRecorder.class, "doRuntime", void.class));
         mv.invokeStaticMethod(RUNTIME_EXECUTION_RUNTIME_INIT);
@@ -249,7 +296,6 @@ public class MainClassBuildStep {
         }
 
         mv.invokeStaticMethod(ofMethod(Timing.class, "mainStarted", void.class));
-        startupContext = mv.readStaticField(scField.getFieldDescriptor());
 
         //now set the command line arguments
         mv.invokeVirtualMethod(
@@ -260,6 +306,21 @@ public class MainClassBuildStep {
 
         tryBlock = mv.tryBlock();
         tryBlock.invokeStaticMethod(CONFIGURE_STEP_TIME_START);
+
+        // Create Runtime Config and associate it with the current classloader
+        tryBlock.invokeStaticMethod(RunTimeConfigurationGenerator.C_RUN_TIME_CONFIG, valueRegistry);
+
+        // Register RuntimeInfoProviders with ValueRegistry
+        for (ValueRegistryRuntimeInfoProviderBuildItem runtimeInfoProviderClass : runtimeInfoProviders) {
+            ResultHandle runtimeInfoProvider = tryBlock
+                    .newInstance(ofConstructor(runtimeInfoProviderClass.getRuntimeInfoProvider()));
+            tryBlock.invokeInterfaceMethod(
+                    ofMethod(RuntimeInfoProvider.class, "register", void.class, ValueRegistry.class, RuntimeSource.class),
+                    runtimeInfoProvider,
+                    valueRegistry,
+                    tryBlock.invokeStaticMethod(ofMethod(ConfigRuntimeSource.class, "runtimeSource", RuntimeSource.class)));
+        }
+
         for (MainBytecodeRecorderBuildItem holder : mainMethod) {
             writeRecordedBytecode(holder.getBytecodeRecorder(), holder.getGeneratedStartupContextClassName(), substitutions,
                     recordableConstructorBuildItems,
@@ -340,7 +401,6 @@ public class MainClassBuildStep {
     @BuildStep
     public MainClassBuildItem mainClassBuildStep(BuildProducer<GeneratedClassBuildItem> generatedClass,
             BuildProducer<BytecodeTransformerBuildItem> transformedClass,
-            ApplicationArchivesBuildItem applicationArchivesBuildItem,
             CombinedIndexBuildItem combinedIndexBuildItem,
             Optional<QuarkusApplicationClassBuildItem> quarkusApplicationClass,
             PackageConfig packageConfig) {
@@ -475,10 +535,11 @@ public class MainClassBuildStep {
 
         if ((recorder != null) && !recorder.isEmpty()) {
             for (ObjectSubstitutionBuildItem sub : substitutions) {
-                ObjectSubstitutionBuildItem.Holder holder1 = sub.holder;
-                recorder.registerSubstitution(holder1.from, holder1.to, holder1.substitution);
+                sub.holder.registerTo(recorder);
             }
+            //noinspection removal
             for (BytecodeRecorderObjectLoaderBuildItem item : loaders) {
+                //noinspection removal
                 recorder.registerObjectLoader(item.getObjectLoader());
             }
             for (var item : recordableConstructorBuildItems) {

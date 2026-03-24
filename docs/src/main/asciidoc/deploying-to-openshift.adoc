@@ -18,7 +18,7 @@ include::_attributes.adoc[]
 Quarkus offers the ability to automatically generate {openshift} resources based on sane defaults and user-supplied configuration.
 
 As an application developer, you can deploy your {project-name} applications to {openshift-long}.
-This functionality is provided by the `quarkus-openshift` extension, which supports multiple deployment options:
+The `quarkus-openshift` extension provides this functionality, which supports multiple deployment options:
 
 * xref:deploying-to-openshift-howto.adoc[With a single step]
 * xref:deploying-to-openshift-docker-howto.adoc[By using a Docker build strategy]
@@ -43,7 +43,7 @@ Source to Image (S2I):: The build process is performed inside the {openshift} cl
 
 Binary S2I:: This strategy uses a JAR file as input to the S2I build process, which speeds up the building and deploying of your application.
 
-=== Build strategies supported by Quarkus
+=== Supported build strategies
 
 The following table outlines the build strategies that {project-name} supports:
 
@@ -58,7 +58,7 @@ The following table outlines the build strategies that {project-name} supports:
 == Bootstrapping the project
 
 First, you need a new project that contains the OpenShift extension.
-Then, before you build and deploy our application, you must log into an OpenShift cluster.
+Then, before you build and deploy your application, you must log into an OpenShift cluster.
 
 === Adding the OpenShift extension
 
@@ -104,7 +104,7 @@ However, if you want to continue to use `DeploymentConfig`, it is still possible
 +
 [source,bash,subs="+quotes,attributes+"]
 ----
-quarkus extension add 'quarkus-openshift'
+quarkus extension add quarkus-openshift
 ----
 
 == Logging in to an {openshift} cluster
@@ -483,7 +483,7 @@ quarkus.openshift.cron-job.schedule=0 * * * *
 ----
 
 IMPORTANT: CronJob resources require the https://en.wikipedia.org/wiki/Cron[Cron] expression to specify when to launch the job through the `quarkus.openshift.cron-job.schedule` property.
-If thet are not provided, the build fails.
+If they are not provided, the build fails.
 
 You can configure the rest of the Kubernetes CronJob configuration by using the properties under `quarkus.openshift.cron-job.xxx` (for more information, see xref:deploying-to-openshift.adoc#quarkus-kubernetes_quarkus-openshift-cron-job-parallelism[quarkus.openshift.cron-job.parallelism]).
 

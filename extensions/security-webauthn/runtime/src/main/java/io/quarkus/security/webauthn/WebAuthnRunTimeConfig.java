@@ -13,6 +13,7 @@ import io.quarkus.runtime.annotations.ConfigDocDefault;
 import io.quarkus.runtime.annotations.ConfigGroup;
 import io.quarkus.runtime.annotations.ConfigPhase;
 import io.quarkus.runtime.annotations.ConfigRoot;
+import io.quarkus.vertx.http.runtime.security.HttpAuthenticationMechanism;
 import io.smallrye.config.ConfigMapping;
 import io.smallrye.config.WithDefault;
 
@@ -392,7 +393,7 @@ public interface WebAuthnRunTimeConfig {
      *
      * When inactivity timeout is reached, cookie is not renewed and a new login is enforced.
      */
-    @WithDefault("PT30M")
+    @WithDefault("30M")
     Duration sessionTimeout();
 
     /**
@@ -410,7 +411,7 @@ public interface WebAuthnRunTimeConfig {
      * That is, no timeout is tracked on the server side; the timestamp is encoded and encrypted in the cookie
      * itself, and it is decrypted and parsed with each request.
      */
-    @WithDefault("PT1M")
+    @WithDefault("1M")
     Duration newCookieInterval();
 
     /**
@@ -459,4 +460,12 @@ public interface WebAuthnRunTimeConfig {
      */
     @WithDefault("false")
     Optional<Boolean> enableLoginEndpoint();
+
+    /**
+     * WebAuthn authentication mechanism priority.
+     *
+     * @see HttpAuthenticationMechanism#getPriority()
+     */
+    @WithDefault(HttpAuthenticationMechanism.DEFAULT_PRIORITY + "")
+    int priority();
 }

@@ -14,7 +14,7 @@ include::_attributes.adoc[]
 This guide explains how your Quarkus application can utilize https://opentelemetry.io/[OpenTelemetry] (OTel) to provide
 Observability for interactive web applications.
 
-On these page we show the signal independent features of the extension.
+On this page we show the signal independent features of the extension.
 
 include::{includes}/observability-include.adoc[]
 
@@ -33,7 +33,9 @@ This will allow Quarkus based applications to be observable by tools and service
 
 [NOTE]
 ====
-Automatic metrics instrumentation in Quarkus is done by the xref:telemetry-micrometer.adoc[Quarkus Micrometer extension]. We plan to provide, in the future, a bridge for those metrics to be available in OpenTelemetry as well.
+Automatic metrics instrumentation in Quarkus is done by the xref:telemetry-micrometer.adoc[Quarkus Micrometer extension].
+
+The xref:telemetry-micrometer-to-opentelemetry.adoc[quarkus-micrometer-opentelemetry] extension enables the use and export of Micrometer metrics via OpenTelemetry.
 ====
 
 Quarkus supports the OpenTelemetry Autoconfiguration. The configurations match what you can see at
@@ -51,7 +53,7 @@ The tracing functionality is supported and *on* by default.
 === xref:opentelemetry-metrics.adoc[OpenTelemetry Metrics Guide]
 
 ==== Enable Metrics
-The metrics functionality is experimental and *off* by default. You will need to activate it by setting:
+The metrics functionality is tech preview and *off* by default. You will need to activate it by setting:
 
 [source,properties]
 ----
@@ -62,7 +64,7 @@ At build time on your `application.properties` file.
 === xref:opentelemetry-logging.adoc[OpenTelemetry Logging Guide]
 
 ==== Enable Logs
-The logging functionality is experimental and *off* by default. You will need to activate it by setting:
+The logging functionality is tech preview and *off* by default. You will need to activate it by setting:
 
 [source,properties]
 ----
@@ -121,9 +123,9 @@ Once you add the dependency, the extension will generate tracing data by default
 | All output
 |`quarkus.otel.exporter.otlp.enabled`
 |true
-|Deprecated for removal.
+| If false, will disable Quarkus default OTLP exporters at *build* time.
 
-If false will disable the default OTLP exporter at *build* time.
+Telemetry will be generated, contexts will be propagated but no telemetry will be sent out.
 
 | Traces
 |`quarkus.otel.traces.enabled`
@@ -138,7 +140,7 @@ If false will disable the default OTLP exporter at *build* time.
 | Metrics
 |`quarkus.otel.metrics.enabled`
 |false
-|Metrics are disabled by default at *build* time because they are experimental.
+|Metrics are disabled by default at *build* time because they are tech preview.
 
 | Metrics output
 |`quarkus.otel.metrics.exporter`
@@ -148,7 +150,7 @@ If false will disable the default OTLP exporter at *build* time.
 | Logs
 |`quarkus.otel.logs.enabled`
 |false
-|Logs are disabled by default at *build* time because they are experimental.
+|Logs are disabled by default at *build* time because they are tech preview.
 
 | Logs output
 |`quarkus.otel.logs.exporter`
@@ -251,15 +253,89 @@ When creating manual instrumentation, while naming metrics or attributes you sho
 
 == Exporters
 
-=== Default
+=== The Default
 
-The Quarkus OpenTelemetry extension uses its own signal exporters built on top of Vert.x for optimal performance and maintainability.
+The Quarkus OpenTelemetry extension uses its own signal exporters built on top of Vert.x for optimal performance and maintainability. All *Quarkus built in exporters use the OTLP protocol* through a couple of data senders, using `grpc` (the default) and `http/protobuf`.
 
-The exporter is automatically wired with CDI, that's why the `quarkus.otel.traces.exporter` and `quarkus.otel.metrics.exporter` properties default to `cdi`.
+The active exporter is automatically wired by CDI, that's why the `quarkus.otel.traces.exporter`, `quarkus.otel.metrics.exporter` and `quarkus.otel.logs.exporter` properties default value is `cdi`. This is not because of the protocol being used in the data transfer but because of how the exporters are wired.
 
-The `quarkus.otel.exporter.otlp.protocol` defaults to `grpc` but `http/protobuf` can also be used.
+CDI (Context Dependency Injection) will manage the exporters to use, according to the selected protocol or when applications implement their own CDI exporter, like in tests.
+
+The `quarkus.otel.exporter.otlp.protocol` property instructs Quarkus to switch the senders and defaults to `grpc` but `http/protobuf` can also be used.
 
 NOTE: If you change the protocol, you also need to change the port in the endpoint. The default port for `grpc` is `4317` and for `http/protobuf` is `4318`.
+
+=== Using CDI to produce a test exporter
+
+Leaving the default as CDI is particularly useful for tests. In the following example a Span exporter class is wired with CDI and then the telemetry can be used in test code.
+
+Creating a custom `SpanExporter` bean:
+
+[source,java]
+----
+    @ApplicationScoped
+    static class InMemorySpanExporterProducer {
+        @Produces
+        @Singleton
+        InMemorySpanExporter inMemorySpanExporter() {
+            return InMemorySpanExporter.create();
+        }
+    }
+----
+
+Where `InMemorySpanExporter` is a class from the OpenTelemetry test utilities dependency:
+
+[source,xml,role="primary asciidoc-tabs-target-sync-cli asciidoc-tabs-target-sync-maven"]
+.pom.xml
+----
+    <dependency>
+        <groupId>io.opentelemetry</groupId>
+        <artifactId>opentelemetry-sdk-testing</artifactId>
+        <scope>test</scope>
+    </dependency>
+----
+
+[source,gradle,role="secondary asciidoc-tabs-target-sync-gradle"]
+.build.gradle
+----
+implementation("io.opentelemetry:opentelemetry-sdk-testing")
+----
+
+The bean of that class can be injected to access the telemetry data. This is an example to obtain the spans:
+
+[source, java]
+----
+    @Inject
+    InMemorySpanExporter inMemorySpanExporter;
+
+    //...
+
+    List<SpanData> finishedSpanItems = inMemorySpanExporter.getFinishedSpanItems();
+----
+
+If this is used in an integration test, you should access the class from inside the running process and not from the test class.
+A viable option could be to expose that data through a REST endpoint method:
+
+[source,java]
+----
+    @GET
+    @Path("/export")
+    public List<SpanData> exportTraces() {
+        return inMemorySpanExporter.getFinishedSpanItems()
+                .stream()
+                .filter(sd -> !sd.getName().contains("export")) <1>
+                .collect(Collectors.toList());
+    }
+----
+<1> This excludes calls to the export endpoint itself.
+
+For more details please take a look at the https://github.com/quarkusio/quarkus/blob/main/integration-tests/opentelemetry/src/main/java/io/quarkus/it/opentelemetry/ExporterResource.java[ExporterResource] in the Quarkus integration tests.
+
+=== The OpenTelemetry OTLP exporter
+
+This is currently not supported in Quarkus. Configuration example for traces: `quarkus.otel.tracing.exporter=otlp`.
+
+However, it's also not needed because Quarkus own default exporters will send data using the OTLP protocol.
 
 === On Quarkiverse
 Additional exporters will be available in the Quarkiverse https://docs.quarkiverse.io/quarkus-opentelemetry-exporter/dev/index.html[quarkus-opentelemetry-exporter] project.
@@ -324,7 +400,7 @@ You can also use the xref:logging-exporter-for-debugging[logging exporter] to ou
 
 Quarkus supports the OpenTelemetry Autoconfiguration for Traces.
 The configurations match what you can see at
-https://github.com/open-telemetry/opentelemetry-java/blob/main/sdk-extensions/autoconfigure/README.md[OpenTelemetry SDK Autoconfigure]
+https://opentelemetry.io/docs/languages/java/configuration/[OpenTelemetry SDK Autoconfigure]
 adding the usual `quarkus.*` prefix.
 
 Quarkus OpenTelemetry configuration properties now have the `quarkus.otel.*` prefix.

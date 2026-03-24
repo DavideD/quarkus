@@ -225,6 +225,17 @@ public class TestResource {
     }
 
     @GET
+    @Path("/subsubclass")
+    @Produces("application/json")
+    public ParentClass subsubclass() {
+        GrandChildClass grandChild = new GrandChildClass();
+        grandChild.setName("your name");
+        grandChild.setValue("your value");
+        grandChild.setToy("your toy");
+        return grandChild;
+    }
+
+    @GET
     @Path("/implementor")
     @Produces("application/json")
     public MyInterface implementor() {
@@ -232,6 +243,13 @@ public class TestResource {
         child.setName("my name");
         child.setValue("my value");
         return child;
+    }
+
+    @GET
+    @Path("/record")
+    @Produces("application/json")
+    public MyRecord instance() {
+        return new MyRecord(MyInterfaceWithRecord.INSTANCE);
     }
 
     @GET
@@ -257,10 +275,10 @@ public class TestResource {
     @GET
     @Path("/openapi/responses/{version}")
     @Produces("application/json")
-    @APIResponses({
-            @APIResponse(content = @Content(mediaType = "application/json", schema = @Schema(type = SchemaType.OBJECT, implementation = MyOpenApiEntityV1.class))),
-            @APIResponse(content = @Content(mediaType = "application/json", schema = @Schema(type = SchemaType.OBJECT, implementation = MyOpenApiEntityV2.class)))
-    })
+    @APIResponse(content = @Content(mediaType = "application/json", schema = @Schema(type = SchemaType.OBJECT, anyOf = {
+            MyOpenApiEntityV1.class,
+            MyOpenApiEntityV2.class
+    })))
     public Response openApiResponses(@PathParam("version") String version) {
         if ("v1".equals(version)) {
             MyOpenApiEntityV1 entityV1 = new MyOpenApiEntityV1();
@@ -489,6 +507,18 @@ public class TestResource {
         }
     }
 
+    public static class GrandChildClass extends ChildClass {
+        private String toy;
+
+        public String getToy() {
+            return toy;
+        }
+
+        public void setToy(String toy) {
+            this.toy = toy;
+        }
+    }
+
     public static class MyImplementor implements MyInterface {
         private String name;
         private String value;
@@ -517,6 +547,28 @@ public class TestResource {
         String getValue();
 
         String getName();
+    }
+
+    public record MyRecord(MyInterfaceWithRecord nestedInterface) {
+
+    }
+
+    public interface MyInterfaceWithRecord {
+
+        MyInterfaceWithRecord INSTANCE = new MyInterfaceWithRecord() {
+            @Override
+            public NestedRecord getRecord() {
+                return new NestedRecord();
+            }
+        };
+
+        Object getRecord();
+    }
+
+    public record NestedRecord(String recordProperty) {
+        public NestedRecord() {
+            this("record-property-value");
+        }
     }
 
     public static class MyEntity {

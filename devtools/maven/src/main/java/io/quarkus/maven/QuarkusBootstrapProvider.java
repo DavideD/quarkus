@@ -6,6 +6,7 @@ import static io.smallrye.common.expression.Expression.Flag.NO_TRIM;
 import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -16,9 +17,10 @@ import java.util.function.Consumer;
 
 import javax.inject.Inject;
 import javax.inject.Named;
-import javax.inject.Singleton;
 
+import org.apache.maven.SessionScoped;
 import org.apache.maven.artifact.Artifact;
+import org.apache.maven.execution.MavenSession;
 import org.apache.maven.model.Model;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.project.MavenProject;
@@ -51,7 +53,7 @@ import io.quarkus.maven.dependency.ResolvedDependencyBuilder;
 import io.quarkus.runtime.LaunchMode;
 import io.smallrye.common.expression.Expression;
 
-@Singleton
+@SessionScoped
 @Named
 public class QuarkusBootstrapProvider implements Closeable {
 
@@ -77,25 +79,45 @@ public class QuarkusBootstrapProvider implements Closeable {
         return ArtifactKey.ga(project.getGroupId(), project.getArtifactId());
     }
 
-    static void setProjectModels(QuarkusBootstrapMojo mojo, BootstrapMavenContextConfig<?> config) {
-        final List<MavenProject> allProjects = mojo.mavenSession().getAllProjects();
-        if (allProjects != null) {
-            for (MavenProject mp : allProjects) {
-                if (mojo.reloadPoms.contains(mp.getFile())) {
-                    continue;
-                }
-                final Model model = getRawModel(mp);
-                config.addProvidedModule(mp.getFile().toPath(), model, mp.getModel());
-                // The Maven Model API determines the project directory as the directory containing the POM file.
-                // However, in case when plugins manipulating POMs store their results elsewhere
-                // (such as the flatten plugin storing the flattened POM under the target directory),
-                // both the base directory and the directory containing the POM file should be added to the map.
-                var pomDir = mp.getFile().getParentFile();
-                if (!pomDir.equals(mp.getBasedir())) {
-                    config.addProvidedModule(mp.getBasedir().toPath().resolve("pom.xml"), model, mp.getModel());
-                }
+    static void setProvidedModules(BootstrapMavenContextConfig<?> config, MavenSession session, Set<File> reloadPoms) {
+        // sorting projects at this point is an optimization, not a requirement
+        for (MavenProject mp : getSortedProjects(session)) {
+            if (reloadPoms.contains(mp.getFile())) {
+                continue;
+            }
+            final Model model = getRawModel(mp);
+            config.addProvidedModule(mp.getFile().toPath(), model, mp.getModel());
+            // The Maven Model API determines the project directory as the directory containing the POM file.
+            // However, in case when plugins manipulating POMs store their results elsewhere
+            // (such as the flatten plugin storing the flattened POM under the target directory),
+            // both the base directory and the directory containing the POM file should be added to the map.
+            var pomDir = mp.getFile().getParentFile();
+            if (!pomDir.equals(mp.getBasedir())) {
+                config.addProvidedModule(mp.getBasedir().toPath().resolve("pom.xml"), model, mp.getModel());
             }
         }
+    }
+
+    private static List<MavenProject> getSortedProjects(MavenSession session) {
+        if (session.getAllProjects().size() == session.getProjects().size()) {
+            // these are supposed to be sorted already
+            return session.getProjects();
+        }
+        final List<MavenProject> sorted = new ArrayList<>(session.getAllProjects().size());
+        addAfterParent(session.getTopLevelProject(), new HashSet<>(session.getAllProjects().size()), sorted);
+        return sorted;
+    }
+
+    private static void addAfterParent(MavenProject project, Set<File> added, List<MavenProject> sorted) {
+        if (!added.add(project.getFile())) {
+            return;
+        }
+        MavenProject parent = project.getParent();
+        // apparently it can happen that a parent could have not file https://github.com/quarkusio/quarkus/issues/52863
+        if (parent != null && parent.getFile() != null) {
+            addAfterParent(parent, added, sorted);
+        }
+        sorted.add(project);
     }
 
     /**
@@ -110,8 +132,11 @@ public class QuarkusBootstrapProvider implements Closeable {
      * @return raw POM
      */
     private static Model getRawModel(MavenProject mp) {
-        final Model model = mp.getOriginalModel();
+        Model model = mp.getOriginalModel();
         if (model.getDependencyManagement() == null) {
+            // clone the model to not modify the original model associated with the project,
+            // otherwise, the enforcer plugin may fail, for example
+            model = model.clone();
             // this could be the flatten plugin removing the dependencyManagement
             // in which case we set the effective dependency management to not lose the platform info
             model.setDependencyManagement(mp.getDependencyManagement());
@@ -232,7 +257,7 @@ public class QuarkusBootstrapProvider implements Closeable {
                             .setRemoteRepositories(mojo.remoteRepositories())
                             .setEffectiveModelBuilder(BootstrapMavenContextConfig
                                     .getEffectiveModelBuilderProperty(mojo.mavenProject().getProperties()));
-                    setProjectModels(mojo, config);
+                    setProvidedModules(config, mojo.mavenSession(), mojo.reloadPoms);
                     var resolver = workspaceProvider.createArtifactResolver(config);
                     final LocalProject currentProject = resolver.getMavenContext().getCurrentProject();
                     if (currentProject != null && workspaceId == 0) {
@@ -265,7 +290,7 @@ public class QuarkusBootstrapProvider implements Closeable {
 
             final ResolvedDependencyBuilder appArtifact = getApplicationArtifactBuilder(mojo);
             Set<ArtifactKey> reloadableModules = Set.of();
-            if (mode == LaunchMode.NORMAL) {
+            if (mode.isProduction()) {
                 // collect reloadable artifacts for remote-dev
                 final List<MavenProject> localProjects = mojo.mavenProject().getCollectedProjects();
                 final Set<ArtifactKey> localProjectKeys = new HashSet<>(localProjects.size());
@@ -348,6 +373,19 @@ public class QuarkusBootstrapProvider implements Closeable {
 
             effectiveProperties.putIfAbsent("quarkus.application.name", mojo.mavenProject().getArtifactId());
             effectiveProperties.putIfAbsent("quarkus.application.version", mojo.mavenProject().getVersion());
+            // pass the project.build.outputTimestamp to Quarkus packaging subsystem
+            // check project properties from POM, then user properties (from -D on command line),
+            // then system properties, matching Maven's own property resolution order
+            String outputTimestamp = mojo.mavenProject().getProperties().getProperty("project.build.outputTimestamp");
+            if (outputTimestamp == null) {
+                outputTimestamp = mojo.mavenSession().getUserProperties().getProperty("project.build.outputTimestamp");
+            }
+            if (outputTimestamp == null) {
+                outputTimestamp = mojo.mavenSession().getSystemProperties().getProperty("project.build.outputTimestamp");
+            }
+            if (outputTimestamp != null) {
+                effectiveProperties.putIfAbsent("quarkus.package.output-timestamp", outputTimestamp);
+            }
 
             for (Map.Entry<String, String> attribute : mojo.manifestEntries().entrySet()) {
                 if (attribute.getValue() == null) {

@@ -20,12 +20,13 @@ public abstract class OidcCommonConfigBuilder<T> {
     }
 
     private record ProxyImpl(Optional<String> host, int port, Optional<String> username,
-            Optional<String> password) implements OidcCommonConfig.Proxy {
+            Optional<String> password, Optional<String> proxyConfigurationName) implements OidcCommonConfig.Proxy {
     }
 
     protected static class OidcCommonConfigImpl implements OidcCommonConfig {
 
         private final Optional<String> authServerUrl;
+        private final String discoveryPath;
         private final Optional<Boolean> discoveryEnabled;
         private final Optional<String> registrationPath;
         private final Optional<Duration> connectionDelay;
@@ -39,6 +40,7 @@ public abstract class OidcCommonConfigBuilder<T> {
 
         protected OidcCommonConfigImpl(OidcCommonConfigBuilder<?> builder) {
             this.authServerUrl = builder.authServerUrl;
+            this.discoveryPath = builder.discoveryPath;
             this.discoveryEnabled = builder.discoveryEnabled;
             this.registrationPath = builder.registrationPath;
             this.connectionDelay = builder.connectionDelay;
@@ -47,13 +49,19 @@ public abstract class OidcCommonConfigBuilder<T> {
             this.useBlockingDnsLookup = builder.useBlockingDnsLookup;
             this.maxPoolSize = builder.maxPoolSize;
             this.followRedirects = builder.followRedirects;
-            this.proxy = new ProxyImpl(builder.proxyHost, builder.proxyPort, builder.proxyUsername, builder.proxyPassword);
+            this.proxy = new ProxyImpl(builder.proxyHost, builder.proxyPort, builder.proxyUsername, builder.proxyPassword,
+                    builder.proxyConfigurationName);
             this.tls = builder.tls;
         }
 
         @Override
         public Optional<String> authServerUrl() {
             return authServerUrl;
+        }
+
+        @Override
+        public String discoveryPath() {
+            return discoveryPath;
         }
 
         @Override
@@ -108,6 +116,7 @@ public abstract class OidcCommonConfigBuilder<T> {
     }
 
     private Optional<String> authServerUrl;
+    private String discoveryPath;
     private Optional<Boolean> discoveryEnabled;
     private Optional<String> registrationPath;
     private Optional<Duration> connectionDelay;
@@ -120,10 +129,12 @@ public abstract class OidcCommonConfigBuilder<T> {
     private int proxyPort;
     private Optional<String> proxyUsername;
     private Optional<String> proxyPassword;
+    private Optional<String> proxyConfigurationName;
     private OidcCommonConfig.Tls tls;
 
     protected OidcCommonConfigBuilder(OidcCommonConfig oidcCommonConfig) {
         this.authServerUrl = oidcCommonConfig.authServerUrl();
+        this.discoveryPath = oidcCommonConfig.discoveryPath();
         this.discoveryEnabled = oidcCommonConfig.discoveryEnabled();
         this.registrationPath = oidcCommonConfig.registrationPath();
         this.connectionDelay = oidcCommonConfig.connectionDelay();
@@ -136,6 +147,7 @@ public abstract class OidcCommonConfigBuilder<T> {
         this.proxyPort = oidcCommonConfig.proxy().port();
         this.proxyUsername = oidcCommonConfig.proxy().username();
         this.proxyPassword = oidcCommonConfig.proxy().password();
+        this.proxyConfigurationName = oidcCommonConfig.proxy().proxyConfigurationName();
         this.tls = oidcCommonConfig.tls();
     }
 
@@ -147,6 +159,15 @@ public abstract class OidcCommonConfigBuilder<T> {
      */
     public T authServerUrl(String authServerUrl) {
         this.authServerUrl = Optional.ofNullable(authServerUrl);
+        return getBuilder();
+    }
+
+    /**
+     * @param discoveryPath {@link OidcCommonConfig#discoveryPath()}
+     * @return T builder
+     */
+    public T discoveryPath(String discoveryPath) {
+        this.discoveryPath = discoveryPath;
         return getBuilder();
     }
 
@@ -254,6 +275,15 @@ public abstract class OidcCommonConfigBuilder<T> {
      */
     public T tlsConfigurationName(String tlsConfigurationName) {
         this.tls = new TlsImpl(tlsConfigurationName);
+        return getBuilder();
+    }
+
+    /**
+     * @param proxyConfigurationName {@link OidcCommonConfig.Proxy#proxyConfigurationName()}
+     * @return T builder
+     */
+    public T proxyConfigurationName(String proxyConfigurationName) {
+        this.proxyConfigurationName = Optional.ofNullable(proxyConfigurationName);
         return getBuilder();
     }
 }

@@ -5,6 +5,8 @@ import static io.quarkus.vertx.http.deployment.RouteBuildItem.RouteType.FRAMEWOR
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -14,6 +16,7 @@ import java.util.Set;
 import java.util.concurrent.SubmissionPublisher;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import org.eclipse.microprofile.config.Config;
 import org.eclipse.microprofile.config.ConfigProvider;
@@ -37,8 +40,10 @@ import io.quarkus.deployment.annotations.ExecutionTime;
 import io.quarkus.deployment.annotations.Record;
 import io.quarkus.deployment.builditem.ApplicationStartBuildItem;
 import io.quarkus.deployment.builditem.ExecutorBuildItem;
+import io.quarkus.deployment.builditem.HotDeploymentWatchedFileBuildItem;
 import io.quarkus.deployment.builditem.LaunchModeBuildItem;
 import io.quarkus.deployment.builditem.LogCategoryBuildItem;
+import io.quarkus.deployment.builditem.ModuleEnableNativeAccessBuildItem;
 import io.quarkus.deployment.builditem.NativeImageFeatureBuildItem;
 import io.quarkus.deployment.builditem.RunTimeConfigBuilderBuildItem;
 import io.quarkus.deployment.builditem.ServiceStartBuildItem;
@@ -57,27 +62,31 @@ import io.quarkus.runtime.LaunchMode;
 import io.quarkus.runtime.LiveReloadConfig;
 import io.quarkus.runtime.RuntimeValue;
 import io.quarkus.runtime.logging.LogBuildTimeConfig;
-import io.quarkus.runtime.shutdown.ShutdownConfig;
 import io.quarkus.tls.deployment.spi.TlsRegistryBuildItem;
 import io.quarkus.vertx.core.deployment.CoreVertxBuildItem;
 import io.quarkus.vertx.core.deployment.EventLoopCountBuildItem;
 import io.quarkus.vertx.http.HttpServerOptionsCustomizer;
+import io.quarkus.vertx.http.deployment.HttpSecurityProcessor.HttpSecurityConfigSetupCompleteBuildItem;
 import io.quarkus.vertx.http.deployment.devmode.NotFoundPageDisplayableEndpointBuildItem;
 import io.quarkus.vertx.http.deployment.spi.FrameworkEndpointsBuildItem;
+import io.quarkus.vertx.http.deployment.spi.GeneratedStaticResourceBuildItem;
 import io.quarkus.vertx.http.deployment.spi.UseManagementInterfaceBuildItem;
 import io.quarkus.vertx.http.runtime.CurrentRequestProducer;
 import io.quarkus.vertx.http.runtime.CurrentVertxRequest;
 import io.quarkus.vertx.http.runtime.HttpCertificateUpdateEventListener;
+import io.quarkus.vertx.http.runtime.HttpStaticDirConfig;
 import io.quarkus.vertx.http.runtime.VertxConfigBuilder;
 import io.quarkus.vertx.http.runtime.VertxHttpBuildTimeConfig;
 import io.quarkus.vertx.http.runtime.VertxHttpConfig.InsecureRequests;
 import io.quarkus.vertx.http.runtime.VertxHttpRecorder;
 import io.quarkus.vertx.http.runtime.attribute.ExchangeAttributeBuilder;
+import io.quarkus.vertx.http.runtime.cors.CORSConfig;
 import io.quarkus.vertx.http.runtime.cors.CORSRecorder;
 import io.quarkus.vertx.http.runtime.filters.Filter;
 import io.quarkus.vertx.http.runtime.filters.GracefulShutdownFilter;
 import io.quarkus.vertx.http.runtime.graal.Brotli4jFeature;
 import io.quarkus.vertx.http.runtime.management.ManagementInterfaceBuildTimeConfig;
+import io.quarkus.vertx.http.runtime.security.SecurityHandlerPriorities;
 import io.vertx.core.http.impl.Http1xServerRequest;
 import io.vertx.core.impl.VertxImpl;
 import io.vertx.ext.web.Router;
@@ -148,8 +157,14 @@ class VertxHttpProcessor {
 
     @BuildStep
     @Record(ExecutionTime.RUNTIME_INIT)
-    FilterBuildItem cors(CORSRecorder recorder) {
-        return new FilterBuildItem(recorder.corsHandler(), FilterBuildItem.CORS);
+    FilterBuildItem cors(CORSRecorder recorder,
+            Optional<HttpSecurityConfigSetupCompleteBuildItem> httpSecurityConfigSetupCompleteBuildItem,
+            Capabilities capabilities) {
+        RuntimeValue<CORSConfig> programmaticCorsConfig = httpSecurityConfigSetupCompleteBuildItem
+                .map(i -> i.programmaticCorsConfig).orElse(null);
+        return new FilterBuildItem(
+                recorder.corsHandler(programmaticCorsConfig, capabilities.isPresent(Capability.SECURITY)),
+                SecurityHandlerPriorities.CORS);
     }
 
     @BuildStep
@@ -201,6 +216,88 @@ class VertxHttpProcessor {
             ManagementInterfaceBuildTimeConfig managementBuildTimeConfig) {
         return KubernetesPortBuildItem.fromRuntimeConfiguration("management", "quarkus.management.port", 9000,
                 managementBuildTimeConfig.enabled());
+    }
+
+    @BuildStep
+    void registerHttpStaticDir(VertxHttpBuildTimeConfig httpBuildTimeConfig,
+            BuildProducer<GeneratedStaticResourceBuildItem> generatedStaticResources) {
+
+        Optional<HttpStaticDirConfig> httpStaticDirConfig = httpBuildTimeConfig.httpStaticDirConfig();
+
+        if (httpStaticDirConfig.isEmpty()) {
+            return;
+        }
+
+        HttpStaticDirConfig localStatic = httpStaticDirConfig.get();
+
+        if (!localStatic.enabled()) {
+            return;
+        }
+
+        final String basePath = localStatic.normalizedEndpoint();
+        String dir = localStatic.normalizedPath();
+
+        if (dir == null) {
+            return;
+        }
+
+        Path root = Path.of(dir).normalize().toAbsolutePath();
+        if (!Files.isDirectory(root)) {
+            throw new IllegalStateException(
+                    "Invalid configuration: quarkus.http.static-dir.path must point to an existing directory, but was: "
+                            + root);
+        }
+
+        try (Stream<Path> paths = Files.walk(root)) {
+
+            paths.filter(Files::isRegularFile).forEach(file -> {
+
+                Path relative = root.relativize(file).normalize();
+                String relativeUnix = relative.toString().replace('\\', '/');
+                if (relativeUnix.contains("..")) {
+                    throw new IllegalStateException("Invalid static resource path '" + relativeUnix
+                            + "'. Paths must not contain '..' when registering static resources.");
+                }
+                String endpoint = basePath + "/" + relativeUnix;
+                generatedStaticResources.produce(
+                        new GeneratedStaticResourceBuildItem(endpoint, file));
+
+            });
+        } catch (IOException e) {
+            throw new UncheckedIOException(
+                    "Failed to register local static resources from directory " + root, e);
+        }
+    }
+
+    @BuildStep(onlyIf = IsDevelopment.class)
+    void watchHttpStaticDirForDev(VertxHttpBuildTimeConfig httpBuildTimeConfig,
+            BuildProducer<HotDeploymentWatchedFileBuildItem> watchedFiles) {
+
+        Optional<HttpStaticDirConfig> httpStaticDirConfig = httpBuildTimeConfig.httpStaticDirConfig();
+
+        if (httpStaticDirConfig.isEmpty()) {
+            return;
+        }
+
+        var localStatic = httpStaticDirConfig.get();
+
+        if (!localStatic.enabled()) {
+            return;
+        }
+
+        String dir = localStatic.normalizedPath();
+
+        if (dir == null) {
+            return;
+        }
+
+        String normalizedDir = Path.of(dir).normalize().toAbsolutePath().toString();
+
+        watchedFiles.produce(
+                HotDeploymentWatchedFileBuildItem.builder()
+                        .setLocationPredicate(path -> path.startsWith(normalizedDir))
+                        .setRestartNeeded(false)
+                        .build());
     }
 
     @BuildStep
@@ -340,7 +437,6 @@ class VertxHttpProcessor {
             BodyHandlerBuildItem bodyHandlerBuildItem,
             List<ErrorPageActionsBuildItem> errorPageActionsBuildItems,
             BuildProducer<ShutdownListenerBuildItem> shutdownListenerBuildItemBuildProducer,
-            ShutdownConfig shutdownConfig,
             LiveReloadConfig lrc,
             CoreVertxBuildItem core, // Injected to be sure that Vert.x has been produced before calling this method.
             ExecutorBuildItem executorBuildItem,
@@ -411,7 +507,7 @@ class VertxHttpProcessor {
             publisher = Optional.of(vertxDevUILogBuildItem.get().getPublisher());
         }
 
-        recorder.finalizeRouter(beanContainer.getValue(),
+        recorder.finalizeRouter(
                 defaultRoute.map(DefaultRouteBuildItem::getRoute).orElse(null),
                 listOfFilters, listOfManagementInterfaceFilters,
                 vertx.getVertx(), lrc, mainRouter, httpRouteRouter.getHttpRouter(),
@@ -420,8 +516,10 @@ class VertxHttpProcessor {
                 httpRootPathBuildItem.getRootPath(),
                 nonApplicationRootPathBuildItem.getNonApplicationRootPath(),
                 launchMode.getLaunchMode(),
-                getBodyHandlerRequiredConditions(requireBodyHandlerBuildItems), bodyHandlerBuildItem.getHandler(),
-                gracefulShutdownFilter, shutdownConfig, executorBuildItem.getExecutorProxy(),
+                getBodyHandlerRequiredConditions(requireBodyHandlerBuildItems),
+                bodyHandlerBuildItem.getHandler(),
+                gracefulShutdownFilter,
+                executorBuildItem.getExecutorProxy(),
                 logBuildTimeConfig,
                 srcMainJava,
                 knowClasses,
@@ -456,14 +554,16 @@ class VertxHttpProcessor {
                     .produce(ReflectiveClassBuildItem.builder(VirtualServerChannel.class).reason(getClass().getName()).build());
         }
         boolean startSocket = requireSocket.isPresent() ||
-                ((!startVirtual || launchMode.getLaunchMode() != LaunchMode.NORMAL)
+                ((!startVirtual || !launchMode.getLaunchMode().isProduction())
                         && (requireVirtual.isEmpty() || !requireVirtual.get().isAlwaysVirtual()));
         recorder.startServer(vertx.getVertx(), shutdown,
                 launchMode.getLaunchMode(), startVirtual, startSocket,
                 eventLoopCount.getEventLoopCount(),
                 websocketSubProtocols.stream().map(bi -> bi.getWebsocketSubProtocols())
                         .collect(Collectors.toList()),
-                launchMode.isAuxiliaryApplication(), !capabilities.isPresent(Capability.VERTX_WEBSOCKETS));
+                launchMode.isAuxiliaryApplication(),
+                !capabilities.isPresent(Capability.VERTX_WEBSOCKETS)
+                        && !capabilities.isPresent(Capability.WEBSOCKETS_NEXT));
     }
 
     @BuildStep
@@ -543,10 +643,22 @@ class VertxHttpProcessor {
 
     @BuildStep
     NativeImageFeatureBuildItem Brotli4jFeature(VertxHttpBuildTimeConfig httpBuildTimeConfig) {
-        if (httpBuildTimeConfig.compressors().isPresent()
-                && httpBuildTimeConfig.compressors().get().stream().anyMatch(s -> s.equalsIgnoreCase("br"))) {
+        if (isBrotliEnabled(httpBuildTimeConfig)) {
             return new NativeImageFeatureBuildItem(Brotli4jFeature.class.getName());
         }
         return null;
+    }
+
+    @BuildStep
+    ModuleEnableNativeAccessBuildItem brotli4jEnableNativeAccess(VertxHttpBuildTimeConfig httpBuildTimeConfig) {
+        if (isBrotliEnabled(httpBuildTimeConfig)) {
+            return new ModuleEnableNativeAccessBuildItem("com.aayushatharva.brotli4j");
+        }
+        return null;
+    }
+
+    private static boolean isBrotliEnabled(VertxHttpBuildTimeConfig httpBuildTimeConfig) {
+        return httpBuildTimeConfig.compressors().isPresent()
+                && httpBuildTimeConfig.compressors().get().stream().anyMatch(s -> s.equalsIgnoreCase("br"));
     }
 }

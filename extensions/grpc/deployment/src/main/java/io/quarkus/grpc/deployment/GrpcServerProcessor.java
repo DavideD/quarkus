@@ -13,8 +13,11 @@ import static java.util.Arrays.asList;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -58,7 +61,7 @@ import io.quarkus.deployment.ApplicationArchive;
 import io.quarkus.deployment.Capabilities;
 import io.quarkus.deployment.Capability;
 import io.quarkus.deployment.IsDevelopment;
-import io.quarkus.deployment.IsNormal;
+import io.quarkus.deployment.IsProduction;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.Consume;
@@ -72,6 +75,7 @@ import io.quarkus.deployment.builditem.LaunchModeBuildItem;
 import io.quarkus.deployment.builditem.ServiceStartBuildItem;
 import io.quarkus.deployment.builditem.ShutdownContextBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBuildItem;
+import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.recording.RecorderContext;
 import io.quarkus.grpc.GrpcService;
 import io.quarkus.grpc.auth.DefaultAuthExceptionHandlerProvider;
@@ -81,7 +85,6 @@ import io.quarkus.grpc.protoc.plugin.MutinyGrpcGenerator;
 import io.quarkus.grpc.runtime.GrpcContainer;
 import io.quarkus.grpc.runtime.GrpcServerRecorder;
 import io.quarkus.grpc.runtime.ServerInterceptorStorage;
-import io.quarkus.grpc.runtime.config.GrpcConfiguration;
 import io.quarkus.grpc.runtime.config.GrpcServerBuildTimeConfig;
 import io.quarkus.grpc.runtime.health.GrpcHealthEndpoint;
 import io.quarkus.grpc.runtime.health.GrpcHealthStorage;
@@ -98,6 +101,7 @@ import io.quarkus.smallrye.health.deployment.spi.HealthBuildItem;
 import io.quarkus.vertx.deployment.VertxBuildItem;
 import io.quarkus.vertx.http.deployment.FilterBuildItem;
 import io.quarkus.vertx.http.deployment.VertxWebRouterBuildItem;
+import io.quarkus.vertx.http.runtime.security.SecurityHandlerPriorities;
 import io.vertx.core.Handler;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
@@ -546,7 +550,7 @@ public class GrpcServerProcessor {
         }
     }
 
-    @BuildStep(onlyIf = IsNormal.class)
+    @BuildStep(onlyIf = IsProduction.class)
     KubernetesPortBuildItem registerGrpcServiceInKubernetes(List<BindableServiceBuildItem> bindables) {
         if (!bindables.isEmpty()) {
             boolean useSeparateServer = ConfigProvider.getConfig().getOptionalValue("quarkus.grpc.server.use-separate-server",
@@ -554,6 +558,7 @@ public class GrpcServerProcessor {
                     .orElse(true);
             if (useSeparateServer) {
                 // Only expose the named port "grpc" if the gRPC server is exposed using a separate server.
+                // TODO - Querying a runtime configuration during deployment
                 return KubernetesPortBuildItem.fromRuntimeConfiguration("grpc", "quarkus.grpc.server.port", 9000, true);
             }
         }
@@ -611,7 +616,7 @@ public class GrpcServerProcessor {
             List<AdditionalGlobalInterceptorBuildItem> additionalGlobalInterceptors,
             List<DelegatingGrpcBeanBuildItem> delegatingGrpcBeans,
             BuildProducer<SyntheticBeanBuildItem> syntheticBeans,
-
+            BuildProducer<ReflectiveClassBuildItem> reflectiveClassBuildItemBuildProducer,
             RecorderContext recorderContext,
             GrpcServerRecorder recorder) {
 
@@ -644,7 +649,7 @@ public class GrpcServerProcessor {
             }
         }
 
-        Map<String, Set<String>> registeredInterceptors = new HashMap<>();
+        Map<String, Set<String>> registeredInterceptors = new LinkedHashMap<>();
         for (AnnotationInstance annotation : found) {
             String interceptorClass = annotation.value().asString();
             if (annotation.target().kind() != Kind.CLASS) {
@@ -656,20 +661,23 @@ public class GrpcServerProcessor {
             // the interceptors defined on the user bean have to be applied to the generated bean:
             targetClass = delegateMap.getOrDefault(targetClass, targetClass);
 
-            Set<String> registered = registeredInterceptors.computeIfAbsent(targetClass, k -> new HashSet<>());
+            Set<String> registered = registeredInterceptors.computeIfAbsent(targetClass, k -> new LinkedHashSet<>());
             registered.add(interceptorClass);
             superfluousInterceptors.remove(interceptorClass);
         }
 
-        Set<Class<?>> globalInterceptors = new HashSet<>();
-        for (String interceptor : interceptors.globalInterceptors) {
+        Set<Class<?>> globalInterceptors = new LinkedHashSet<>();
+        for (String interceptor : interceptors.globalInterceptors.stream().sorted().toList()) {
+            reflectiveClassBuildItemBuildProducer
+                    .produce(ReflectiveClassBuildItem.builder(interceptor).constructors(false).build());
             globalInterceptors.add(recorderContext.classProxy(interceptor));
         }
-        for (AdditionalGlobalInterceptorBuildItem globalInterceptorBuildItem : additionalGlobalInterceptors) {
+        for (AdditionalGlobalInterceptorBuildItem globalInterceptorBuildItem : additionalGlobalInterceptors
+                .stream().sorted(Comparator.comparing(AdditionalGlobalInterceptorBuildItem::interceptorClass)).toList()) {
             globalInterceptors.add(recorderContext.classProxy(globalInterceptorBuildItem.interceptorClass()));
         }
 
-        Map<String, Set<Class<?>>> perClientInterceptors = new HashMap<>();
+        Map<String, Set<Class<?>>> perClientInterceptors = new LinkedHashMap<>();
         for (Entry<String, Set<String>> entry : registeredInterceptors.entrySet()) {
             Set<Class<?>> interceptorClasses = new HashSet<>();
             for (String interceptorClass : entry.getValue()) {
@@ -695,7 +703,6 @@ public class GrpcServerProcessor {
     @Record(value = ExecutionTime.RUNTIME_INIT)
     @Consume(SyntheticBeansRuntimeInitBuildItem.class)
     ServiceStartBuildItem initializeServer(GrpcServerRecorder recorder,
-            GrpcConfiguration config,
             GrpcBuildTimeConfig buildTimeConfig,
             ShutdownContextBuildItem shutdown,
             List<BindableServiceBuildItem> bindables,
@@ -731,12 +738,12 @@ public class GrpcServerProcessor {
                 if (capabilities.isPresent(Capability.SECURITY)) {
                     securityHandlers = filterBuildItems
                             .stream()
-                            .filter(filter -> filter.getPriority() == FilterBuildItem.AUTHENTICATION
-                                    || filter.getPriority() == FilterBuildItem.AUTHORIZATION)
+                            .filter(filter -> filter.getPriority() == SecurityHandlerPriorities.AUTHENTICATION
+                                    || filter.getPriority() == SecurityHandlerPriorities.AUTHORIZATION)
                             .collect(Collectors.toMap(f -> f.getPriority() * -1, FilterBuildItem::getHandler));
                     // for the moment being, the main router doesn't have QuarkusErrorHandler, but we need to make
                     // sure that exceptions raised during proactive authentication or HTTP authorization are handled
-                    recorder.addMainRouterErrorHandlerIfSameServer(routerRuntimeValue, config);
+                    recorder.addMainRouterErrorHandlerIfSameServer(routerRuntimeValue);
                 }
             } else {
                 routerRuntimeValue = routerBuildItem.getHttpRouter();
@@ -751,7 +758,7 @@ public class GrpcServerProcessor {
                     });
             recorder.initializeGrpcServer(bindableServiceBeanStream.isEmpty(), beanContainerBuildItem.getValue(),
                     vertx.getVertx(), routerRuntimeValue,
-                    config, shutdown, blocking, virtuals, launchModeBuildItem.getLaunchMode(),
+                    shutdown, blocking, virtuals, launchModeBuildItem.getLaunchMode(),
                     capabilities.isPresent(Capability.SECURITY), securityHandlers);
             return new ServiceStartBuildItem(GRPC_SERVER);
         }

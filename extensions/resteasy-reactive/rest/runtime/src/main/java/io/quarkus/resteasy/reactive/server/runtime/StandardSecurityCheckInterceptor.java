@@ -1,6 +1,7 @@
 package io.quarkus.resteasy.reactive.server.runtime;
 
 import static io.quarkus.security.spi.runtime.SecurityHandlerConstants.EXECUTED;
+import static io.quarkus.security.spi.runtime.SecurityHandlerConstants.PREVENT_REPEATED_CHECKS_INTERCEPTOR_PRIORITY;
 import static io.quarkus.security.spi.runtime.SecurityHandlerConstants.SECURITY_HANDLER;
 
 import java.lang.reflect.Method;
@@ -16,6 +17,7 @@ import jakarta.interceptor.InvocationContext;
 
 import org.jboss.resteasy.reactive.server.core.CurrentRequestManager;
 
+import io.quarkus.arc.Arc;
 import io.quarkus.security.Authenticated;
 import io.quarkus.security.PermissionsAllowed;
 import io.quarkus.security.spi.runtime.AuthorizationController;
@@ -36,7 +38,9 @@ public abstract class StandardSecurityCheckInterceptor {
 
     @AroundInvoke
     public Object intercept(InvocationContext ic) throws Exception {
-        if (controller.isAuthorizationEnabled() && CurrentRequestManager.get() != null
+        if (controller.isAuthorizationEnabled() && Arc.container() != null
+                && Arc.container().requestContext().isActive()
+                && CurrentRequestManager.get() != null
                 && alreadyDoneByEagerSecurityHandler(
                         CurrentRequestManager.get().getProperty(STANDARD_SECURITY_CHECK_INTERCEPTOR), ic.getMethod())) {
             ic.getContextData().put(SECURITY_HANDLER, EXECUTED);
@@ -54,7 +58,7 @@ public abstract class StandardSecurityCheckInterceptor {
      */
     @Interceptor
     @RolesAllowed("")
-    @Priority(Interceptor.Priority.LIBRARY_BEFORE - 100)
+    @Priority(PREVENT_REPEATED_CHECKS_INTERCEPTOR_PRIORITY)
     public static final class RolesAllowedInterceptor extends StandardSecurityCheckInterceptor {
 
     }
@@ -64,7 +68,7 @@ public abstract class StandardSecurityCheckInterceptor {
      */
     @Interceptor
     @PermissionsAllowed("")
-    @Priority(Interceptor.Priority.LIBRARY_BEFORE - 100)
+    @Priority(PREVENT_REPEATED_CHECKS_INTERCEPTOR_PRIORITY)
     public static final class PermissionsAllowedInterceptor extends StandardSecurityCheckInterceptor {
 
     }
@@ -74,7 +78,7 @@ public abstract class StandardSecurityCheckInterceptor {
      */
     @Interceptor
     @PermitAll
-    @Priority(Interceptor.Priority.LIBRARY_BEFORE - 100)
+    @Priority(PREVENT_REPEATED_CHECKS_INTERCEPTOR_PRIORITY)
     public static final class PermitAllInterceptor extends StandardSecurityCheckInterceptor {
 
     }
@@ -84,7 +88,7 @@ public abstract class StandardSecurityCheckInterceptor {
      */
     @Interceptor
     @Authenticated
-    @Priority(Interceptor.Priority.LIBRARY_BEFORE - 100)
+    @Priority(PREVENT_REPEATED_CHECKS_INTERCEPTOR_PRIORITY)
     public static final class AuthenticatedInterceptor extends StandardSecurityCheckInterceptor {
 
     }

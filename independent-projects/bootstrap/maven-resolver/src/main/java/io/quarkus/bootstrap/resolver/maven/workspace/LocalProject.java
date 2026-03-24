@@ -26,7 +26,7 @@ import io.quarkus.bootstrap.resolver.maven.BootstrapMavenContext;
 import io.quarkus.bootstrap.resolver.maven.BootstrapMavenException;
 import io.quarkus.bootstrap.workspace.ArtifactSources;
 import io.quarkus.bootstrap.workspace.DefaultArtifactSources;
-import io.quarkus.bootstrap.workspace.DefaultSourceDir;
+import io.quarkus.bootstrap.workspace.LazySourceDir;
 import io.quarkus.bootstrap.workspace.SourceDir;
 import io.quarkus.bootstrap.workspace.WorkspaceModule;
 import io.quarkus.maven.dependency.ArtifactCoords;
@@ -36,7 +36,6 @@ import io.quarkus.maven.dependency.GAV;
 import io.quarkus.maven.dependency.ResolvedArtifactDependency;
 import io.quarkus.maven.dependency.ResolvedDependency;
 import io.quarkus.maven.dependency.ResolvedDependencyBuilder;
-import io.quarkus.paths.DirectoryPathTree;
 import io.quarkus.paths.PathCollection;
 import io.quarkus.paths.PathFilter;
 import io.quarkus.paths.PathList;
@@ -177,20 +176,22 @@ public class LocalProject {
     }
 
     LocalProject(Model rawModel, LocalWorkspace workspace) {
-        this(rawModel, null, workspace);
+        this(ModelUtils.getGroupId(rawModel), ModelUtils.getVersion(rawModel), rawModel, null, workspace);
     }
 
-    LocalProject(Model rawModel, Model effectiveModel, LocalWorkspace workspace) {
+    LocalProject(String resolvedGroupId, String resolvedVersion, Model rawModel, Model effectiveModel,
+            LocalWorkspace workspace) {
         this.rawModel = rawModel;
         this.effectiveModel = effectiveModel;
         this.modelBuildingResult = null;
-        this.dir = rawModel.getProjectDirectory().toPath();
+        // Maven does not guarantee the projectDirectory will be normalized
+        this.dir = rawModel.getProjectDirectory().toPath().normalize().toAbsolutePath();
         this.workspace = workspace;
-        this.key = ArtifactKey.ga(ModelUtils.getGroupId(rawModel), rawModel.getArtifactId());
+        this.key = ArtifactKey.ga(resolvedGroupId, rawModel.getArtifactId());
 
-        final String rawVersion = ModelUtils.getRawVersion(rawModel);
-        final boolean rawVersionIsUnresolved = ModelUtils.isUnresolvedVersion(rawVersion);
-        version = rawVersionIsUnresolved ? ModelUtils.resolveVersion(rawVersion, rawModel) : rawVersion;
+        final String rawVersion = ModelUtils.getRawVersionOrNull(rawModel);
+        final boolean rawVersionIsUnresolved = rawVersion == null || ModelUtils.isUnresolvedVersion(rawVersion);
+        version = resolvedVersion;
 
         if (workspace != null) {
             workspace.addProject(this);
@@ -334,7 +335,9 @@ public class LocalProject {
     }
 
     public ResolvedDependency getAppArtifact() {
-        return getAppArtifact(getPackaging());
+        // if the packaging is `quarkus`, we also use `jar` as the extension
+        String extension = ArtifactCoords.TYPE_POM.equals(getPackaging()) ? ArtifactCoords.TYPE_POM : ArtifactCoords.TYPE_JAR;
+        return getAppArtifact(extension);
     }
 
     public ResolvedDependency getAppArtifact(String extension) {
@@ -445,14 +448,14 @@ public class LocalProject {
                 }
                 if (addDefaultSourceSet) {
                     moduleBuilder.addArtifactSources(new DefaultArtifactSources(ArtifactSources.MAIN,
-                            List.of(new DefaultSourceDir(getSourcesSourcesDir(), getClassesDir(), getGeneratedSourcesDir())),
+                            List.of(new LazySourceDir(getSourcesSourcesDir(), getClassesDir(), getGeneratedSourcesDir())),
                             collectMainResources(null)));
                 }
             }
             if (!moduleBuilder.hasTestSources()) {
                 // FIXME: do tests have generated sources?
                 moduleBuilder.addArtifactSources(new DefaultArtifactSources(ArtifactSources.TEST,
-                        List.of(new DefaultSourceDir(getTestSourcesSourcesDir(), getTestClassesDir(), null)),
+                        List.of(new LazySourceDir(getTestSourcesSourcesDir(), getTestClassesDir(), null)),
                         collectTestResources(null)));
             }
         }
@@ -587,10 +590,10 @@ public class LocalProject {
         final PathFilter filter = includes == null && excludes == null ? null : new PathFilter(includes, excludes);
         final String classifier = getClassifier(dom, test);
         final Collection<SourceDir> sources = List.of(
-                new DefaultSourceDir(new DirectoryPathTree(test ? getTestSourcesSourcesDir() : getSourcesSourcesDir()),
-                        new DirectoryPathTree(test ? getTestClassesDir() : getClassesDir(), filter),
+                new LazySourceDir(test ? getTestSourcesSourcesDir() : getSourcesSourcesDir(), null,
+                        test ? getTestClassesDir() : getClassesDir(), filter,
                         // FIXME: wrong for tests
-                        new DirectoryPathTree(getGeneratedSourcesDir(), filter),
+                        getGeneratedSourcesDir(),
                         Map.of()));
         final Collection<SourceDir> resources = test ? collectTestResources(filter) : collectMainResources(filter);
         return new DefaultArtifactSources(classifier, sources, resources);
@@ -620,23 +623,24 @@ public class LocalProject {
         final Path classesDir = getClassesDir();
         final Path generatedSourcesDir = getGeneratedSourcesDir();
         if (resources.isEmpty()) {
-            return List.of(new DefaultSourceDir(
-                    new DirectoryPathTree(resolveRelativeToBaseDir(null, SRC_MAIN_RESOURCES)),
-                    new DirectoryPathTree(classesDir, filter),
-                    new DirectoryPathTree(generatedSourcesDir, filter),
+            return List.of(new LazySourceDir(
+                    resolveRelativeToBaseDir(null, SRC_MAIN_RESOURCES), null,
+                    classesDir, filter,
+                    generatedSourcesDir,
                     Map.of()));
         }
         final List<SourceDir> sourceDirs = new ArrayList<>(resources.size());
         for (Resource r : resources) {
             sourceDirs.add(
-                    new DefaultSourceDir(
-                            new DirectoryPathTree(resolveRelativeToBaseDir(r.getDirectory(), SRC_MAIN_RESOURCES)),
-                            new DirectoryPathTree((r.getTargetPath() == null ? classesDir
-                                    : resolveRelativeToDir(classesDir, r.getTargetPath())),
-                                    filter),
-                            new DirectoryPathTree((r.getTargetPath() == null ? generatedSourcesDir
-                                    : resolveRelativeToDir(generatedSourcesDir, r.getTargetPath())),
-                                    filter),
+                    new LazySourceDir(
+                            resolveRelativeToBaseDir(r.getDirectory(), SRC_MAIN_RESOURCES), null,
+                            r.getTargetPath() == null
+                                    ? classesDir
+                                    : resolveRelativeToDir(classesDir, r.getTargetPath()),
+                            filter,
+                            r.getTargetPath() == null
+                                    ? generatedSourcesDir
+                                    : resolveRelativeToDir(generatedSourcesDir, r.getTargetPath()),
                             Map.of()));
         }
         return sourceDirs;
@@ -648,9 +652,9 @@ public class LocalProject {
                 : model.getBuild().getTestResources();
         final Path testClassesDir = getTestClassesDir();
         if (resources.isEmpty()) {
-            return List.of(new DefaultSourceDir(
-                    new DirectoryPathTree(resolveRelativeToBaseDir(null, SRC_TEST_RESOURCES)),
-                    new DirectoryPathTree(testClassesDir, filter),
+            return List.of(new LazySourceDir(
+                    resolveRelativeToBaseDir(null, SRC_TEST_RESOURCES), null,
+                    testClassesDir, filter,
                     // FIXME: do tests have generated sources?
                     null,
                     Map.of()));
@@ -658,11 +662,12 @@ public class LocalProject {
         final List<SourceDir> sourceDirs = new ArrayList<>(resources.size());
         for (Resource r : resources) {
             sourceDirs.add(
-                    new DefaultSourceDir(
-                            new DirectoryPathTree(resolveRelativeToBaseDir(r.getDirectory(), SRC_TEST_RESOURCES)),
-                            new DirectoryPathTree((r.getTargetPath() == null ? testClassesDir
-                                    : resolveRelativeToDir(testClassesDir, r.getTargetPath())),
-                                    filter),
+                    new LazySourceDir(
+                            resolveRelativeToBaseDir(r.getDirectory(), SRC_TEST_RESOURCES), null,
+                            r.getTargetPath() == null
+                                    ? testClassesDir
+                                    : resolveRelativeToDir(testClassesDir, r.getTargetPath()),
+                            filter,
                             // FIXME: do tests have generated sources?
                             null,
                             Map.of()));

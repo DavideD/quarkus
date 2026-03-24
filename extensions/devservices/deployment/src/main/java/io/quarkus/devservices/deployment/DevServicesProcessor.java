@@ -7,27 +7,30 @@ import static io.quarkus.deployment.dev.testing.MessageFormat.NO_UNDERLINE;
 import static io.quarkus.deployment.dev.testing.MessageFormat.RED;
 import static io.quarkus.deployment.dev.testing.MessageFormat.RESET;
 import static io.quarkus.deployment.dev.testing.MessageFormat.UNDERLINE;
+import static io.quarkus.devservices.common.ConfigureUtil.configureLabels;
+import static io.quarkus.devservices.common.ConfigureUtil.shouldConfigureSharedServiceLabel;
+import static io.quarkus.devservices.deployment.IsRuntimeModuleAvailable.IO_QUARKUS_DEVSERVICES_CONFIG_BUILDER_CLASS;
 
-import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.Flow;
 import java.util.concurrent.SubmissionPublisher;
-import java.util.function.Function;
-import java.util.stream.Collectors;
+import java.util.function.Supplier;
 
+import org.eclipse.microprofile.config.ConfigProvider;
+import org.jboss.logging.Logger;
 import org.testcontainers.DockerClientFactory;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
 import org.testcontainers.containers.output.FrameConsumerResultCallback;
 import org.testcontainers.containers.output.OutputFrame;
@@ -36,89 +39,188 @@ import com.github.dockerjava.api.command.LogContainerCmd;
 import com.github.dockerjava.api.model.Container;
 import com.github.dockerjava.api.model.ContainerNetworkSettings;
 
+import io.quarkus.deployment.IsDevServicesSupportedByLaunchMode;
 import io.quarkus.deployment.IsDevelopment;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
+import io.quarkus.deployment.annotations.Produce;
+import io.quarkus.deployment.builditem.ApplicationInstanceIdBuildItem;
 import io.quarkus.deployment.builditem.ConsoleCommandBuildItem;
+import io.quarkus.deployment.builditem.CuratedApplicationShutdownBuildItem;
 import io.quarkus.deployment.builditem.DevServicesComposeProjectBuildItem;
+import io.quarkus.deployment.builditem.DevServicesCustomizerBuildItem;
 import io.quarkus.deployment.builditem.DevServicesLauncherConfigResultBuildItem;
 import io.quarkus.deployment.builditem.DevServicesNetworkIdBuildItem;
+import io.quarkus.deployment.builditem.DevServicesRegistryBuildItem;
 import io.quarkus.deployment.builditem.DevServicesResultBuildItem;
+import io.quarkus.deployment.builditem.DevServicesSharedNetworkBuildItem;
 import io.quarkus.deployment.builditem.DockerStatusBuildItem;
 import io.quarkus.deployment.builditem.LaunchModeBuildItem;
+import io.quarkus.deployment.builditem.RunTimeConfigBuilderBuildItem;
+import io.quarkus.deployment.builditem.ServiceStartBuildItem;
 import io.quarkus.deployment.console.ConsoleCommand;
 import io.quarkus.deployment.console.ConsoleStateManager;
 import io.quarkus.deployment.dev.devservices.ContainerInfo;
 import io.quarkus.deployment.dev.devservices.DevServiceDescriptionBuildItem;
+import io.quarkus.deployment.dev.devservices.DevServicesConfig;
 import io.quarkus.deployment.util.ContainerRuntimeUtil;
 import io.quarkus.deployment.util.ContainerRuntimeUtil.ContainerRuntime;
 import io.quarkus.dev.spi.DevModeType;
 import io.quarkus.devservices.common.ContainerUtil;
+import io.quarkus.devservices.common.Labels;
+import io.quarkus.devservices.common.StartableContainer;
+import io.quarkus.devservices.crossclassloader.runtime.RunningService;
 import io.quarkus.devui.spi.buildtime.FooterLogBuildItem;
+import io.quarkus.runtime.LaunchMode;
 
 public class DevServicesProcessor {
+
+    private static final Logger log = Logger.getLogger(DevServicesProcessor.class);
 
     private static final String EXEC_FORMAT = "%s exec -it %s /bin/bash";
 
     static volatile ConsoleStateManager.ConsoleContext context;
     static volatile boolean logForwardEnabled = false;
-    static Map<String, ContainerLogForwarder> containerLogForwarders = new HashMap<>();
+    static Set<ContainerLogForwarder> containerLogForwarders = new HashSet<>();
 
     @BuildStep
     public DevServicesNetworkIdBuildItem networkId(
-            Optional<DevServicesLauncherConfigResultBuildItem> devServicesLauncherConfig,
+            DevServicesConfig devServicesConfig,
+            List<DevServicesSharedNetworkBuildItem> sharedNetworkBuildItems,
             Optional<DevServicesComposeProjectBuildItem> composeProjectBuildItem) {
-        String networkId = composeProjectBuildItem
-                .map(DevServicesComposeProjectBuildItem::getDefaultNetworkId)
-                .or(() -> devServicesLauncherConfig.flatMap(ignored -> getSharedNetworkId()))
-                .orElse(null);
+        Optional<String> configuredNetwork = ConfigProvider.getConfig().getOptionalValue(
+                "quarkus.test.container.network", String.class);
+        String networkId = configuredNetwork.flatMap(this::getOrCreateNetworkId)
+                .or(() -> composeProjectBuildItem.map(DevServicesComposeProjectBuildItem::getDefaultNetworkId))
+                .orElseGet(() -> (devServicesConfig.launchOnSharedNetwork() || !sharedNetworkBuildItems.isEmpty())
+                        ? getSharedNetworkId()
+                        : null);
         return new DevServicesNetworkIdBuildItem(networkId);
     }
 
-    /**
-     * Get the network id from the shared testcontainers network, without forcing the creation of the network.
-     *
-     * @return the network id if available, empty otherwise
-     */
-    private Optional<String> getSharedNetworkId() {
+    private Optional<String> getOrCreateNetworkId(String name) {
+        var networks = DockerClientFactory.lazyClient().listNetworksCmd().exec();
+        for (var network : networks) {
+            if (network.getName().equals(name)) {
+                return Optional.of(network.getId());
+            }
+        }
+        // if the network doesn't exist, create it
         try {
-            Field id;
+            // do the cleanup in a shutdown hook because there might be more services (launched via QuarkusTestResourceLifecycleManager) connected to the network
+            String id = DockerClientFactory.lazyClient().createNetworkCmd().withName(name).exec().getId();
+            Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        DockerClientFactory.lazyClient().removeNetworkCmd(id).exec();
+                    } catch (Exception e) {
+                        log.errorf("Unable to delete container network '%s'", id);
+                    }
+                }
+            }));
+            return Optional.of(id);
+        } catch (Exception e) {
+            log.warnf(e, "Creating container network '%s' completed unsuccessfully", name);
+            return Optional.empty();
+        }
+    }
+
+    @BuildStep(onlyIf = IsDevServicesSupportedByLaunchMode.class)
+    @Produce(ServiceStartBuildItem.class)
+    public DevServicesCustomizerBuildItem containerCustomizer(LaunchModeBuildItem launchModeBuildItem,
+            DevServicesConfig devServicesConfig) {
+        return new DevServicesCustomizerBuildItem((devService, startable) -> {
+            LaunchMode launchMode = launchModeBuildItem.getLaunchMode();
+            if (startable instanceof StartableContainer startableContainer) {
+                GenericContainer<?> container = startableContainer.getContainer();
+                configureLabels(container, launchMode);
+                if (shouldConfigureSharedServiceLabel(launchMode)) {
+                    container.withLabel(Labels.QUARKUS_DEV_SERVICE, devService.getServiceName());
+                }
+                devServicesConfig.timeout().ifPresent(container::withStartupTimeout);
+            } else if (startable instanceof GenericContainer container) {
+                configureLabels(container, launchMode);
+                devServicesConfig.timeout().ifPresent(container::withStartupTimeout);
+                if (shouldConfigureSharedServiceLabel(launchMode)) {
+                    container.withLabel(Labels.QUARKUS_DEV_SERVICE, devService.getServiceName());
+                }
+            }
+            return startable;
+        });
+    }
+
+    /**
+     * Get the network id from the shared testcontainers network, Creates the SHARED Network instance if not already created
+     *
+     * @return the network id if available, null otherwise
+     */
+    private String getSharedNetworkId() {
+        try {
+            Method id;
             Object sharedNetwork;
             var tccl = Thread.currentThread().getContextClassLoader();
             if (tccl.getName().contains("Deployment")) {
                 Class<?> networkClass = tccl.getParent().loadClass("org.testcontainers.containers.Network");
                 sharedNetwork = networkClass.getField("SHARED").get(null);
                 Class<?> networkImplClass = tccl.getParent().loadClass("org.testcontainers.containers.Network$NetworkImpl");
-                id = networkImplClass.getDeclaredField("id");
+                id = networkImplClass.getDeclaredMethod("getId");
             } else {
                 sharedNetwork = Network.SHARED;
-                id = Network.NetworkImpl.class.getDeclaredField("id");
+                id = Network.NetworkImpl.class.getDeclaredMethod("getId");
             }
-            id.setAccessible(true);
-            String value = (String) id.get(sharedNetwork);
-            return Optional.ofNullable(value);
+            return (String) id.invoke(sharedNetwork);
         } catch (Exception e) {
-            return Optional.empty();
+            return null;
         }
     }
 
-    @BuildStep(onlyIf = { IsDevelopment.class })
+    @BuildStep(onlyIf = IsDevServicesSupportedByLaunchMode.class)
+    @Produce(ServiceStartBuildItem.class)
+    DevServicesRegistryBuildItem devServicesRegistry(LaunchModeBuildItem launchMode,
+            ApplicationInstanceIdBuildItem applicationId,
+            DevServicesConfig devServicesConfig,
+            CuratedApplicationShutdownBuildItem shutdownBuildItem) {
+        DevServicesRegistryBuildItem registryBuildItem = new DevServicesRegistryBuildItem(applicationId.getUUID(),
+                devServicesConfig, launchMode.getLaunchMode());
+        shutdownBuildItem.addCloseTask(registryBuildItem::closeAllRunningServices, true);
+        return registryBuildItem;
+    }
+
+    // Because the devservices runtime module is new and the ecosystem needs time to catch up, don't die if the runtime module isn't available
+    @BuildStep(onlyIf = { IsRuntimeModuleAvailable.class })
+    public void registerDevResourcesConfigSource(BuildProducer<RunTimeConfigBuilderBuildItem> runtimeConfigBuilders) {
+        // Once all the dev services are registered, we can share config
+        try {
+            // Use reflection, since we don't have an explicit dependency on the runtime module (because dependent extensions may not have that dependency)
+            runtimeConfigBuilders
+                    .produce(new RunTimeConfigBuilderBuildItem(Class.forName(IO_QUARKUS_DEVSERVICES_CONFIG_BUILDER_CLASS)));
+            runtimeConfigBuilders.produce(new RunTimeConfigBuilderBuildItem(
+                    Class.forName("io.quarkus.devservice.runtime.config.DevServicesOverrideConfigBuilder")));
+        } catch (ClassNotFoundException e) {
+            // Should never happen, because of the guard, as long as the runtime module is not a direct dependency of this module
+            throw new RuntimeException(e);
+        }
+    }
+
+    @BuildStep(onlyIf = { IsDevelopment.class, DevServicesConfig.Enabled.class })
     public List<DevServiceDescriptionBuildItem> config(
             DockerStatusBuildItem dockerStatusBuildItem,
             BuildProducer<ConsoleCommandBuildItem> commandBuildItemBuildProducer,
             BuildProducer<FooterLogBuildItem> footerLogProducer,
             LaunchModeBuildItem launchModeBuildItem,
             Optional<DevServicesLauncherConfigResultBuildItem> devServicesLauncherConfig,
-            List<DevServicesResultBuildItem> devServicesResults) {
+            List<DevServicesResultBuildItem> devServicesResults,
+            DevServicesRegistryBuildItem devServicesRegistry) {
+        containerLogForwarders.clear();
         List<DevServiceDescriptionBuildItem> serviceDescriptions = buildServiceDescriptions(
-                dockerStatusBuildItem, devServicesResults, devServicesLauncherConfig);
+                dockerStatusBuildItem, devServicesResults, devServicesRegistry,
+                devServicesLauncherConfig);
 
         for (DevServiceDescriptionBuildItem devService : serviceDescriptions) {
-            if (devService.hasContainerInfo()) {
-                containerLogForwarders.compute(devService.getContainerInfo().id(),
-                        (id, forwarder) -> Objects.requireNonNullElseGet(forwarder,
-                                () -> new ContainerLogForwarder(devService)));
-            }
+
+            containerLogForwarders.add(new ContainerLogForwarder(devService));
+
         }
 
         // Build commands if we are in local dev mode
@@ -131,11 +233,11 @@ public class DevServicesProcessor {
 
         // Dev UI Log stream
         for (DevServiceDescriptionBuildItem service : serviceDescriptions) {
-            if (service.getContainerInfo() != null) {
-                footerLogProducer.produce(new FooterLogBuildItem(service.getName(), () -> {
-                    return createLogPublisher(service.getContainerInfo().id());
-                }));
-            }
+
+            footerLogProducer.produce(new FooterLogBuildItem(service.getName(), () -> {
+                ContainerInfo containerInfo = service.getContainerInfo();
+                return createLogPublisher(containerInfo);
+            }));
         }
 
         if (context == null) {
@@ -144,7 +246,8 @@ public class DevServicesProcessor {
         context.reset(
                 new ConsoleCommand('c', "Show Dev Services containers", null, () -> {
                     List<DevServiceDescriptionBuildItem> descriptions = buildServiceDescriptions(
-                            dockerStatusBuildItem, devServicesResults, devServicesLauncherConfig);
+                            dockerStatusBuildItem, devServicesResults, devServicesRegistry,
+                            devServicesLauncherConfig);
                     StringBuilder builder = new StringBuilder();
                     builder.append("\n\n")
                             .append(RED + "==" + RESET + " " + UNDERLINE + "Dev Services" + NO_UNDERLINE)
@@ -162,22 +265,28 @@ public class DevServicesProcessor {
         return serviceDescriptions;
     }
 
-    private Flow.Publisher<String> createLogPublisher(String containerId) {
+    private Flow.Publisher<String> createLogPublisher(ContainerInfo containerInfo) {
+
         try (FrameConsumerResultCallback resultCallback = new FrameConsumerResultCallback()) {
             SubmissionPublisher<String> publisher = new SubmissionPublisher<>();
             resultCallback.addConsumer(OutputFrame.OutputType.STDERR,
                     frame -> publisher.submit(frame.getUtf8String()));
             resultCallback.addConsumer(OutputFrame.OutputType.STDOUT,
                     frame -> publisher.submit(frame.getUtf8String()));
-            LogContainerCmd logCmd = DockerClientFactory.lazyClient()
-                    .logContainerCmd(containerId)
-                    .withFollowStream(true)
-                    .withTailAll()
-                    .withStdErr(true)
-                    .withStdOut(true);
-            logCmd.exec(resultCallback);
+            if (containerInfo != null) {
+                String containerId = containerInfo.id();
+                LogContainerCmd logCmd = DockerClientFactory.lazyClient()
+                        .logContainerCmd(containerId)
+                        .withFollowStream(true)
+                        .withTailAll()
+                        .withStdErr(true)
+                        .withStdOut(true);
+                logCmd.exec(resultCallback);
+            }
 
             return publisher;
+        } catch (RuntimeException re) {
+            throw re;
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -186,19 +295,17 @@ public class DevServicesProcessor {
     private List<DevServiceDescriptionBuildItem> buildServiceDescriptions(
             DockerStatusBuildItem dockerStatusBuildItem,
             List<DevServicesResultBuildItem> devServicesResults,
+            DevServicesRegistryBuildItem devServicesRegistry,
             Optional<DevServicesLauncherConfigResultBuildItem> devServicesLauncherConfig) {
-        // Fetch container infos
-        Set<String> containerIds = devServicesResults.stream()
-                .map(DevServicesResultBuildItem::getContainerId)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toSet());
-        Map<String, Container> containerInfos = fetchContainerInfos(dockerStatusBuildItem, containerIds);
+
         // Build descriptions
         Set<String> configKeysFromDevServices = new HashSet<>();
         List<DevServiceDescriptionBuildItem> descriptions = new ArrayList<>();
         for (DevServicesResultBuildItem buildItem : devServicesResults) {
             configKeysFromDevServices.addAll(buildItem.getConfig().keySet());
-            descriptions.add(toDevServiceDescription(buildItem, containerInfos.get(buildItem.getContainerId())));
+            descriptions.add(toDevServiceDescription(buildItem, buildItem::getContainerId,
+                    dockerStatusBuildItem.isContainerRuntimeAvailable(),
+                    devServicesRegistry));
         }
         // Sort descriptions by name
         descriptions.sort(Comparator.comparing(DevServiceDescriptionBuildItem::getName));
@@ -209,38 +316,62 @@ public class DevServicesProcessor {
                 config.remove(key);
             }
             if (!config.isEmpty()) {
-                descriptions.add(new DevServiceDescriptionBuildItem("Additional Dev Services config", null, null, config));
+                descriptions.add(new DevServiceDescriptionBuildItem("Additional Dev Services config", config));
             }
         }
         return descriptions;
     }
 
-    private Map<String, Container> fetchContainerInfos(DockerStatusBuildItem dockerStatusBuildItem,
-            Set<String> containerIds) {
-        if (containerIds.isEmpty() || !dockerStatusBuildItem.isContainerRuntimeAvailable()) {
-            return Collections.emptyMap();
+    private Optional<Container> fetchContainerInfo(String containerId, boolean isContainerRuntimeAvailable) {
+        if (containerId == null || !isContainerRuntimeAvailable) {
+            return Optional.empty();
         }
         return DockerClientFactory.lazyClient().listContainersCmd()
-                .withIdFilter(containerIds)
+                .withIdFilter(Collections.singleton(containerId))
                 .withShowAll(true)
                 .exec()
                 .stream()
-                .collect(Collectors.toMap(Container::getId, Function.identity()));
+                .findAny();
     }
 
-    private DevServiceDescriptionBuildItem toDevServiceDescription(DevServicesResultBuildItem buildItem, Container container) {
-        if (container == null) {
-            return new DevServiceDescriptionBuildItem(buildItem.getName(), buildItem.getDescription(), null,
-                    buildItem.getConfig());
-        } else {
+    private DevServiceDescriptionBuildItem toDevServiceDescription(DevServicesResultBuildItem buildItem,
+            Supplier<String> containerIdFun,
+            boolean isContainerRuntimeAvailable,
+            DevServicesRegistryBuildItem devServicesRegistry) {
+        if (!buildItem.isStartable()) {
             return new DevServiceDescriptionBuildItem(buildItem.getName(), buildItem.getDescription(),
-                    toContainerInfo(container), buildItem.getConfig());
+                    toContainerInfo(containerIdFun, isContainerRuntimeAvailable), buildItem.getConfig());
+        } else {
+            return new DevServiceDescriptionBuildItem(buildItem.getName(),
+                    buildItem.getDescription(),
+                    toContainerInfo(() -> {
+                        RunningService runningService = devServicesRegistry.getRunningServices(buildItem.getName(),
+                                buildItem.getServiceName(), buildItem.getServiceConfig());
+                        return runningService == null ? null : runningService.containerId();
+                    }, isContainerRuntimeAvailable), () -> {
+                        RunningService runningService = devServicesRegistry.getRunningServices(buildItem.getName(),
+                                buildItem.getServiceName(), buildItem.getServiceConfig());
+                        return runningService == null ? null : runningService.configs();
+                    });
         }
     }
 
-    private ContainerInfo toContainerInfo(Container container) {
-        return new ContainerInfo(container.getId(), container.getNames(), container.getImage(),
-                container.getStatus(), getNetworks(container), container.getLabels(), getExposedPorts(container));
+    private Supplier<ContainerInfo> toContainerInfo(Supplier<String> containerIdFun, boolean isContainerRuntimeAvailable) {
+
+        return () -> {
+            String containerId = containerIdFun.get();
+            if (containerId != null) {
+                Optional<Container> maybeContainer = fetchContainerInfo(containerId, isContainerRuntimeAvailable);
+                if (maybeContainer.isPresent()) {
+                    Container container = maybeContainer.get();
+                    return new ContainerInfo(container.getId(), container.getNames(), container.getImage(),
+                            container.getStatus(), getNetworks(container), container.getLabels(), getExposedPorts(container));
+                }
+            }
+            return null;
+
+        };
+
     }
 
     private static Map<String, String[]> getNetworks(Container container) {
@@ -252,6 +383,10 @@ public class DevServicesProcessor {
     }
 
     private ContainerInfo.ContainerPort[] getExposedPorts(Container container) {
+        if (container.getPorts() == null) {
+            return new ContainerInfo.ContainerPort[0];
+        }
+
         return Arrays.stream(container.getPorts())
                 .map(c -> new ContainerInfo.ContainerPort(c.getIp(), c.getPrivatePort(), c.getPublicPort(), c.getType()))
                 .toArray(ContainerInfo.ContainerPort[]::new);
@@ -259,14 +394,14 @@ public class DevServicesProcessor {
 
     private synchronized void toggleLogForwarders() {
         if (logForwardEnabled) {
-            for (ContainerLogForwarder logForwarder : containerLogForwarders.values()) {
+            for (ContainerLogForwarder logForwarder : containerLogForwarders) {
                 if (logForwarder.isRunning()) {
                     logForwarder.close();
                 }
             }
             logForwardEnabled = false;
         } else {
-            for (ContainerLogForwarder logForwarder : containerLogForwarders.values()) {
+            for (ContainerLogForwarder logForwarder : containerLogForwarders) {
                 logForwarder.start();
             }
             logForwardEnabled = true;
@@ -277,17 +412,18 @@ public class DevServicesProcessor {
         builder.append(BOLD).append(devService.getName()).append(NO_BOLD);
         builder.append("\n");
 
-        if (devService.hasContainerInfo()) {
+        ContainerInfo containerInfo = devService.getContainerInfo();
+        if (containerInfo != null) {
             builder.append(String.format("  %-18s", "Container: "))
-                    .append(devService.getContainerInfo().id(), 0, 12)
-                    .append(devService.getContainerInfo().formatNames())
+                    .append(containerInfo.id(), 0, 12)
+                    .append(containerInfo.formatNames())
                     .append("  ")
-                    .append(devService.getContainerInfo().imageName())
+                    .append(containerInfo.imageName())
                     .append("\n");
             builder.append(String.format("  %-18s", "Network: "))
-                    .append(devService.getContainerInfo().formatNetworks())
+                    .append(containerInfo.formatNetworks())
                     .append(" - ")
-                    .append(devService.getContainerInfo().formatPorts())
+                    .append(containerInfo.formatPorts())
                     .append("\n");
 
             ContainerRuntime containerRuntime = ContainerRuntimeUtil.detectContainerRuntime(false);
@@ -295,7 +431,7 @@ public class DevServicesProcessor {
                 builder.append(String.format("  %-18s", "Exec command: "))
                         .append(String.format(EXEC_FORMAT,
                                 containerRuntime.getExecutableName(),
-                                devService.getContainerInfo().getShortId()))
+                                containerInfo.getShortId()))
                         .append("\n");
             }
         }

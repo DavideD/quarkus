@@ -9,7 +9,8 @@ import java.util.OptionalInt;
 import java.util.OptionalLong;
 import java.util.Set;
 
-import org.hibernate.annotations.TimeZoneStorageType;
+import org.hibernate.annotations.TimeZoneColumn;
+import org.hibernate.dialect.Dialect;
 import org.hibernate.id.enhanced.StandardOptimizerDescriptor;
 
 import io.quarkus.runtime.annotations.ConfigDocDefault;
@@ -74,7 +75,8 @@ public interface HibernateOrmConfigPersistenceUnit {
      *
      * [NOTE]
      * ====
-     * Quarkus supports `.sql` file with SQL statements or comments spread over multiple lines.
+     * Quarkus supports files with SQL statements or comments spread over multiple lines,
+     * or `.zip` files containing those files.
      * Each SQL statement must be terminated by a semicolon.
      * ====
      *
@@ -123,20 +125,22 @@ public interface HibernateOrmConfigPersistenceUnit {
 
     /**
      * Class name of a custom
-     * https://docs.jboss.org/hibernate/stable/orm/javadocs/org/hibernate/boot/spi/MetadataBuilderContributor.html[`org.hibernate.boot.spi.MetadataBuilderContributor`]
+     * https://docs.hibernate.org/stable/orm/javadocs/org/hibernate/boot/spi/MetadataBuilderContributor.html[`org.hibernate.boot.spi.MetadataBuilderContributor`]
      * implementation.
      *
      * [NOTE]
      * ====
      * Not all customization options exposed by
-     * https://docs.jboss.org/hibernate/stable/orm/javadocs/org/hibernate/boot/MetadataBuilder.html[`org.hibernate.boot.MetadataBuilder`]
+     * https://docs.hibernate.org/stable/orm/javadocs/org/hibernate/boot/MetadataBuilder.html[`org.hibernate.boot.MetadataBuilder`]
      * will work correctly. Stay clear of options related to classpath scanning in particular.
      *
      * This setting is exposed mainly to allow registration of types, converters and SQL functions.
      * ====
+     * * @deprecated Use TypeContributor, FunctionContributor or AdditionalMappingContributor instead.
      *
      * @asciidoclet
      */
+    @Deprecated
     Optional<@WithConverter(TrimmedStringConverter.class) String> metadataBuilderContributor();
 
     /**
@@ -303,12 +307,41 @@ public interface HibernateOrmConfigPersistenceUnit {
          *
          * E.g. `MyISAM` or `InnoDB` for MySQL.
          *
+         * @deprecated Use {@code mysql.}{@linkplain MySQLDialectConfig#storageEngine storage-engine}
+         *             or {@code mariadb.}{@linkplain MySQLDialectConfig#storageEngine storage-engine} instead
+         *
          * @asciidoclet
          */
-        Optional<@WithConverter(TrimmedStringConverter.class) String> storageEngine();
+        @WithConverter(TrimmedStringConverter.class)
+        @Deprecated
+        Optional<String> storageEngine();
+
+        /**
+         * Configuration specific to Hibernate's Dialect for MariaDB
+         */
+        MySQLDialectConfig mariadb();
+
+        /**
+         * Configuration specific to Hibernate's Dialect for MySQL
+         */
+        MySQLDialectConfig mysql();
+
+        /**
+         * Configuration specific to Hibernate's Dialect for Oracle
+         */
+        OracleDialectConfig oracle();
+
+        /**
+         * Configuration specific to Hibernate's Dialect for Microsoft SQLServer
+         */
+        SqlServerDialectConfig mssql();
 
         default boolean isAnyPropertySet() {
-            return dialect().isPresent() || storageEngine().isPresent();
+            return dialect().isPresent() || storageEngine().isPresent()
+                    || mysql().isAnyPropertySet()
+                    || oracle().isAnyPropertySet()
+                    || mssql().isAnyPropertySet()
+                    || mariadb().isAnyPropertySet();
         }
     }
 
@@ -327,6 +360,51 @@ public interface HibernateOrmConfigPersistenceUnit {
          */
         Id id();
 
+        Duration duration();
+
+        /**
+         * The preferred JDBC type to use for storing {@link java.time.Instant} values.
+         * <p>
+         * Can be overridden locally using `@JdbcType`, `@JdbcTypeCode`, and similar annotations.
+         * <p>
+         * Can also specify the name of the SqlTypes constant field,
+         * for example, `quarkus.hibernate-orm.mapping.type.preferred_instant_jdbc_type=TIMESTAMP`
+         * or `quarkus.hibernate-orm.mapping.type.preferred_instant_jdbc_type=INSTANT`.
+         *
+         * @asciidoclet
+         */
+        @WithName("instant.preferred-jdbc-type")
+        @ConfigDocDefault("TIMESTAMP")
+        Optional<@WithConverter(TrimmedStringConverter.class) String> instantPreferredJdbcType();
+
+        /**
+         * The preferred JDBC type to use for storing boolean values.
+         * <p>
+         * Can be overridden locally using `@JdbcType`, `@JdbcTypeCode`, and similar annotations.
+         * <p>
+         * Can also specify the name of the SqlTypes constant field,
+         * for example, `quarkus.hibernate-orm.mapping.type.boolean_jdbc_type=BIT`.
+         *
+         * @asciidoclet
+         */
+        @WithName("boolean.preferred-jdbc-type")
+        @ConfigDocDefault("BOOLEAN")
+        Optional<@WithConverter(TrimmedStringConverter.class) String> booleanPreferredJdbcType();
+
+        /**
+         * The preferred JDBC type to use for storing {@link java.util.UUID} values.
+         * <p>
+         * Can be overridden locally using `@JdbcType`, `@JdbcTypeCode`, and similar annotations.
+         * <p>
+         * Can also specify the name of the SqlTypes constant field,
+         * for example, `quarkus.hibernate-orm.mapping.type.uuid_jdbc_type=CHAR`.
+         *
+         * @asciidoclet
+         */
+        @WithName("uuid.preferred-jdbc-type")
+        @ConfigDocDefault("UUID")
+        Optional<@WithConverter(TrimmedStringConverter.class) String> UUIDPreferredJdbcType();
+
         @ConfigGroup
         interface Timezone {
             /**
@@ -337,40 +415,10 @@ public interface HibernateOrmConfigPersistenceUnit {
              *
              * NOTE: Properties of type `OffsetTime` are https://hibernate.atlassian.net/browse/HHH-16287[not affected by this
              * setting].
-             *
-             * `default`::
-             * Equivalent to `native` if supported, `normalize-utc` otherwise.
-             * `auto`::
-             * Equivalent to `native` if supported, `column` otherwise.
-             * `native`::
-             * Stores the timestamp and timezone in a column of type `timestamp with time zone`.
-             * +
-             * Only available on some databases/dialects;
-             * if not supported, an exception will be thrown during static initialization.
-             * `column`::
-             * Stores the timezone in a separate column next to the timestamp column.
-             * +
-             * Use `@TimeZoneColumn` on the relevant entity property to customize the timezone column.
-             * `normalize-utc`::
-             * Does not store the timezone, and loses timezone information upon persisting.
-             * +
-             * Instead, normalizes the value to a timestamp in the UTC timezone.
-             * `normalize`::
-             * Does not store the timezone, and loses timezone information upon persisting.
-             * +
-             * Instead, normalizes the value:
-             * * upon persisting to the database, to a timestamp in the JDBC timezone
-             * set through `quarkus.hibernate-orm.jdbc.timezone`,
-             * or the JVM default timezone if not set.
-             * * upon reading back from the database, to the JVM default timezone.
-             * +
-             * Use this to get the legacy behavior of Quarkus 2 / Hibernate ORM 5 or older.
-             *
-             * @asciidoclet
              */
             @WithName("default-storage")
             @ConfigDocDefault("default")
-            Optional<TimeZoneStorageType> timeZoneDefaultStorage();
+            Optional<HibernateTimeZoneStorageType> timeZoneDefaultStorage();
         }
 
         @ConfigGroup
@@ -406,11 +454,87 @@ public interface HibernateOrmConfigPersistenceUnit {
             }
         }
 
-        default boolean isAnyPropertySet() {
-            return timezone().timeZoneDefaultStorage().isPresent()
-                    || id().optimizer().idOptimizerDefault().isPresent();
+        @ConfigGroup
+        interface Duration {
+
+            /**
+             * The preferred JDBC type to use for storing {@link java.time.Duration} values.
+             * <p>
+             * Can be overridden locally using `@JdbcType`, `@JdbcTypeCode`, and similar annotations.
+             * <p>
+             * Can also specify the name of the SqlTypes constant field,
+             * for example, `quarkus.hibernate-orm.mapping.type.preferred_jdbc_type=INTERVAL_SECOND`.
+             *
+             * @asciidoclet
+             */
+            @WithName("preferred-jdbc-type")
+            @ConfigDocDefault("INTERVAL_SECOND")
+            Optional<@WithConverter(TrimmedStringConverter.class) String> durationPreferredJdbcType();
         }
 
+        default boolean isAnyPropertySet() {
+            return timezone().timeZoneDefaultStorage().isPresent() ||
+                    id().optimizer().idOptimizerDefault().isPresent() ||
+                    duration().durationPreferredJdbcType().isPresent() ||
+                    instantPreferredJdbcType().isPresent() ||
+                    booleanPreferredJdbcType().isPresent() ||
+                    UUIDPreferredJdbcType().isPresent();
+        }
+
+    }
+
+    enum HibernateTimeZoneStorageType {
+        /**
+         * Stores the timestamp and timezone in a column of type `timestamp with time zone`.
+         * +
+         * Only available on some databases/dialects;
+         * if not supported, an exception will be thrown during static initialization.
+         *
+         * @asciidoclet
+         */
+        NATIVE,
+        /**
+         * Does not store the timezone, and loses timezone information upon persisting.
+         * +
+         * Instead, normalizes the value:
+         * * upon persisting to the database, to a timestamp in the JDBC timezone
+         * set through `quarkus.hibernate-orm.jdbc.timezone`,
+         * or the JVM default timezone if not set.
+         * * upon reading back from the database, to the JVM default timezone.
+         * +
+         * Use this to get the legacy behavior of Quarkus 2 / Hibernate ORM 5 or older.
+         *
+         * @asciidoclet
+         */
+        NORMALIZE,
+        /**
+         * Does not store the timezone, and loses timezone information upon persisting.
+         * +
+         * Instead, normalizes the value to a timestamp in the UTC timezone.
+         *
+         * @asciidoclet
+         */
+        NORMALIZE_UTC,
+        /**
+         * Stores the timezone in a separate column next to the timestamp column.
+         * +
+         * Use `@TimeZoneColumn` on the relevant entity property to customize the timezone column.
+         *
+         * @asciidoclet
+         */
+        COLUMN,
+        /**
+         * Equivalent to `native` if supported, `column` otherwise.
+         *
+         * @asciidoclet
+         */
+        AUTO,
+        /**
+         * Equivalent to `native` if supported, `normalize-utc` otherwise.
+         *
+         * @asciidoclet
+         */
+        DEFAULT;
     }
 
     enum IdOptimizerType {
@@ -458,8 +582,23 @@ public interface HibernateOrmConfigPersistenceUnit {
         int DEFAULT_QUERY_PLAN_CACHE_MAX_SIZE = 2048;
 
         enum NullOrdering {
+            /**
+             * Null precedence not specified.
+             *
+             * @asciidoclet
+             */
             NONE,
+            /**
+             * Null values occur at the beginning of the ORDER BY clause.
+             *
+             * @asciidoclet
+             */
             FIRST,
+            /**
+             * Null values occur at the end of the ORDER BY clause.
+             *
+             * @asciidoclet
+             */
             LAST
         }
 
@@ -485,6 +624,19 @@ public interface HibernateOrmConfigPersistenceUnit {
          */
         @WithDefault("true")
         boolean inClauseParameterPadding();
+
+        /**
+         * When limits cannot be applied on the database side,
+         * trigger an exception instead of attempting badly-performing in-memory result set limits.
+         *
+         * When pagination is used in combination with a fetch join applied to a collection or many-valued association,
+         * the limit must be applied in-memory instead of on the database.
+         * This should be avoided as it typically has terrible performance characteristics.
+         *
+         * @asciidoclet
+         */
+        @WithDefault("false")
+        boolean failOnPaginationOverCollectionFetch();
 
         default boolean isAnyPropertySet() {
             return queryPlanCacheMaxSize() != DEFAULT_QUERY_PLAN_CACHE_MAX_SIZE
@@ -644,9 +796,29 @@ public interface HibernateOrmConfigPersistenceUnit {
     }
 
     enum IdentifierQuotingStrategy {
+        /**
+         * Identifiers are not quoted.
+         *
+         * @asciidoclet
+         */
         NONE,
+        /**
+         * All identifiers are quoted.
+         *
+         * @asciidoclet
+         */
         ALL,
+        /**
+         * All identifiers, except column definitions, are quoted.
+         *
+         * @asciidoclet
+         */
         ALL_EXCEPT_COLUMN_DEFINITIONS,
+        /**
+         * Only keywords will be quoted.
+         *
+         * @asciidoclet
+         */
         ONLY_KEYWORDS
     }
 
@@ -670,20 +842,28 @@ public interface HibernateOrmConfigPersistenceUnit {
 
         enum ValidationMode {
             /**
-             * If a Bean Validation provider is present then behaves as if both {@link ValidationMode#CALLBACK} and
-             * {@link ValidationMode#DDL} modes are configured. Otherwise, same as {@link ValidationMode#NONE}.
+             * If a Bean Validation provider is present then behaves as if both `ValidationMode#CALLBACK` and
+             * `ValidationMode#DDL` modes are configured. Otherwise, same as `ValidationMode#NONE`.
+             *
+             * @asciidoclet
              */
             AUTO,
             /**
              * Bean Validation will perform the lifecycle event validation.
+             *
+             * @asciidoclet
              */
             CALLBACK,
             /**
              * Bean Validation constraints will be considered for the DDL operations.
+             *
+             * @asciidoclet
              */
             DDL,
             /**
              * Bean Validation integration will be disabled.
+             *
+             * @asciidoclet
              */
             NONE
         }

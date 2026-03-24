@@ -38,9 +38,20 @@ public class DurationConverterTestCase {
 
     @Test
     public void testValueInCorrectFormatProvided() {
-        Duration expectedDuration = Duration.parse("PT20M");
-        Duration actualDuration = durationConverter.convert("PT20M");
-        assertEquals(expectedDuration, actualDuration);
+        assertStandardDurationFormat("PT20M");
+        assertStandardDurationFormat("PT20.345S");
+        assertStandardDurationFormat("PT15M");
+        assertStandardDurationFormat("PT10H");
+        assertStandardDurationFormat("P2D");
+        assertStandardDurationFormat("P2DT3H4M");
+        assertStandardDurationFormat("P2DT3H4M");
+        assertStandardDurationFormat("PT-6H3M");
+        assertStandardDurationFormat("-PT6H3M");
+        assertStandardDurationFormat("-PT-6H+3M");
+    }
+
+    private void assertStandardDurationFormat(String durationString) {
+        assertEquals(Duration.parse(durationString), durationConverter.convert(durationString));
     }
 
     @Test
@@ -53,6 +64,9 @@ public class DurationConverterTestCase {
         Duration expectedDuration = Duration.ofDays(3);
         Duration actualDuration = durationConverter.convert("3d");
         assertEquals(expectedDuration, actualDuration);
+
+        actualDuration = durationConverter.convert("3D");
+        assertEquals(expectedDuration, actualDuration);
     }
 
     @Test
@@ -60,12 +74,38 @@ public class DurationConverterTestCase {
         Duration expectedDuration = Duration.ofMillis(25);
         Duration actualDuration = durationConverter.convert("25ms");
         assertEquals(expectedDuration, actualDuration);
+
+        actualDuration = durationConverter.convert("25MS");
+        assertEquals(expectedDuration, actualDuration);
     }
 
     @Test
     public void testValueIsInSec() {
         Duration expectedDuration = Duration.ofSeconds(2);
         Duration actualDuration = durationConverter.convert("2s");
+        assertEquals(expectedDuration, actualDuration);
+
+        actualDuration = durationConverter.convert("2S");
+        assertEquals(expectedDuration, actualDuration);
+    }
+
+    @Test
+    public void testValueIsInMinutes() {
+        Duration expectedDuration = Duration.ofMinutes(2);
+        Duration actualDuration = durationConverter.convert("2m");
+        assertEquals(expectedDuration, actualDuration);
+
+        actualDuration = durationConverter.convert("2M");
+        assertEquals(expectedDuration, actualDuration);
+    }
+
+    @Test
+    public void testValueIsInHours() {
+        Duration expectedDuration = Duration.ofHours(3);
+        Duration actualDuration = durationConverter.convert("3h");
+        assertEquals(expectedDuration, actualDuration);
+
+        actualDuration = durationConverter.convert("3H");
         assertEquals(expectedDuration, actualDuration);
     }
 

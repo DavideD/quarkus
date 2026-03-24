@@ -345,7 +345,7 @@ There are three distinct bootstrap phases of a Quarkus app:
 Augmentation::
     This is the first phase, and is done by the <<build-step-processors>>. These processors have access to Jandex annotation
     information and can parse any descriptors and read annotations, but should not attempt to load any application classes. The output of these
-    build steps is some recorded bytecode, using an extension of the ObjectWeb ASM project called Gizmo(ext/gizmo), that is used to actually bootstrap the application at runtime.
+    build steps is some recorded bytecode, using a bytecode generation library called https://github.com/quarkusio/gizmo[Gizmo], that is used to actually bootstrap the application at runtime.
     Depending on the `io.quarkus.deployment.annotations.ExecutionTime` value of the `@io.quarkus.deployment.annotations.Record` annotation associated with the build step,
     the step may be run in a different JVM based on the following two modes.
 
@@ -1136,7 +1136,7 @@ public interface LogConfiguration {
          * Enable logging to a file.
          */
         @WithDefault("true")
-        boolean enable();
+        boolean enabled();
 
         /**
          * The log format.
@@ -1172,12 +1172,12 @@ public class LoggingProcessor {
 ----
 
 A configuration property name can be split into segments. For example, a property name like
-`quarkus.log.file.enable` can be split into the following segments:
+`quarkus.log.file.enabled` can be split into the following segments:
 
 * `quarkus` - a namespace claimed by Quarkus which is a prefix for `@ConfigMapping` interfaces,
 * `log` - a name segment which corresponds to the prefix set in the interface annotated with `@ConfigMapping`,
 * `file` - a name segment which corresponds to the `file` field in this class,
-* `enable` - a name segment which corresponds to `enable` field in `FileConfig`.
+* `enabled` - a name segment which corresponds to `enabled` field in `FileConfig`.
 
 <1> The `@ConfigMapping` annotation indicates that the interface is a configuration mapping, in this case one which
 corresponds to a `quarkus.log` segment.
@@ -1189,7 +1189,7 @@ A corresponding `application.properties` for the above example could be:
 
 [source%nowrap,properties]
 ----
-quarkus.log.file.enable=true
+quarkus.log.file.enabled=true
 quarkus.log.file.level=DEBUG
 quarkus.log.file.path=/tmp/debug.log
 ----
@@ -1226,7 +1226,7 @@ suitable for tips, source code extracts, lists and more:
 ----
 /**
  * Class name of the Hibernate ORM dialect. The complete list of bundled dialects is available in the
- * https://docs.jboss.org/hibernate/stable/orm/javadocs/org/hibernate/dialect/package-summary.html[Hibernate ORM JavaDoc].
+ * https://docs.hibernate.org/stable/orm/javadocs/org/hibernate/dialect/package-summary.html[Hibernate ORM JavaDoc].
  *
  * [NOTE]
  * ====
@@ -1535,10 +1535,38 @@ This same SPI can also be used to provide a custom annotation that will substitu
 ==== Injecting Configuration into Recorders
 
 Configuration objects with phase `RUNTIME` or `BUILD_AND_RUNTIME_FIXED` can be injected into recorders via constructor
-injection. Just create a constructor that takes the configuration objects the recorder needs. If the recorder has multiple
-constructors you can annotate the one you want Quarkus to use with `@Inject`. If the recorder wants to inject runtime config
-but is also used at static init time then it needs to inject a `RuntimeValue<ConfigObject>`, this value will only be set
-when the runtime methods are being invoked.
+injection. The constructor requires a parameter for each configuration object type. If the Configuration object type is
+declared to be in the `RUNTIME` phase, it must be wrapped in a `RuntimeValue<>` type.
+
+[source%nowrap,java]
+----
+@ConfigMapping(prefix = "quarkus.btrt")
+@ConfigRoot(phase = ConfigPhase.BUILD_AND_RUNTIME_FIXED)
+public interface BuildAndRuntimeFixedConfig {
+
+}
+
+@ConfigMapping(prefix = "quarkus.rt")
+@ConfigRoot(phase = ConfigPhase.RUN_TIME)
+public interface RuntimeConfig {
+
+}
+
+@Recorder
+class ExtensionRecorder {
+    private final BuildAndRuntimeFixedConfig buildAndRuntimeFixedConfig;
+    private final RuntimeValue<RuntimeConfig> runtimeConfig;
+
+    public ExtensionRecorder(
+            BuildAndRuntimeFixedConfig buildAndRuntimeFixedConfig,
+            RuntimeValue<RuntimeConfig> runtimeConfig) {
+        this.buildAndRuntimeFixedConfig = buildAndRuntimeFixedConfig;
+        this.runtimeConfig = runtimeConfig;
+    }
+}
+----
+
+NOTE: If the recorder has multiple constructors you can annotate the one you want Quarkus to use with `@Inject`.
 
 ==== RecorderContext
 
@@ -1747,7 +1775,7 @@ HealthBuildItem addHealthCheck(AgroalBuildTimeConfig agroalBuildTimeConfig) {
 
 === Extension Metrics
 
-The `quarkus-micrometer` extension and the `quarkus-smallrye-metrics` extension provide support for collecting metrics.
+The `quarkus-micrometer` extension provide support for collecting metrics.
 As a compatibility note, the `quarkus-micrometer` extension adapts the MP Metrics API to Micrometer library primitives, so the `quarkus-micrometer` extension can be enabled without breaking code that relies on the MP Metrics API.
 Note that the metrics emitted by Micrometer are different, see the `quarkus-micrometer` extension documentation for more information.
 
@@ -1757,7 +1785,7 @@ There are two broad patterns that extensions can use to interact with an optiona
 
 * Consumer pattern: An extension declares a `MetricsFactoryConsumerBuildItem` and uses that to provide a bytecode recorder to the metrics extension. When the metrics extension has initialized, it will iterate over registered consumers to initialize them with a `MetricsFactory`. This factory can be used to declare API-agnostic metrics, which can be a good fit for extensions that provide an instrumentable object for gathering statistics (e.g. Hibernate's `Statistics` class).
 
-* Binder pattern: An extension can opt to use completely different gathering implementations depending on the metrics system. An `Optional<MetricsCapabilityBuildItem> metricsCapability` build step parameter can be used to declare or otherwise initialize API-specific metrics based on the active metrics extension (e.g. "smallrye-metrics" or "micrometer"). This pattern can be combined with the consumer pattern by using `MetricsFactory::metricsSystemSupported()` to test the active metrics extension within the recorder.
+* Binder pattern: An extension can opt to use completely different gathering implementations depending on the metrics system. An `Optional<MetricsCapabilityBuildItem> metricsCapability` build step parameter can be used to declare or otherwise initialize API-specific metrics based on the active metrics extension (e.g. "micrometer"). This pattern can be combined with the consumer pattern by using `MetricsFactory::metricsSystemSupported()` to test the active metrics extension within the recorder.
 
 Remember that support for metrics is optional. Extensions can use an `Optional<MetricsCapabilityBuildItem> metricsCapability` parameter in their build step to test for the presence of an enabled metrics extension. Consider using additional configuration to control behavior of metrics. Datasource metrics can be expensive, for example, so additional configuration flags are used enable metrics collection on individual datasources.
 
@@ -1771,9 +1799,9 @@ When adding metrics for your extension, you may find yourself in one of the foll
 
 If the library directly uses a metrics API, there are two options:
 
-- Use an `Optional<MetricsCapabilityBuildItem> metricsCapability` parameter to test which metrics API is supported (e.g. "smallrye-metrics" or "micrometer") in your build step, and use that to selectively declare or initialize API-specific beans or build items.
+- Use an `Optional<MetricsCapabilityBuildItem> metricsCapability` parameter to test which metrics API is supported (e.g. "micrometer") in your build step, and use that to selectively declare or initialize API-specific beans or build items.
 
-- Create a separate build step that consumes a `MetricsFactory`, and use the `MetricsFactory::metricsSystemSupported()` method within the bytecode recorder to initialize required resources if the desired metrics API is supported (e.g. "smallrye-metrics" or "micrometer").
+- Create a separate build step that consumes a `MetricsFactory`, and use the `MetricsFactory::metricsSystemSupported()` method within the bytecode recorder to initialize required resources if the desired metrics API is supported (e.g. "micrometer").
 
 Extensions may need to provide a fallback if there is no active metrics extension or the extension doesn't support the API required by the library.
 
@@ -2089,16 +2117,16 @@ See xref:extension-writing-dev-service.adoc[how to write a Dev Service] for more
 [[testing-extensions]]
 === Testing Extensions
 
-Testing of Quarkus extensions should be done with the `io.quarkus.test.QuarkusUnitTest` JUnit 5 extension.
+Testing of Quarkus extensions should be done with the `io.quarkus.test.QuarkusExtensionTest` JUnit extension.
 This extension allows for Arquillian-style tests that test specific functionalities.
 It is not intended for testing user applications, as this should be done via `io.quarkus.test.junit.QuarkusTest`.
-The main difference is that `QuarkusTest` simply boots the application once at the start of the run, while `QuarkusUnitTest` deploys a custom
+The main difference is that `QuarkusTest` simply boots the application once at the start of the run, while `QuarkusExtensionTest` deploys a custom
 Quarkus application for each test class.
 
 These tests should be placed in the deployment module, if additional Quarkus modules are required for testing
 their deployment modules should also be added as test scoped dependencies.
 
-Note that `QuarkusUnitTest` is in the `quarkus-junit5-internal` module.
+Note that `QuarkusExtensionTest` is in the `quarkus-junit-internal` module.
 
 An example test class may look like:
 
@@ -2117,7 +2145,7 @@ import jakarta.inject.Inject;
 import org.eclipse.microprofile.health.Liveness;
 import org.eclipse.microprofile.health.HealthCheck;
 import org.eclipse.microprofile.health.HealthCheckResponse;
-import io.quarkus.test.QuarkusUnitTest;
+import io.quarkus.test.QuarkusExtensionTest;
 import org.jboss.shrinkwrap.api.ShrinkWrap;
 import org.jboss.shrinkwrap.api.asset.EmptyAsset;
 import org.jboss.shrinkwrap.api.spec.JavaArchive;
@@ -2129,7 +2157,7 @@ import io.restassured.RestAssured;
 public class FailingUnitTest {
 
     @RegisterExtension                                                                  // <1>
-    static final QuarkusUnitTest config = new QuarkusUnitTest()
+    static final QuarkusExtensionTest config = new QuarkusExtensionTest()
             .setArchiveProducer(() ->
                     ShrinkWrap.create(JavaArchive.class)                                // <2>
                             .addClasses(FailingHealthCheck.class)
@@ -2157,7 +2185,7 @@ public class FailingUnitTest {
 }
 ----
 
-<1> The `QuarkusUnitTest` extension must be used with a static field. If used with a non-static field, the test application is not started.
+<1> The `QuarkusExtensionTest` extension must be used with a static field. If used with a non-static field, the test application is not started.
 <2> This producer is used to build the application to be tested. It uses Shrinkwrap to create a JavaArchive to test
 <3> It is possible to inject beans from our test deployment directly into the test case
 <4> This method directly invokes the health check Servlet and verifies the response
@@ -2171,7 +2199,7 @@ If you want to test that an extension properly fails at build time, use the `set
 package io.quarkus.hibernate.orm;
 
 import io.quarkus.runtime.configuration.ConfigurationException;
-import io.quarkus.test.QuarkusUnitTest;
+import io.quarkus.test.QuarkusExtensionTest;
 import org.jboss.shrinkwrap.api.ShrinkWrap;
 import org.jboss.shrinkwrap.api.spec.JavaArchive;
 import org.junit.jupiter.api.Assertions;
@@ -2181,7 +2209,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 public class PersistenceAndQuarkusConfigTest {
 
     @RegisterExtension
-    static QuarkusUnitTest runner = new QuarkusUnitTest()
+    static QuarkusExtensionTest runner = new QuarkusExtensionTest()
             .setExpectedException(ConfigurationException.class)                     <1>
             .withApplicationRoot((jar) -> jar
                     .addAsManifestResource("META-INF/some-persistence.xml", "persistence.xml")
@@ -2199,6 +2227,55 @@ public class PersistenceAndQuarkusConfigTest {
 ----
 
 <1> This tells JUnit that the Quarkus deployment should fail with a specific exception
+
+
+[TIP]
+.Test coverage and `QuarkusExtensionTest`
+====
+If you want to measure the test coverage of the runtime submodule, then a specific JaCoCo configuration is needed in the deployment module:
+
+[source,xml]
+----
+<profiles>
+    <profile>
+        <id>test-coverage</id>
+        <activation>
+            <property>
+                <name>jacoco</name> <1>
+            </property>
+        </activation>
+        <dependencies>
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-jacoco-deployment</artifactId> <2>
+                <scope>test</scope>
+            </dependency>
+        </dependencies>
+        <build>
+            <plugins>
+                <plugin>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <configuration>
+                        <systemPropertyVariables>
+                            <quarkus.jacoco.instrument-artifacts.runtime.group-id>io.quarkus</quarkus.jacoco.instrument-artifacts.runtime.group-id> <3>
+                            <quarkus.jacoco.instrument-artifacts.runtime.artifact-id>quarkus-runtime-module-name</quarkus.jacoco.instrument-artifacts.runtime.artifact-id>
+                        </systemPropertyVariables>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </build>
+    </profile>
+</profiles>
+----
+<1> This profile is activated with the `jacoco` property.
+<2> Add the `quarkus-jacoco-deployment` dependency with the `test` scope.
+<3> Instruct the JaCoCo plugin to instrument the `io.quarkus:quarkus-runtime-module-name` artifact.
+
+By default, JaCoCo will save the collected data in `target/jacoco-quarkus.exec` and the generated report is located in `target/jacoco-report`.
+For multi-module projects, more config properties will be needed. 
+Typically, `quarkus.jacoco.data-file=/path/to/shared/data-file`, `quarkus.jacoco.reuse-data-file=true` and `quarkus.jacoco.aggregate-report-data=true`.
+See xref:tests-with-coverage.adoc[Measuring the coverage of your tests] for more information. 
+====
 
 
 === Testing hot reload
@@ -2399,19 +2476,19 @@ The property is also honored when running tests:
 
 Analogously, you can use the `quarkus.debug.transformed-classes-dir` and `quarkus.debug.generated-sources-dir` properties to dump the relevant output.
 
-[[dump-generated-transformed-classes-with-quarkusunittest]]
-==== Inspecting Generated/Transformed Classes in `QuarkusUnitTest`
+[[dump-generated-transformed-classes-with-QuarkusExtensionTest]]
+==== Inspecting Generated/Transformed Classes in `QuarkusExtensionTest`
 
-When <<testing-extensions,using `QuarkusUnitTest`>>,
+When <<testing-extensions,using `QuarkusExtensionTest`>>,
 as an alternative to <<dump-the-generated-classes-to-the-file-system,setting `quarkus.debug.*-dir` manually>>,
-you may simply call `QuarkusUnitTest#debugBytecode`:
+you may simply call `QuarkusExtensionTest#debugBytecode`:
 
 [source,java]
 ----
 public class MyTest {
 
     @RegisterExtension
-    static QuarkusUnitTest runner = new QuarkusUnitTest()
+    static QuarkusExtensionTest runner = new QuarkusExtensionTest()
             .withApplicationRoot((jar) -> jar
                     .addClass(MyEntity.class))
             .debugBytecode(true);
@@ -2424,7 +2501,7 @@ public class MyTest {
 This will automatically set up these configuration properties so that classes/sources
 are dumped to `target/debug`, for that test class only,
 in a subdirectory that is unique to each test execution.
-See the javadoc of `QuarkusUnitTest#debugBytecode` for details.
+See the javadoc of `QuarkusExtensionTest#debugBytecode` for details.
 
 This is handy to debug flaky tests that happen only in the CI environment, in particular;
 for example the GitHub Actions CI at https://github.com/quarkusio/quarkus/
@@ -2434,16 +2511,16 @@ collected into build artifacts available for download after each CI run.
 [[troubleshooting-trace-logs]]
 ==== Enabling trace logs for a particular test only
 
-When <<testing-extensions,using `QuarkusUnitTest`>>,
+When <<testing-extensions,using `QuarkusExtensionTest`>>,
 if you need to enable trace logs for a particular test class,
-you may simply call `QuarkusUnitTest#traceCategories` and pass the logging categories in argument:
+you may simply call `QuarkusExtensionTest#traceCategories` and pass the logging categories in argument:
 
 [source,java]
 ----
 public class MyTest {
 
     @RegisterExtension
-    static QuarkusUnitTest runner = new QuarkusUnitTest()
+    static QuarkusExtensionTest runner = new QuarkusExtensionTest()
             .withApplicationRoot((jar) -> jar
                     .addClass(MyEntity.class))
             .traceCategories("org.hibernate", "io.quarkus.hibernate", "io.quarkus.panache");
@@ -2453,7 +2530,7 @@ public class MyTest {
 }
 ----
 
-See the javadoc of `QuarkusUnitTest#traceCategories` for details.
+See the javadoc of `QuarkusExtensionTest#traceCategories` for details.
 
 This is handy to debug flaky tests that happen only in the CI environment, in particular,
 as this will only increase the verbosity of logs in the particular test where the option is enabled.

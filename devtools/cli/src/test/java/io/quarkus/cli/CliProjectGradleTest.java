@@ -14,8 +14,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import io.quarkus.cli.build.ExecuteUtil;
-import io.quarkus.cli.build.GradleRunner;
+import io.quarkus.cli.common.build.ExecuteUtil;
+import io.quarkus.cli.common.build.GradleRunner;
 import io.quarkus.devtools.commands.CreateProjectHelper;
 import io.quarkus.devtools.testing.RegistryClientTestHelper;
 import picocli.CommandLine;
@@ -438,23 +438,39 @@ public class CliProjectGradleTest {
                 "Java 21 should be used when specified. Found:\n" + buildGradleContent);
     }
 
+    @Test
+    public void testCreateArgJava25() throws Exception {
+        CliDriver.Result result = CliDriver.execute(workspaceRoot, "create", "app", "--gradle",
+                "-e", "-B", "--verbose",
+                "--java", "25");
+
+        // We don't need to retest this, just need to make sure all the arguments were passed through
+        Assertions.assertEquals(CommandLine.ExitCode.OK, result.exitCode, "Expected OK return code." + result);
+
+        Path buildGradle = project.resolve("build.gradle");
+        String buildGradleContent = CliDriver.readFileAsString(buildGradle);
+
+        Assertions.assertTrue(buildGradleContent.contains("sourceCompatibility = JavaVersion.VERSION_25"),
+                "Java 25 should be used when specified. Found:\n" + buildGradleContent);
+    }
+
     String validateBasicGradleGroovyIdentifiers(Path project, String group, String artifact, String version) throws Exception {
         Path buildGradle = project.resolve("build.gradle");
         Assertions.assertTrue(buildGradle.toFile().exists(),
                 "build.gradle should exist: " + buildGradle.toAbsolutePath().toString());
 
         String buildContent = CliDriver.readFileAsString(buildGradle);
-        Assertions.assertTrue(buildContent.contains("group '" + group + "'"),
-                "build.gradle should include the group id:\n" + buildContent);
-        Assertions.assertTrue(buildContent.contains("version '" + version + "'"),
-                "build.gradle should include the version:\n" + buildContent);
+        Assertions.assertTrue(buildContent.contains("group = '" + group + "'"),
+                "build.gradle should include the group id: " + group + " but was:\n" + buildContent);
+        Assertions.assertTrue(buildContent.contains("version = '" + version + "'"),
+                "build.gradle should include the version: " + version + " but was:\n" + buildContent);
 
         Path settings = project.resolve("settings.gradle");
         Assertions.assertTrue(settings.toFile().exists(),
                 "settings.gradle should exist: " + settings.toAbsolutePath().toString());
         String settingsContent = CliDriver.readFileAsString(settings);
         Assertions.assertTrue(settingsContent.contains(artifact),
-                "settings.gradle should include the artifact id:\n" + settingsContent);
+                "settings.gradle should include the artifact id: " + artifact + " but was:\n" + settingsContent);
 
         return buildContent;
     }
@@ -466,16 +482,16 @@ public class CliProjectGradleTest {
 
         String buildContent = CliDriver.readFileAsString(buildGradle);
         Assertions.assertTrue(buildContent.contains("group = \"" + group + "\""),
-                "build.gradle.kts should include the group id:\n" + buildContent);
+                "build.gradle.kts should include the group id: " + group + " but was:\n" + buildContent);
         Assertions.assertTrue(buildContent.contains("version = \"" + version + "\""),
-                "build.gradle.kts should include the version:\n" + buildContent);
+                "build.gradle.kts should include the version: " + version + " but was:\n" + buildContent);
 
         Path settings = project.resolve("settings.gradle.kts");
         Assertions.assertTrue(settings.toFile().exists(),
                 "settings.gradle.kts should exist: " + settings.toAbsolutePath().toString());
         String settingsContent = CliDriver.readFileAsString(settings);
         Assertions.assertTrue(settingsContent.contains(artifact),
-                "settings.gradle.kts should include the artifact id:\n" + settingsContent);
+                "settings.gradle.kts should include the artifact id: " + artifact + " but was:\n" + settingsContent);
 
         return buildContent;
     }

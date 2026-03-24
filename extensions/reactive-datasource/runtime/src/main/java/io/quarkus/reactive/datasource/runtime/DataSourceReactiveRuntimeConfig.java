@@ -23,8 +23,8 @@ public interface DataSourceReactiveRuntimeConfig {
     /**
      * Whether prepared statements should be cached on the client side.
      */
-    @WithDefault("false")
-    boolean cachePreparedStatements();
+    @ConfigDocDefault("true for PostgreSQL/MySQL/MariaDB/Db2, false otherwise")
+    Optional<Boolean> cachePreparedStatements();
 
     /**
      * The datasource URLs.
@@ -109,7 +109,7 @@ public interface DataSourceReactiveRuntimeConfig {
     /**
      * The interval between reconnection attempts when a pooled connection cannot be established on first try.
      */
-    @WithDefault("PT1S")
+    @WithDefault("1S")
     Duration reconnectInterval();
 
     /**

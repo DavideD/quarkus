@@ -7,6 +7,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
 
+import io.quarkus.runtime.annotations.ConfigDocDefault;
 import io.quarkus.runtime.annotations.ConfigDocMapKey;
 import io.quarkus.runtime.annotations.ConfigRoot;
 import io.quarkus.runtime.configuration.MemorySize;
@@ -40,8 +41,8 @@ public interface KeycloakDevServicesConfig {
      * ends with `-legacy`.
      * Override with `quarkus.keycloak.devservices.keycloak-x-image`.
      */
-    @WithDefault("quay.io/keycloak/keycloak:26.2.4")
-    String imageName();
+    @ConfigDocDefault(value = "`{keycloak-image}`", escape = false)
+    Optional<String> imageName();
 
     /**
      * Indicates if a Keycloak-X image is used.
@@ -218,5 +219,14 @@ public interface KeycloakDevServicesConfig {
      */
     @WithDefault("4S")
     Duration webClientTimeout();
+
+    /**
+     * Specifies whether to disable HTTPS on the master realm by setting {@code sslRequired=NONE}.
+     *
+     * This is useful when the Keycloak container is started without HTTPS support and the master realm's
+     * default SSL requirement prevents HTTP access.
+     */
+    @WithDefault("false")
+    boolean disableHttps();
 
 }

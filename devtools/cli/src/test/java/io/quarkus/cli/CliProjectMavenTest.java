@@ -48,7 +48,9 @@ public class CliProjectMavenTest {
                 "Expected confirmation that the project has been created." + result);
 
         Assertions.assertTrue(project.resolve("mvnw").toFile().exists(),
-                "Wrapper should exist by default");
+                "mvnw should exist by default");
+        Assertions.assertTrue(project.resolve("mvnw.cmd").toFile().exists(),
+                "mvnw.cmd should exist by default");
         Assertions.assertTrue(Files.exists(project.resolve("src/main/docker")),
                 "Docker folder should exist by default");
         String pomContent = validateBasicIdentifiers(CreateProjectHelper.DEFAULT_GROUP_ID,
@@ -387,6 +389,22 @@ public class CliProjectMavenTest {
 
         Assertions.assertTrue(pomContent.contains("maven.compiler.release>21<"),
                 "Java 21 should be used when specified. Found:\n" + pomContent);
+    }
+
+    @Test
+    public void testCreateArgJava25() throws Exception {
+        CliDriver.Result result = CliDriver.execute(workspaceRoot, "create", "app",
+                "-e", "-B", "--verbose",
+                "--java", "25");
+
+        // We don't need to retest this, just need to make sure all the arguments were passed through
+        Assertions.assertEquals(CommandLine.ExitCode.OK, result.exitCode, "Expected OK return code." + result);
+
+        Path pom = project.resolve("pom.xml");
+        String pomContent = CliDriver.readFileAsString(pom);
+
+        Assertions.assertTrue(pomContent.contains("maven.compiler.release>25<"),
+                "Java 25 should be used when specified. Found:\n" + pomContent);
     }
 
     @Test

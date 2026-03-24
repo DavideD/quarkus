@@ -9,7 +9,7 @@
         {
             "category": "Data1",
             "timeout": 95,
-            "test-modules": "jpa-h2, jpa-h2-embedded, jpa-mariadb, jpa-mssql, jpa-derby, jpa-without-entity, hibernate-orm-tenancy/datasource, hibernate-orm-tenancy/connection-resolver, hibernate-orm-tenancy/connection-resolver-legacy-qualifiers",
+            "test-modules": "jpa-h2, jpa-h2-embedded, jpa-mariadb, jpa-mssql, jpa-without-entity, hibernate-orm-tenancy/datasource, hibernate-orm-tenancy/connection-resolver, hibernate-orm-tenancy/connection-resolver-legacy-qualifiers",
             "os-name": "ubuntu-latest"
         },
         {
@@ -32,8 +32,8 @@
         },
         {
             "category": "Data5",
-            "timeout": 70,
-            "test-modules": "jpa-postgresql, jpa-postgresql-withxml, narayana-stm, narayana-jta, reactive-pg-client, hibernate-reactive-postgresql, hibernate-orm-tenancy/schema",
+            "timeout": 80,
+            "test-modules": "jpa-postgresql, jpa-postgresql-withxml, narayana-stm, narayana-jta, reactive-pg-client, hibernate-reactive-postgresql, hibernate-orm-tenancy/schema, hibernate-orm-tenancy/schema-mariadb, hibernate-orm-spatial",
             "os-name": "ubuntu-latest"
         },
         {
@@ -51,7 +51,7 @@
         {
             "category": "Build tools and DevTools",
             "timeout": 75,
-            "test-modules": "maven, gradle, devtools-registry-client",
+            "test-modules": "maven, gradle, devtools-registry-client, compose-devservices",
             "os-name": "ubuntu-latest"
         },
         {
@@ -92,14 +92,14 @@
         },
         {
             "category": "Cache",
-            "timeout": 75,
-            "test-modules": "infinispan-cache-jpa, infinispan-client, cache, redis-cache, infinispan-cache",
+            "timeout": 80,
+            "test-modules": "infinispan-cache-jpa, infinispan-client, cache, redis-cache, redis-devservices, infinispan-cache, cache-multiple-backends",
             "os-name": "ubuntu-latest"
         },
         {
             "category": "HTTP",
             "timeout": 130,
-            "test-modules": "elytron-resteasy, resteasy-jackson, elytron-resteasy-reactive, resteasy-mutiny, resteasy-reactive-kotlin/standard, vertx, vertx-http, vertx-web, vertx-http-compressors/all, vertx-http-compressors/some, vertx-web-jackson, vertx-graphql, virtual-http, rest-client, rest-client-reactive, rest-client-reactive-stork, rest-client-reactive-multipart, websockets, websockets-next, management-interface, management-interface-auth, mutiny-native-jctools",
+            "test-modules": "elytron-resteasy, resteasy-jackson, elytron-resteasy-reactive, resteasy-mutiny, resteasy-reactive-kotlin/standard, vertx, vertx-http, vertx-web, vertx-http-compressors/all, vertx-http-compressors/some, vertx-web-jackson, vertx-graphql, virtual-http, rest-client, rest-client-reactive, rest-client-reactive-stork, rest-client-reactive-multipart, websockets, websockets-next, management-interface, management-interface-auth, mutiny-native-jctools, smallrye-stork-consul-registration",
             "os-name": "ubuntu-latest"
         },
         {
@@ -111,19 +111,19 @@
         {
             "category": "Misc2",
             "timeout": 75,
-            "test-modules": "hibernate-validator, test-extension/tests, logging-gelf, mailer, native-config-profile, locales/all, locales/some, locales/default, jaxp, jaxb",
+            "test-modules": "hibernate-validator, test-extension/tests, logging-gelf, mailer, native-config-profile, native-image-annotations, locales/all, locales/some, locales/default, jaxp, jaxb",
             "os-name": "ubuntu-latest"
         },
         {
             "category": "Misc3",
             "timeout": 80,
-            "test-modules": "kubernetes-client, openshift-client, kubernetes-service-binding-jdbc, smallrye-config, smallrye-graphql, smallrye-graphql-client, smallrye-graphql-client-keycloak,  picocli-native",
+            "test-modules": "kubernetes-client, openshift-client, kubernetes-service-binding-jdbc, smallrye-config, smallrye-graphql, smallrye-graphql-client, smallrye-graphql-client-keycloak,  command-mode, picocli-native",
             "os-name": "ubuntu-latest"
         },
         {
             "category": "Observability",
             "timeout": 130,
-            "test-modules": "smallrye-metrics, micrometer-mp-metrics, micrometer-prometheus, logging-json, observability-lgtm, opentelemetry, opentelemetry-jdbc-instrumentation, opentelemetry-mongodb-client-instrumentation, opentelemetry-redis-instrumentation, micrometer-opentelemetry",
+            "test-modules": "micrometer-prometheus, logging-json, observability-lgtm, opentelemetry, opentelemetry-jdbc-instrumentation, opentelemetry-mongodb-client-instrumentation, opentelemetry-redis-instrumentation, micrometer-opentelemetry",
             "os-name": "ubuntu-latest"
         },
         {
@@ -135,7 +135,7 @@
         {
             "category": "gRPC",
             "timeout": 80,
-            "test-modules": "grpc-health, grpc-interceptors, grpc-mutual-auth, grpc-plain-text-gzip, grpc-plain-text-mutiny, grpc-proto-v2, grpc-streaming, grpc-tls, grpc-tls-p12, grpc-test-random-port",
+            "test-modules": "grpc-health, grpc-encoding, grpc-interceptors, grpc-mutual-auth, grpc-plain-text-gzip, grpc-plain-text-mutiny, grpc-proto-v2, grpc-streaming, grpc-tls, grpc-tls-p12, grpc-test-random-port",
             "os-name": "ubuntu-latest"
         },
         {
@@ -149,6 +149,12 @@
             "timeout": 40,
             "test-modules": "awt, no-awt, awt-packaging",
             "os-name": "ubuntu-latest"
+        },
+        {
+            "category": "AWT, ImageIO and Java2D, Packaging .dll files (Windows)",
+            "timeout": 40,
+            "test-modules": "awt, no-awt, awt-packaging",
+            "os-name": "windows-latest"
         }
     ]
 }

@@ -153,6 +153,20 @@ public class JaxRSTestCase {
     }
 
     @Test
+    public void testSubSubclass() {
+        RestAssured.when().get("/test/subsubclass").then()
+                .body("name", is("your name"),
+                        "value", is("your value"),
+                        "toy", is("your toy"));
+    }
+
+    @Test
+    public void testRecord() {
+        RestAssured.when().get("/test/record").then()
+                .body("nestedInterface.record.recordProperty", is("record-property-value"));
+    }
+
+    @Test
     public void testImplementor() {
         RestAssured.when().get("/test/implementor").then()
                 .body("name", is("my name"),

@@ -55,11 +55,9 @@ import io.quarkus.smallrye.health.deployment.spi.HealthBuildItem;
 import io.quarkus.smallrye.health.runtime.QuarkusAsyncHealthCheckFactory;
 import io.quarkus.smallrye.health.runtime.ShutdownReadinessCheck;
 import io.quarkus.smallrye.health.runtime.ShutdownReadinessListener;
-import io.quarkus.smallrye.health.runtime.SmallRyeHealthBuildFixedConfig;
 import io.quarkus.smallrye.health.runtime.SmallRyeHealthGroupHandler;
 import io.quarkus.smallrye.health.runtime.SmallRyeHealthHandler;
 import io.quarkus.smallrye.health.runtime.SmallRyeHealthRecorder;
-import io.quarkus.smallrye.health.runtime.SmallRyeHealthRuntimeConfig;
 import io.quarkus.smallrye.health.runtime.SmallRyeIndividualHealthGroupHandler;
 import io.quarkus.smallrye.health.runtime.SmallRyeLivenessHandler;
 import io.quarkus.smallrye.health.runtime.SmallRyeReadinessHandler;
@@ -272,7 +270,8 @@ class SmallRyeHealthProcessor {
     public void processSmallRyeHealthConfigValues(SmallRyeHealthBuildTimeConfig healthConfig,
             BuildProducer<RunTimeConfigurationDefaultBuildItem> config) {
         if (healthConfig.contextPropagation()) {
-            config.produce(new RunTimeConfigurationDefaultBuildItem("io.smallrye.health.context.propagation", "true"));
+            LOG.warn(
+                    "The config property quarkus.smallrye-health.context-propagation is deprecated and will be removed. The context is now always propagated.");
         }
         if (healthConfig.maxGroupRegistriesCount().isPresent()) {
             config.produce(new RunTimeConfigurationDefaultBuildItem("io.smallrye.health.maxGroupRegistriesCount",
@@ -417,7 +416,6 @@ class SmallRyeHealthProcessor {
     void registerHealthUiHandler(
             BuildProducer<RouteBuildItem> routeProducer,
             SmallRyeHealthRecorder recorder,
-            SmallRyeHealthRuntimeConfig runtimeConfig,
             WebJarResultsBuildItem webJarResultsBuildItem,
             NonApplicationRootPathBuildItem nonApplicationRootPathBuildItem,
             LaunchModeBuildItem launchMode,
@@ -434,7 +432,7 @@ class SmallRyeHealthProcessor {
                     .produce(new SmallRyeHealthBuildItem(result.getFinalDestination(), healthUiPath));
 
             Handler<RoutingContext> handler = recorder.uiHandler(result.getFinalDestination(),
-                    healthUiPath, result.getWebRootConfigurations(), runtimeConfig, shutdownContext);
+                    healthUiPath, result.getWebRootConfigurations(), shutdownContext);
 
             routeProducer.produce(nonApplicationRootPathBuildItem.routeBuilder()
                     .management(CONFIG_KEY_HEALTH_MANAGEMENT_ENABLED)
@@ -455,12 +453,8 @@ class SmallRyeHealthProcessor {
     @BuildStep
     @Record(ExecutionTime.RUNTIME_INIT)
     @Consume(SyntheticBeansRuntimeInitBuildItem.class)
-    void processSmallRyeHealthRuntimeConfig(
-            SmallRyeHealthRecorder recorder,
-            SmallRyeHealthRuntimeConfig runtimeConfig,
-            SmallRyeHealthBuildFixedConfig buildFixedConfig) {
-
-        recorder.processSmallRyeHealthRuntimeConfiguration(runtimeConfig, buildFixedConfig);
+    void processSmallRyeHealthRuntimeConfig(SmallRyeHealthRecorder recorder) {
+        recorder.processSmallRyeHealthRuntimeConfiguration();
     }
 
     // Replace health URL in static files

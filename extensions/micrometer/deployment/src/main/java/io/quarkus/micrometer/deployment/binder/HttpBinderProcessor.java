@@ -15,13 +15,11 @@ import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.ExecutionTime;
 import io.quarkus.deployment.annotations.Record;
 import io.quarkus.deployment.builditem.AdditionalIndexedClassesBuildItem;
+import io.quarkus.deployment.builditem.nativeimage.ServiceProviderBuildItem;
 import io.quarkus.micrometer.deployment.MicrometerProcessor;
 import io.quarkus.micrometer.runtime.MicrometerRecorder;
 import io.quarkus.micrometer.runtime.binder.HttpBinderConfiguration;
 import io.quarkus.micrometer.runtime.config.MicrometerConfig;
-import io.quarkus.micrometer.runtime.config.runtime.HttpClientConfig;
-import io.quarkus.micrometer.runtime.config.runtime.HttpServerConfig;
-import io.quarkus.micrometer.runtime.config.runtime.VertxConfig;
 
 /**
  * Avoid directly referencing optional dependencies
@@ -31,28 +29,28 @@ public class HttpBinderProcessor {
     static final String HTTP_METER_FILTER_CONFIGURATION = "io.quarkus.micrometer.runtime.binder.HttpMeterFilterProvider";
 
     // JAX-RS, Servlet Filters
-    static final String RESTEASY_CONTAINER_FILTER_CLASS_NAME = "io.quarkus.micrometer.runtime.binder.vertx.VertxMeterBinderRestEasyContainerFilter";
-    static final String RESTEASY_REACTIVE_CONTAINER_FILTER_CLASS_NAME = "io.quarkus.micrometer.runtime.binder.vertx.VertxMeterBinderRestEasyReactiveContainerFilter";
     static final String UNDERTOW_SERVLET_FILTER_CLASS_NAME = "io.quarkus.micrometer.runtime.binder.vertx.VertxMeterBinderUndertowServletFilter";
 
-    private static final String REST_CLIENT_REQUEST_FILTER = "jakarta.ws.rs.client.ClientRequestFilter";
-    private static final String REST_CLIENT_METRICS_FILTER = "io.quarkus.micrometer.runtime.binder.RestClientMetricsFilter";
+    private static final String JAKARTA_REST_CLIENT_REQUEST_FILTER = "jakarta.ws.rs.client.ClientRequestFilter";
+    private static final String RESTEASY_CLIENT_METRICS_FILTER = "io.quarkus.micrometer.runtime.binder.ResteasyClientMetricsFilter";
+    private static final String REST_CLIENT_METRICS_FILTER = "io.quarkus.micrometer.runtime.binder.vertx.RestClientMetricsFilter";
+    private static final String REST_CLIENT_BUILDER_METRICS_LISTENER = "io.quarkus.micrometer.runtime.binder.vertx.RestClientBuilderMetricsListener";
 
     static class HttpServerBinderEnabled implements BooleanSupplier {
         MicrometerConfig mConfig;
 
         public boolean getAsBoolean() {
-            return mConfig.checkBinderEnabledWithDefault(mConfig.binder().vertx())
-                    && mConfig.checkBinderEnabledWithDefault(mConfig.binder().httpServer());
+            return mConfig.isEnabled(mConfig.binder().vertx())
+                    && mConfig.isEnabled(mConfig.binder().httpServer());
         }
     }
 
-    static class HttpClientBinderEnabled implements BooleanSupplier {
+    static class RestClientBinderEnabled implements BooleanSupplier {
         MicrometerConfig mConfig;
 
         public boolean getAsBoolean() {
-            return QuarkusClassLoader.isClassPresentAtRuntime(REST_CLIENT_REQUEST_FILTER)
-                    && mConfig.checkBinderEnabledWithDefault(mConfig.binder().httpClient());
+            return QuarkusClassLoader.isClassPresentAtRuntime(JAKARTA_REST_CLIENT_REQUEST_FILTER)
+                    && mConfig.isEnabled(mConfig.binder().httpClient());
         }
     }
 
@@ -60,13 +58,10 @@ public class HttpBinderProcessor {
     @Record(ExecutionTime.RUNTIME_INIT)
     SyntheticBeanBuildItem enableHttpBinders(MicrometerRecorder recorder,
             MicrometerConfig buildTimeConfig,
-            HttpServerConfig serverConfig,
-            HttpClientConfig clientConfig,
-            VertxConfig vertxConfig,
             BuildProducer<AdditionalBeanBuildItem> additionalBeans) {
 
-        boolean clientEnabled = buildTimeConfig.checkBinderEnabledWithDefault(buildTimeConfig.binder().httpClient());
-        boolean serverEnabled = buildTimeConfig.checkBinderEnabledWithDefault(buildTimeConfig.binder().httpServer());
+        boolean clientEnabled = buildTimeConfig.isEnabled(buildTimeConfig.binder().httpClient());
+        boolean serverEnabled = buildTimeConfig.isEnabled(buildTimeConfig.binder().httpServer());
 
         if (clientEnabled || serverEnabled) {
             // Protect from uri tag flood
@@ -79,8 +74,7 @@ public class HttpBinderProcessor {
                 .scope(Singleton.class)
                 .setRuntimeInit()
                 .unremovable()
-                .runtimeValue(recorder.configureHttpMetrics(serverEnabled, clientEnabled,
-                        serverConfig, clientConfig, vertxConfig))
+                .runtimeValue(recorder.configureHttpMetrics(serverEnabled, clientEnabled))
                 .done();
     }
 
@@ -104,11 +98,21 @@ public class HttpBinderProcessor {
         }
     }
 
-    @BuildStep(onlyIf = HttpClientBinderEnabled.class)
-    void registerProvider(BuildProducer<AdditionalIndexedClassesBuildItem> additionalIndexed,
-            BuildProducer<AdditionalBeanBuildItem> additionalBeans) {
-        additionalIndexed.produce(new AdditionalIndexedClassesBuildItem(REST_CLIENT_METRICS_FILTER));
-        additionalBeans.produce(new AdditionalBeanBuildItem(REST_CLIENT_METRICS_FILTER));
+    @BuildStep(onlyIf = RestClientBinderEnabled.class)
+    void registerProvider(Capabilities capabilities,
+            BuildProducer<AdditionalIndexedClassesBuildItem> additionalIndexed,
+            BuildProducer<AdditionalBeanBuildItem> additionalBeans,
+            BuildProducer<ServiceProviderBuildItem> serviceProviders) {
+        if (capabilities.isPresent(Capability.RESTEASY_CLIENT)) {
+            additionalIndexed.produce(new AdditionalIndexedClassesBuildItem(RESTEASY_CLIENT_METRICS_FILTER));
+            additionalBeans.produce(new AdditionalBeanBuildItem(RESTEASY_CLIENT_METRICS_FILTER));
+        } else if (capabilities.isPresent(Capability.REST_CLIENT_REACTIVE)) {
+            additionalIndexed.produce(new AdditionalIndexedClassesBuildItem(REST_CLIENT_METRICS_FILTER));
+            additionalBeans.produce(new AdditionalBeanBuildItem(REST_CLIENT_METRICS_FILTER));
+            serviceProviders
+                    .produce(new ServiceProviderBuildItem("org.eclipse.microprofile.rest.client.spi.RestClientBuilderListener",
+                            REST_CLIENT_BUILDER_METRICS_LISTENER));
+        }
     }
 
     private void createAdditionalBean(BuildProducer<AdditionalBeanBuildItem> additionalBeans, String className) {

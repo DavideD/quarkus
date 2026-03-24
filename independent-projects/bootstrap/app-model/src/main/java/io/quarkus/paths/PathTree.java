@@ -5,9 +5,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Collection;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
+/**
+ * Classpath resource set backed by file system paths.
+ */
 public interface PathTree {
 
     static PathTree ofDirectoryOrFile(Path p) {
@@ -114,68 +119,89 @@ public interface PathTree {
     ManifestAttributes getManifestAttributes();
 
     /**
+     * Returns a set of resource names provided by this path tree.
+     * The set may include both directories and files.
+     *
+     * @return a set of resource names provided by this path tree
+     */
+    default Set<String> getResourceNames() {
+        Set<String> names = new HashSet<>();
+        walk(visit -> names.add(visit.getResourceName()));
+        return names;
+    }
+
+    /**
      * Walks the tree.
+     * <p/>
+     * This method will make sure the relevant multi release content
+     * is associated with the expected resource name paths for the current Java version.
      *
      * @param visitor path visitor
      */
     void walk(PathVisitor visitor);
 
     /**
-     * Walks a subtree of this tree that begins with a passed in {@code relativePath},
-     * if the tree contains {@code relativePath}. If the tree does not contain {@code relativePath}
-     * then the method returns without an error.
-     * <p>
-     * This method does not create a new {@link PathTree} with the root at {@code relativePath}.
-     * It simply applies an inclusion filter to this {@link PathTree} instance, keeping the same root.
+     * Walks the tree without remapping multi release content to the paths expected for the current Java version.
      *
-     * @param relativePath relative path from which the walk should begin
      * @param visitor path visitor
      */
-    void walkIfContains(String relativePath, PathVisitor visitor);
+    void walkRaw(PathVisitor visitor);
 
     /**
-     * Applies a function to a given path relative to the root of the tree.
-     * If the path isn't found in the tree, the {@link PathVisit} argument
+     * Walks a subtree of resources in this tree that begins with a passed in {@code resourceDirName}.
+     * If this tree does not contain resource {@code resourceDirName} then the method returns without an error.
+     * <p>
+     * This method does not create a new {@link PathTree} with the root at {@code resourceDirName}.
+     * It simply applies an inclusion filter to this {@link PathTree} instance, keeping the same root.
+     *
+     * @param resourceDirName directory resource name starting from which the walk should begin
+     * @param visitor path visitor
+     */
+    void walkIfContains(String resourceDirName, PathVisitor visitor);
+
+    /**
+     * Applies a function to a given resource in the tree.
+     * If the resource isn't found in the tree, the {@link PathVisit} argument
      * passed to the function will be {@code null}.
      *
      * @param <T> resulting type
-     * @param relativePath relative path to process
+     * @param resourceName resource to process
      * @param func processing function
      * @return result of the function
      */
-    <T> T apply(String relativePath, Function<PathVisit, T> func);
+    <T> T apply(String resourceName, Function<PathVisit, T> func);
 
     /**
-     * Consumes a given path relative to the root of the tree.
-     * If the path isn't found in the tree, the {@link PathVisit} argument
+     * Consumes a given resource from the tree.
+     * If the resource isn't found in the tree, the {@link PathVisit} argument
      * passed to the consumer will be {@code null}.
      *
-     * @param relativePath relative path to consume
+     * @param resourceName resource to consume
      * @param consumer path consumer
      */
-    void accept(String relativePath, Consumer<PathVisit> consumer);
+    void accept(String resourceName, Consumer<PathVisit> consumer);
 
     /**
-     * Consumes a given path relative to the root of the tree.
-     * If the path isn't found in the tree, the {@link PathVisit} argument
+     * Consumes a given resource from the tree.
+     * If the resource isn't found in the tree, the {@link PathVisit} argument
      * passed to the consumer will be {@code null}.
-     *
+     * <p>
      * If multiple items match then the consumer will be called multiple times.
      *
-     * @param relativePath relative path to consume
+     * @param resourceName resource to consume
      * @param consumer path consumer
      */
-    default void acceptAll(String relativePath, Consumer<PathVisit> consumer) {
-        accept(relativePath, consumer);
+    default void acceptAll(String resourceName, Consumer<PathVisit> consumer) {
+        accept(resourceName, consumer);
     }
 
     /**
-     * Checks whether the tree contains a relative path.
+     * Checks whether the tree contains a resource.
      *
-     * @param relativePath path relative to the root of the tree
+     * @param resourceName resource name to check
      * @return true, in case the tree contains the path, otherwise - false
      */
-    boolean contains(String relativePath);
+    boolean contains(String resourceName);
 
     /**
      * Returns an {@link OpenPathTree} for this tree, which is supposed to be

@@ -3,14 +3,19 @@ package io.quarkus.paths;
 import java.io.IOException;
 import java.io.Serial;
 import java.io.Serializable;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Stream;
 
 public class DirectoryPathTree extends OpenContainerPathTree implements Serializable {
 
     private static final long serialVersionUID = 2255956884896445059L;
 
     private Path dir;
+    private transient volatile Set<String> resourceNames;
 
     /**
      * For deserialization
@@ -58,12 +63,29 @@ public class DirectoryPathTree extends OpenContainerPathTree implements Serializ
     }
 
     @Override
+    public boolean isEmpty() {
+        if (Files.exists(dir)) {
+            try (Stream<Path> stream = Files.list(dir)) {
+                return stream.findAny().isEmpty();
+            } catch (IOException e) {
+                throw new UncheckedIOException("Failed to list content of " + dir, e);
+            }
+        }
+        return true;
+    }
+
+    @Override
     public void close() throws IOException {
     }
 
     @Override
     public PathTree getOriginalTree() {
         return this;
+    }
+
+    @Override
+    public Set<String> getResourceNames() {
+        return resourceNames == null ? resourceNames = super.getResourceNames() : resourceNames;
     }
 
     @Serial

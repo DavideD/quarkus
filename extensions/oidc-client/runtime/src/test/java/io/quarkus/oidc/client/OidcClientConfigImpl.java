@@ -15,6 +15,7 @@ final class OidcClientConfigImpl implements OidcClientConfig {
     enum ConfigMappingMethods {
         ID,
         AUTH_SERVER_URL,
+        DISCOVERY_PATH,
         DISCOVERY_ENABLED,
         REGISTRATION_PATH,
         CONNECTION_DELAY,
@@ -47,6 +48,7 @@ final class OidcClientConfigImpl implements OidcClientConfig {
         GRANT_OPTIONS,
         CLIENT_ENABLED,
         SCOPES,
+        AUDIENCE,
         REFRESH_TOKEN_TIME_SKEW,
         ACCESS_TOKEN_EXPIRES_IN,
         ACCESS_TOKEN_EXPIRY_SKEW,
@@ -90,8 +92,11 @@ final class OidcClientConfigImpl implements OidcClientConfig {
         CREDENTIALS_JWT_LIFESPAN,
         CREDENTIALS_JWT_ASSERTION,
         CREDENTIALS_JWT_AUDIENCE,
+        CREDENTIALS_JWT_KEEP_AUDIENCE_TRAILING_SLASH,
         CREDENTIALS_JWT_TOKEN_ID,
-        JWT_BEARER_TOKEN_PATH
+        JWT_BEARER_TOKEN_PATH,
+        PROXY_CONFIGURATION_NAME,
+        REFRESH_INTERVAL
     }
 
     final Map<ConfigMappingMethods, Boolean> invocationsRecorder = new EnumMap<>(ConfigMappingMethods.class);
@@ -264,6 +269,12 @@ final class OidcClientConfigImpl implements OidcClientConfig {
                     }
 
                     @Override
+                    public boolean keepAudienceTrailingSlash() {
+                        invocationsRecorder.put(ConfigMappingMethods.CREDENTIALS_JWT_KEEP_AUDIENCE_TRAILING_SLASH, true);
+                        return false;
+                    }
+
+                    @Override
                     public Optional<String> tokenKeyId() {
                         invocationsRecorder.put(ConfigMappingMethods.CREDENTIALS_JWT_TOKEN_ID, true);
                         return Optional.empty();
@@ -324,6 +335,12 @@ final class OidcClientConfigImpl implements OidcClientConfig {
     @Override
     public Optional<List<String>> scopes() {
         invocationsRecorder.put(ConfigMappingMethods.SCOPES, true);
+        return Optional.empty();
+    }
+
+    @Override
+    public Optional<List<String>> audience() {
+        invocationsRecorder.put(ConfigMappingMethods.AUDIENCE, true);
         return Optional.empty();
     }
 
@@ -406,9 +423,21 @@ final class OidcClientConfigImpl implements OidcClientConfig {
     }
 
     @Override
+    public Optional<Duration> refreshInterval() {
+        invocationsRecorder.put(ConfigMappingMethods.REFRESH_INTERVAL, true);
+        return Optional.empty();
+    }
+
+    @Override
     public Optional<String> authServerUrl() {
         invocationsRecorder.put(ConfigMappingMethods.AUTH_SERVER_URL, true);
         return Optional.empty();
+    }
+
+    @Override
+    public String discoveryPath() {
+        invocationsRecorder.put(ConfigMappingMethods.DISCOVERY_PATH, true);
+        return null;
     }
 
     @Override
@@ -463,6 +492,12 @@ final class OidcClientConfigImpl implements OidcClientConfig {
     public Proxy proxy() {
         invocationsRecorder.put(ConfigMappingMethods.PROXY, true);
         return new Proxy() {
+            @Override
+            public Optional<String> proxyConfigurationName() {
+                invocationsRecorder.put(ConfigMappingMethods.PROXY_CONFIGURATION_NAME, true);
+                return Optional.empty();
+            }
+
             @Override
             public Optional<String> host() {
                 invocationsRecorder.put(ConfigMappingMethods.PROXY_HOST, true);

@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -102,14 +103,18 @@ public class ClientImpl implements Client {
     final Vertx vertx;
     private final MultiQueryParamMode multiQueryParamMode;
     private final String userAgent;
+    private final String tlsConfigName;
 
     public ClientImpl(HttpClientOptions options, ConfigurationImpl configuration, ClientContext clientContext,
             HostnameVerifier hostnameVerifier,
             SSLContext sslContext, boolean followRedirects,
             MultiQueryParamMode multiQueryParamMode,
             LoggingScope loggingScope,
-            ClientLogger clientLogger, String userAgent) {
+            ClientLogger clientLogger, String userAgent,
+            String tlsConfigName,
+            List<Consumer<HttpClientRequest>> clientRequestCustomizers) {
         this.userAgent = userAgent;
+        this.tlsConfigName = tlsConfigName;
         configuration = configuration != null ? configuration : new ConfigurationImpl(RuntimeType.CLIENT);
         this.configuration = configuration;
         this.clientContext = clientContext;
@@ -213,11 +218,12 @@ public class ClientImpl implements Client {
             });
         }
 
-        handlerChain = new HandlerChain(isCaptureStacktrace(configuration), options.getMaxChunkSize(),
-                options.getMaxChunkSize(),
+        handlerChain = new HandlerChain(options, isCaptureStacktrace(configuration),
                 followRedirects,
                 loggingScope,
-                clientContext.getMultipartResponsesData(), clientLogger);
+                clientContext.getMultipartResponsesData(),
+                clientLogger,
+                clientRequestCustomizers);
     }
 
     public HttpClient getVertxHttpClient() {
@@ -255,6 +261,10 @@ public class ClientImpl implements Client {
 
     public String getUserAgent() {
         return userAgent;
+    }
+
+    public String getTlsConfigName() {
+        return tlsConfigName;
     }
 
     @Override

@@ -8,6 +8,7 @@ package io.quarkus.it.hibernate.search.standalone.elasticsearch.search;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.OptionalLong;
 
 import org.hibernate.search.mapper.pojo.standalone.loading.LoadingTypeGroup;
 import org.hibernate.search.mapper.pojo.standalone.loading.MassEntityLoader;
@@ -21,7 +22,7 @@ import io.quarkus.it.hibernate.search.standalone.elasticsearch.search.stub.Datas
 import io.quarkus.it.hibernate.search.standalone.elasticsearch.search.stub.DatastoreCursorStub;
 import io.quarkus.it.hibernate.search.standalone.elasticsearch.search.stub.DatastoreStub;
 
-// See https://docs.jboss.org/hibernate/search/7.1/reference/en-US/html_single/#mapping-entitydefinition-loading-mass
+// See https://docs.hibernate.org/search/7.1/reference/en-US/html_single/#mapping-entitydefinition-loading-mass
 public class MyMassLoadingStrategy<E>
         implements MassLoadingStrategy<E, Long> {
 
@@ -49,8 +50,8 @@ public class MyMassLoadingStrategy<E>
             }
 
             @Override
-            public long totalCount() {
-                return connection.countEntities(typeFilter);
+            public OptionalLong totalCount() {
+                return OptionalLong.of(connection.countEntities(typeFilter));
             }
 
             @Override

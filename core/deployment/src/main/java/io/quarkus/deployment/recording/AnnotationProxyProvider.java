@@ -1,21 +1,19 @@
 package io.quarkus.deployment.recording;
 
-import static org.objectweb.asm.Opcodes.ACC_FINAL;
-import static org.objectweb.asm.Opcodes.ACC_PRIVATE;
-import static org.objectweb.asm.Opcodes.ACC_PUBLIC;
+import static org.jboss.jandex.gizmo2.Jandex2Gizmo.classDescOf;
 
 import java.io.InputStream;
 import java.lang.annotation.Annotation;
+import java.lang.constant.ClassDesc;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.ListIterator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.stream.Collectors;
 
 import jakarta.enterprise.util.AnnotationLiteral;
 
@@ -27,11 +25,12 @@ import org.jboss.jandex.IndexView;
 import org.jboss.jandex.MethodInfo;
 
 import io.quarkus.deployment.util.IoUtil;
-import io.quarkus.gizmo.ClassCreator;
-import io.quarkus.gizmo.ClassOutput;
-import io.quarkus.gizmo.FieldDescriptor;
-import io.quarkus.gizmo.MethodCreator;
-import io.quarkus.gizmo.MethodDescriptor;
+import io.quarkus.gizmo2.GenericType;
+import io.quarkus.gizmo2.Gizmo;
+import io.quarkus.gizmo2.ParamVar;
+import io.quarkus.gizmo2.TypeArgument;
+import io.quarkus.gizmo2.desc.ConstructorDesc;
+import io.quarkus.gizmo2.desc.FieldDesc;
 
 public class AnnotationProxyProvider {
 
@@ -70,9 +69,9 @@ public class AnnotationProxyProvider {
             }
             return clazz;
         });
-        String annotationLiteral = annotationLiterals.computeIfAbsent(annotationInstance.name(), name ->
-        // com.foo.MyAnnotation -> com.foo.MyAnnotation_Proxy_AnnotationLiteral
-        name.toString().replace('.', '/') + "_Proxy_AnnotationLiteral");
+        String annotationLiteral = annotationLiterals.computeIfAbsent(annotationInstance.name(),
+                // com.foo.MyAnnotation -> com.foo.MyAnnotation_Proxy_AnnotationLiteral
+                name -> name + "_Proxy_AnnotationLiteral");
 
         return new AnnotationProxyBuilder<>(annotationInstance, annotationType, annotationLiteral, annotationClass);
     }
@@ -135,49 +134,7 @@ public class AnnotationProxyProvider {
         }
 
         @SuppressWarnings("unchecked")
-        public A build(ClassOutput classOutput) {
-
-            // Generate literal class if needed
-            generatedLiterals.computeIfAbsent(annotationLiteral, generatedName -> {
-
-                String name = annotationInstance.name().toString();
-
-                // Ljakarta/enterprise/util/AnnotationLiteral<Lcom/foo/MyAnnotation;>;Lcom/foo/MyAnnotation;
-                String signature = String.format("L%1$s<L%2$s;>;L%2$s;",
-                        AnnotationLiteral.class.getName().replace('.', '/'),
-                        name.replace('.', '/'));
-
-                ClassCreator literal = ClassCreator.builder().classOutput(classOutput).className(generatedName)
-                        .superClass(AnnotationLiteral.class)
-                        .interfaces(name).signature(signature).build();
-
-                List<MethodInfo> constructorParams = annotationClass.methods().stream()
-                        .filter(m -> !m.name().equals("<clinit>") && !m.name().equals("<init>"))
-                        .collect(Collectors.toList());
-
-                MethodCreator constructor = literal.getMethodCreator("<init>", "V",
-                        constructorParams.stream().map(m -> m.returnType().name().toString()).toArray());
-                constructor.invokeSpecialMethod(MethodDescriptor.ofConstructor(AnnotationLiteral.class), constructor.getThis());
-
-                for (ListIterator<MethodInfo> iterator = constructorParams.listIterator(); iterator.hasNext();) {
-                    MethodInfo param = iterator.next();
-                    String returnType = param.returnType().name().toString();
-                    // field
-                    literal.getFieldCreator(param.name(), returnType).setModifiers(ACC_PRIVATE | ACC_FINAL);
-                    // constructor param
-                    constructor.writeInstanceField(FieldDescriptor.of(literal.getClassName(), param.name(), returnType),
-                            constructor.getThis(),
-                            constructor.getMethodParam(iterator.previousIndex()));
-                    // value method
-                    MethodCreator value = literal.getMethodCreator(param.name(), returnType).setModifiers(ACC_PUBLIC);
-                    value.returnValue(value.readInstanceField(
-                            FieldDescriptor.of(literal.getClassName(), param.name(), returnType), value.getThis()));
-                }
-                constructor.returnValue(null);
-                literal.close();
-                return Boolean.TRUE;
-            });
-
+        private A proxy() {
             ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
             if (classLoader == null) {
                 classLoader = AnnotationProxy.class.getClassLoader();
@@ -215,6 +172,61 @@ public class AnnotationProxyProvider {
                             };
                         }
                     });
+        }
+
+        public A build(io.quarkus.gizmo2.ClassOutput classOutput) {
+            generatedLiterals.computeIfAbsent(annotationLiteral, generatedName -> {
+                Gizmo gizmo = Gizmo.create(classOutput)
+                        .withDebugInfo(false)
+                        .withParameters(false);
+                gizmo.class_(generatedName, cc -> {
+                    ClassDesc annotationClassDesc = classDescOf(annotationInstance.name());
+                    cc.extends_(GenericType.ofClass(AnnotationLiteral.class, TypeArgument.of(annotationClassDesc)));
+                    cc.implements_(annotationClassDesc);
+
+                    List<MethodInfo> members = annotationClass.methods()
+                            .stream()
+                            .filter(m -> !m.isStaticInitializer() && !m.isConstructor())
+                            .toList();
+
+                    List<FieldDesc> fields = new ArrayList<>(members.size());
+                    for (MethodInfo member : members) {
+                        fields.add(cc.field(member.name(), fc -> {
+                            fc.private_();
+                            fc.final_();
+                            fc.setType(classDescOf(member.returnType()));
+                        }));
+                    }
+
+                    cc.constructor(mc -> {
+                        List<ParamVar> params = new ArrayList<>(members.size());
+                        for (MethodInfo member : members) {
+                            params.add(mc.parameter(member.name(), classDescOf(member.returnType())));
+                        }
+
+                        mc.body(bc -> {
+                            bc.invokeSpecial(ConstructorDesc.of(AnnotationLiteral.class), cc.this_());
+                            for (int i = 0; i < members.size(); i++) {
+                                bc.set(cc.this_().field(fields.get(i)), params.get(i));
+                            }
+                            bc.return_();
+                        });
+                    });
+
+                    for (int i = 0; i < members.size(); i++) {
+                        MethodInfo member = members.get(i);
+                        FieldDesc field = fields.get(i);
+                        cc.method(member.name(), mc -> {
+                            mc.returning(classDescOf(member.returnType()));
+                            mc.body(bc -> bc.return_(cc.this_().field(field)));
+                        });
+                    }
+                });
+
+                return Boolean.TRUE;
+            });
+
+            return proxy();
         }
     }
 

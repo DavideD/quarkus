@@ -1,7 +1,6 @@
 package io.quarkus.spring.data.deployment;
 
 import static io.quarkus.hibernate.orm.panache.deployment.EntityToPersistenceUnitUtil.determineEntityPersistenceUnits;
-import static java.util.stream.Collectors.toList;
 
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
@@ -48,6 +47,7 @@ import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.gizmo.ClassOutput;
 import io.quarkus.hibernate.orm.deployment.IgnorableNonIndexedClasses;
 import io.quarkus.hibernate.orm.deployment.JpaModelPersistenceUnitMappingBuildItem;
+import io.quarkus.hibernate.orm.deployment.spi.SqlLoadScriptDefaultBuildItem;
 import io.quarkus.hibernate.orm.panache.deployment.EntityToPersistenceUnitBuildItem;
 import io.quarkus.hibernate.orm.panache.deployment.JavaJpaTypeBundle;
 import io.quarkus.spring.data.deployment.generate.SpringDataRepositoryCreator;
@@ -108,7 +108,13 @@ public class SpringDataJPAProcessor {
                 "org.springframework.data.domain.Sort",
                 "org.springframework.data.domain.Chunk",
                 "org.springframework.data.domain.PageRequest",
-                "org.springframework.data.domain.AbstractPageRequest").methods().build());
+                "org.springframework.data.domain.AbstractPageRequest",
+                "org.springframework.data.util.Streamable").methods().build());
+    }
+
+    @BuildStep
+    SqlLoadScriptDefaultBuildItem registerDataSql() {
+        return new SqlLoadScriptDefaultBuildItem("data.sql");
     }
 
     @BuildStep
@@ -173,48 +179,39 @@ public class SpringDataJPAProcessor {
         Iterable<String> iterablePropertyNames = config.getPropertyNames();
         List<String> propertyNames = new ArrayList<String>();
         iterablePropertyNames.forEach(propertyNames::add);
-        List<String> springProperties = propertyNames.stream().filter(s -> pattern.matcher(s).matches()).collect(toList());
+        List<String> springProperties = propertyNames.stream().filter(s -> pattern.matcher(s).matches()).toList();
         String notSupportedProperties = "";
 
         if (!springProperties.isEmpty()) {
             for (String sp : springProperties) {
-                switch (sp) {
-                    case SPRING_JPA_SHOW_SQL:
-                        notSupportedProperties = notSupportedProperties + "\t- " + SPRING_JPA_SHOW_SQL
-                                + " should be replaced by " + QUARKUS_HIBERNATE_ORM_LOG_SQL + "\n";
-                        break;
-                    case SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT:
-                        notSupportedProperties = notSupportedProperties + "\t- " + SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT
+                notSupportedProperties = switch (sp) {
+                    case SPRING_JPA_SHOW_SQL -> notSupportedProperties + "\t- " + SPRING_JPA_SHOW_SQL
+                            + " should be replaced by " + QUARKUS_HIBERNATE_ORM_LOG_SQL + "\n";
+                    case SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT ->
+                        notSupportedProperties + "\t- " + SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT
                                 + " should be replaced by " + QUARKUS_HIBERNATE_ORM_DIALECT + "\n";
-                        break;
-                    case SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT_STORAGE_ENGINE:
-                        notSupportedProperties = notSupportedProperties + "\t- "
-                                + SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT_STORAGE_ENGINE + " should be replaced by "
-                                + QUARKUS_HIBERNATE_ORM_DIALECT_STORAGE_ENGINE + "\n";
-                        break;
-                    case SPRING_JPA_GENERATE_DDL:
-                        notSupportedProperties = notSupportedProperties + "\t- " + SPRING_JPA_GENERATE_DDL
-                                + " should be replaced by " + QUARKUS_HIBERNATE_ORM_SCHEMA_MANAGEMENT_STRATEGY + "\n";
-                        break;
-                    case SPRING_JPA_HIBERNATE_NAMING_PHYSICAL_STRATEGY:
-                        notSupportedProperties = notSupportedProperties + "\t- " + SPRING_JPA_HIBERNATE_NAMING_PHYSICAL_STRATEGY
+                    case SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT_STORAGE_ENGINE -> notSupportedProperties + "\t- "
+                            + SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT_STORAGE_ENGINE
+                            + " should be replaced by "
+                            + QUARKUS_HIBERNATE_ORM_DIALECT_STORAGE_ENGINE
+                            + "\n";
+                    case SPRING_JPA_GENERATE_DDL -> notSupportedProperties + "\t- " + SPRING_JPA_GENERATE_DDL
+                            + " should be replaced by "
+                            + QUARKUS_HIBERNATE_ORM_SCHEMA_MANAGEMENT_STRATEGY + "\n";
+                    case SPRING_JPA_HIBERNATE_NAMING_PHYSICAL_STRATEGY ->
+                        notSupportedProperties + "\t- " + SPRING_JPA_HIBERNATE_NAMING_PHYSICAL_STRATEGY
                                 + " should be replaced by " + QUARKUS_HIBERNATE_ORM_PHYSICAL_NAMING_STRATEGY + "\n";
-                        break;
-                    case SPRING_JPA_HIBERNATE_NAMING_IMPLICIT_STRATEGY:
-                        notSupportedProperties = notSupportedProperties + "\t- " + SPRING_JPA_HIBERNATE_NAMING_IMPLICIT_STRATEGY
+                    case SPRING_JPA_HIBERNATE_NAMING_IMPLICIT_STRATEGY ->
+                        notSupportedProperties + "\t- " + SPRING_JPA_HIBERNATE_NAMING_IMPLICIT_STRATEGY
                                 + " should be replaced by " + QUARKUS_HIBERNATE_ORM_IMPLICIT_NAMING_STRATEGY + "\n";
-                        break;
-                    case SPRING_DATASOURCE_DATA:
-                        notSupportedProperties = notSupportedProperties + "\t- " + QUARKUS_HIBERNATE_ORM_SQL_LOAD_SCRIPT
+                    case SPRING_DATASOURCE_DATA ->
+                        notSupportedProperties + "\t- " + QUARKUS_HIBERNATE_ORM_SQL_LOAD_SCRIPT
                                 + " could be used to load data instead of " + SPRING_DATASOURCE_DATA
                                 + " but it does not support ant-style patterns as "
                                 + SPRING_DATASOURCE_DATA
                                 + " does, it accepts the name of files containing the SQL statements to execute when Hibernate ORM starts.\n";
-                        break;
-                    default:
-                        notSupportedProperties = notSupportedProperties + "\t- " + sp + " does not have a Quarkus equivalent\n";
-                        break;
-                }
+                    default -> notSupportedProperties + "\t- " + sp + " does not have a Quarkus equivalent\n";
+                };
             }
             LOGGER.warnf(
                     "Quarkus does not support the following Spring Boot configuration properties: %n%s",

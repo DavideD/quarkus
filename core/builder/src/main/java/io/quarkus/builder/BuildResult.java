@@ -19,19 +19,21 @@ import io.quarkus.builder.item.SimpleBuildItem;
  */
 public final class BuildResult {
     private final ConcurrentHashMap<ItemId, BuildItem> simpleItems;
-    private final ConcurrentHashMap<ItemId, List<BuildItem>> multiItems;
+    private final MultiBuildItems multiItems;
     private final List<Diagnostic> diagnostics;
     private final long nanos;
     private final BuildMetrics metrics;
+    private final ClassLoader deploymentClassLoader;
 
     BuildResult(final ConcurrentHashMap<ItemId, BuildItem> simpleItems,
-            final ConcurrentHashMap<ItemId, List<BuildItem>> multiItems, final Set<ItemId> finalIds,
-            final List<Diagnostic> diagnostics, final long nanos, BuildMetrics metrics) {
+            final MultiBuildItems multiItems, final Set<ItemId> finalIds,
+            final List<Diagnostic> diagnostics, final long nanos, BuildMetrics metrics, ClassLoader classLoader) {
         this.simpleItems = simpleItems;
         this.multiItems = multiItems;
         this.diagnostics = diagnostics;
         this.nanos = nanos;
         this.metrics = metrics;
+        this.deploymentClassLoader = classLoader;
     }
 
     /**
@@ -123,15 +125,11 @@ public final class BuildResult {
                     Messages.msg.closeFailed(obj, e);
                 }
         }
-        for (List<? extends BuildItem> list : multiItems.values()) {
-            for (BuildItem obj : list) {
-                if (obj instanceof AutoCloseable)
-                    try {
-                        ((AutoCloseable) obj).close();
-                    } catch (Exception e) {
-                        Messages.msg.closeFailed(obj, e);
-                    }
-            }
-        }
+        multiItems.closeAll();
     }
+
+    public ClassLoader getDeploymentClassLoader() {
+        return deploymentClassLoader;
+    }
+
 }

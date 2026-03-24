@@ -6,9 +6,11 @@ import static io.quarkus.resteasy.reactive.common.deployment.QuarkusResteasyReac
 
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -34,6 +36,7 @@ import org.jboss.resteasy.reactive.common.model.ResourceParamConverterProvider;
 import org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames;
 import org.jboss.resteasy.reactive.common.processor.scanning.ApplicationScanningResult;
 import org.jboss.resteasy.reactive.common.processor.scanning.ResteasyReactiveInterceptorScanner;
+import org.jboss.resteasy.reactive.server.ExceptionUnwrapStrategy;
 import org.jboss.resteasy.reactive.server.UnwrapException;
 import org.jboss.resteasy.reactive.server.core.ExceptionMapping;
 import org.jboss.resteasy.reactive.server.model.ContextResolvers;
@@ -64,6 +67,7 @@ import io.quarkus.deployment.index.IndexingUtil;
 import io.quarkus.resteasy.reactive.common.deployment.ApplicationResultBuildItem;
 import io.quarkus.resteasy.reactive.common.deployment.ResourceInterceptorsContributorBuildItem;
 import io.quarkus.resteasy.reactive.common.deployment.ResourceScanningResultBuildItem;
+import io.quarkus.resteasy.reactive.common.runtime.ResteasyReactiveConfig;
 import io.quarkus.resteasy.reactive.server.spi.MethodScannerBuildItem;
 import io.quarkus.resteasy.reactive.server.spi.UnwrappedExceptionBuildItem;
 import io.quarkus.resteasy.reactive.spi.ContainerRequestFilterBuildItem;
@@ -134,6 +138,9 @@ public class ResteasyReactiveScanningProcessor {
         IndexView index = combinedIndexBuildItem.getIndex();
         for (AnnotationInstance instance : index.getAnnotations(UnwrapException.class)) {
             AnnotationValue value = instance.value();
+            AnnotationValue strategyValue = instance.value("strategy");
+            ExceptionUnwrapStrategy strategy = toExceptionUnwrapStrategy(strategyValue);
+
             if (value == null) {
                 // in this case we need to use the class where the annotation was placed as the exception to be unwrapped
 
@@ -162,14 +169,21 @@ public class ResteasyReactiveScanningProcessor {
                                     + classInfo.name() + "'.");
                 }
 
-                producer.produce(new UnwrappedExceptionBuildItem(classInfo.name().toString()));
+                producer.produce(new UnwrappedExceptionBuildItem(classInfo.name().toString(), strategy));
             } else {
                 Type[] exceptionTypes = value.asClassArray();
                 for (Type exceptionType : exceptionTypes) {
-                    producer.produce(new UnwrappedExceptionBuildItem(exceptionType.name().toString()));
+                    producer.produce(new UnwrappedExceptionBuildItem(exceptionType.name().toString(), strategy));
                 }
             }
         }
+    }
+
+    private static ExceptionUnwrapStrategy toExceptionUnwrapStrategy(AnnotationValue strategyValue) {
+        if (strategyValue != null) {
+            return ExceptionUnwrapStrategy.valueOf(strategyValue.asEnum());
+        }
+        return ExceptionUnwrapStrategy.UNWRAP_IF_NO_MATCH;
     }
 
     @BuildStep
@@ -178,26 +192,37 @@ public class ResteasyReactiveScanningProcessor {
             BuildProducer<AdditionalBeanBuildItem> additionalBeanBuildItemBuildProducer,
             BuildProducer<ReflectiveClassBuildItem> reflectiveClassBuildItemBuildProducer,
             List<ExceptionMapperBuildItem> mappers, List<UnwrappedExceptionBuildItem> unwrappedExceptions,
-            Capabilities capabilities) {
+            Capabilities capabilities,
+            ResteasyReactiveConfig config) {
         AdditionalBeanBuildItem.Builder beanBuilder = AdditionalBeanBuildItem.builder().setUnremovable();
         ExceptionMapping exceptions = ResteasyReactiveExceptionMappingScanner
                 .scanForExceptionMappers(combinedIndexBuildItem.getComputingIndex(), applicationResultBuildItem.getResult());
 
+        if (config.exceptionMapping().disableMapperFor().isPresent()) {
+            for (String disabledMapper : config.exceptionMapping().disableMapperFor().get()
+                    .stream().sorted().toList()) {
+                if (disabledMapper != null && !disabledMapper.isEmpty()) {
+                    exceptions.addDisabledMapper(disabledMapper);
+                }
+            }
+        }
+
         exceptions.addBlockingProblem(BlockingOperationNotAllowedException.class);
         exceptions.addBlockingProblem(BlockingNotAllowedException.class);
-        for (UnwrappedExceptionBuildItem bi : unwrappedExceptions) {
-            exceptions.addUnwrappedException(bi.getThrowableClassName());
+        for (UnwrappedExceptionBuildItem bi : unwrappedExceptions.stream()
+                .sorted(Comparator.comparing(UnwrappedExceptionBuildItem::getThrowableClassName)).toList()) {
+            exceptions.addUnwrappedException(bi.getThrowableClassName(), bi.getStrategy());
         }
         if (capabilities.isPresent(Capability.HIBERNATE_REACTIVE)) {
             exceptions.addNonBlockingProblem(
                     new ExceptionMapping.ExceptionTypeAndMessageContainsPredicate(IllegalStateException.class, "HR000068"));
         }
 
-        for (Map.Entry<String, ResourceExceptionMapper<? extends Throwable>> i : exceptions.getMappers()
-                .entrySet()) {
+        for (Map.Entry<String, ResourceExceptionMapper<? extends Throwable>> i : exceptions.getMappers().entrySet()) {
             beanBuilder.addBeanClass(i.getValue().getClassName());
         }
-        for (ExceptionMapperBuildItem additionalExceptionMapper : mappers) {
+        for (ExceptionMapperBuildItem additionalExceptionMapper : mappers.stream()
+                .sorted(Comparator.comparing(ExceptionMapperBuildItem::getClassName)).toList()) {
             if (additionalExceptionMapper.isRegisterAsBean()) {
                 beanBuilder.addBeanClass(additionalExceptionMapper.getClassName());
             } else {

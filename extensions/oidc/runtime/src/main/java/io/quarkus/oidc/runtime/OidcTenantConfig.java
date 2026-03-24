@@ -142,6 +142,46 @@ public interface OidcTenantConfig extends OidcClientCommonConfig {
     Roles roles();
 
     /**
+     * Configuration to provide protected resource metadata.
+     */
+    @ConfigDocSection
+    ResourceMetadata resourceMetadata();
+
+    /**
+     * Protected resource metadata.
+     */
+    interface ResourceMetadata {
+        /**
+         * If the resource metadata can be provided.
+         */
+        @WithDefault("false")
+        boolean enabled();
+
+        /**
+         * Protected resource identifier.
+         */
+        Optional<String> resource();
+
+        /**
+         * Supported scopes.
+         */
+        Optional<Set<String>> scopes();
+
+        /**
+         * Authorization server URL.
+         * 'quarkus.oidc.auth-server-url' property value is reported by default.
+         */
+        Optional<String> authorizationServer();
+
+        /**
+         * Force a protected resource identifier HTTPS scheme.
+         * This property is ignored if {@link #resource() is an absolute URL}
+         */
+        @WithDefault("true")
+        boolean forceHttpsScheme();
+    }
+
+    /**
      * Configuration to customize validation of token claims.
      */
     @ConfigDocSection
@@ -219,7 +259,7 @@ public interface OidcTenantConfig extends OidcClientCommonConfig {
     CodeGrant codeGrant();
 
     /**
-     * Default token state manager configuration
+     * Token state manager configuration
      */
     @ConfigDocSection
     TokenStateManager tokenStateManager();
@@ -339,6 +379,25 @@ public interface OidcTenantConfig extends OidcClientCommonConfig {
          * Clear-Site-Data header directives
          */
         Optional<Set<ClearSiteData>> clearSiteData();
+
+        enum LogoutMode {
+            /**
+             * Logout parameters are encoded in the query string
+             */
+            QUERY,
+
+            /**
+             * Logout parameters are encoded as HTML form values that are auto-submitted in the browser
+             * and transmitted by the HTTP POST method using the application/x-www-form-urlencoded content type
+             */
+            FORM_POST
+        }
+
+        /**
+         * Logout mode
+         */
+        @WithDefault("query")
+        LogoutMode logoutMode();
     }
 
     interface Backchannel {
@@ -470,13 +529,16 @@ public interface OidcTenantConfig extends OidcClientCommonConfig {
         boolean splitTokens();
 
         /**
-         * Mandates that the Default TokenStateManager encrypt the session cookie that stores the tokens.
+         * Mandates that the TokenStateManager stores tokens in the encrypted form.
+         * Default TokenStateManager encrypts a session cookie that keeps the tokens.
+         * Custom TokenStateManager do not have to encrypt tokens, they will already be encrypted
+         * by the time it is asked to store tokens.
          */
         @WithDefault("true")
         boolean encryptionRequired();
 
         /**
-         * The secret used by the Default TokenStateManager to encrypt the session cookie
+         * The secret used by the TokenStateManager to encrypt the session cookie
          * storing the tokens when {@link #encryptionRequired} property is enabled.
          * <p>
          * If this secret is not set, the client secret configured with
@@ -485,7 +547,8 @@ public interface OidcTenantConfig extends OidcClientCommonConfig {
          * checked.
          * The secret is auto-generated every time an application starts if it remains uninitialized after checking all of these
          * properties.
-         * Generated secret can not decrypt the session cookie encrypted before the restart, therefore a user re-authentication
+         * Generated secret can not decrypt the session cookie or token encrypted before the restart, therefore a user
+         * re-authentication
          * will be required.
          * <p>
          * The length of the secret used to encrypt the tokens should be at least 32 characters long.
@@ -515,7 +578,7 @@ public interface OidcTenantConfig extends OidcClientCommonConfig {
         }
 
         /**
-         * Session cookie key encryption algorithm
+         * Session cookie or token key encryption algorithm
          */
         @WithDefault("A256GCMKW")
         EncryptionAlgorithm encryptionAlgorithm();
@@ -601,6 +664,32 @@ public interface OidcTenantConfig extends OidcClientCommonConfig {
          */
         @ConfigDocDefault("query")
         Optional<ResponseMode> responseMode();
+
+        /**
+         * Supported cache control directives
+         */
+        enum CacheControl {
+            NO_STORE("no-store");
+
+            private String dir;
+
+            CacheControl(String dir) {
+                this.dir = dir;
+            }
+
+            String directive() {
+                return dir;
+            }
+        }
+
+        /**
+         * Set of cache-control directives that must be set when a new session cookie is created,
+         * either after a successful authorization code completion or token refresh.
+         * <p>
+         * Currently, only a `no-store` directive that prohibits caching the session cookie anywhere in the client request chain
+         * can be configured.
+         */
+        Optional<Set<CacheControl>> cacheControl();
 
         /**
          * The relative path for calculating a `redirect_uri` query parameter.
@@ -768,6 +857,12 @@ public interface OidcTenantConfig extends OidcClientCommonConfig {
         CookieSameSite cookieSameSite();
 
         /**
+         * SameSite attribute for the state cookie.
+         */
+        @WithDefault("lax")
+        CookieSameSite stateCookieSameSite();
+
+        /**
          * If a state cookie is present, a `state` query parameter must also be present and both the state
          * cookie name suffix and state cookie value must match the value of the `state` query parameter when
          * the redirect path matches the current path.
@@ -837,10 +932,11 @@ public interface OidcTenantConfig extends OidcClientCommonConfig {
          * the user is redirected to the OIDC provider to re-authenticate once the session has expired.
          * If this property is set to a nonzero value, then the expired ID token can be refreshed before
          * the session has expired.
-         * This property is ignored if the `token.refresh-expired` property has not been enabled.
+         * This property is effective only if the `token.refresh-expired` property is enabled and a refresh token is available.
+         * It is set to 5 minutes by default.
          */
-        @WithDefault("5M")
-        Duration sessionAgeExtension();
+        @ConfigDocDefault("5M")
+        Optional<Duration> sessionAgeExtension();
 
         /**
          * State cookie age in minutes.
@@ -919,6 +1015,19 @@ public interface OidcTenantConfig extends OidcClientCommonConfig {
          */
         Optional<String> stateSecret();
 
+        /**
+         * Configuration for the pushed authorization request (PAR)
+         * as defined by the <a href="https://datatracker.ietf.org/doc/html/rfc9126">RFC 9126</a>.
+         */
+        @ConfigDocSection
+        PushedAuthorizationRequest par();
+
+        /**
+         * Configuration for the rich authorization requests (RAR)
+         * as defined by the <a href="https://datatracker.ietf.org/doc/html/rfc9396">RFC 9396</a>.
+         */
+        @ConfigDocSection
+        Optional<RichAuthorizationRequests> rar();
     }
 
     /**
@@ -1248,4 +1357,73 @@ public interface OidcTenantConfig extends OidcClientCommonConfig {
         X
     }
 
+    /**
+     * Pushed authorization request (PAR) configuration.
+     */
+    interface PushedAuthorizationRequest {
+
+        /**
+         * If the pushed authorization request is enabled for this OIDC tenant.
+         * When enabled, Quarkus will act as if the authorization server accepts authorization request data only via PAR.
+         */
+        @ConfigDocDefault("enabled if the discovered Authorization Server Metadata parameter 'require_pushed_authorization_requests' is 'true'")
+        Optional<Boolean> enabled();
+
+        /**
+         * Relative path or absolute URL of the authorization server's pushed authorization request endpoint.
+         * If not specified, Quarkus will use the URL of the PAR endpoint in the authorization server metadata document
+         * using the `pushed_authorization_request_endpoint` parameter.
+         */
+        Optional<String> path();
+    }
+
+    /**
+     * Rich Authorization Requests (RAR) configuration.
+     */
+    interface RichAuthorizationRequests {
+
+        /**
+         * Configures the `authorization_details` request parameter string fields of the authorization request.
+         * For example, if you configure the
+         * `quarkus.oidc.authentication.rar.simple.credential_configuration_id=vc-scope-mapping`
+         * property, following `authorization_details` request parameter will be added to the authorization request:
+         *
+         * <pre>
+         * {@code
+         * [
+         *    {
+         *       "credential_configuration_id": "vc-scope-mapping"
+         *    }
+         * ]
+         * }
+         * </pre>
+         */
+        @ConfigDocMapKey("field")
+        Map<String, String> simple();
+
+        /**
+         * Configures the `authorization_details` request parameter array fields of the authorization request.
+         * For example, if you configure the `quarkus.oidc.authentication.rar.array.locations=https://...`
+         * property, following `authorization_details` request parameter will be added to the authorization request:
+         *
+         * <pre>
+         * {@code
+         * [
+         *    {
+         *       "locations": [ "https://..." ]
+         *    }
+         * ]
+         * }
+         * </pre>
+         */
+        @ConfigDocMapKey("field")
+        Map<String, List<@WithConverter(TrimmedStringConverter.class) String>> array();
+
+        /**
+         * The `authorization_details` type field. Please see the RFC 9396
+         * <a href="https://datatracker.ietf.org/doc/html/rfc9396#name-request-parameter-authoriza">Request Parameter
+         * `authorization_details`</a> for more information.
+         */
+        String type();
+    }
 }

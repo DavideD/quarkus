@@ -1,7 +1,6 @@
 package io.quarkus.test.common;
 
 import static io.quarkus.test.common.LauncherUtil.createStartedFunction;
-import static io.quarkus.test.common.LauncherUtil.updateConfigForPort;
 import static io.quarkus.test.common.LauncherUtil.waitForCapturedListeningData;
 import static io.quarkus.test.common.LauncherUtil.waitForStartedFunction;
 
@@ -9,28 +8,36 @@ import java.io.File;
 import java.io.IOException;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.CodeSource;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.ServiceLoader;
+import java.util.Optional;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
-import io.quarkus.test.common.http.TestHTTPResourceManager;
+import org.eclipse.microprofile.config.ConfigProvider;
+import org.jboss.logging.Logger;
+
+import io.quarkus.runtime.logging.LogRuntimeConfig;
+import io.smallrye.config.SmallRyeConfig;
 
 public class DefaultNativeImageLauncher implements NativeImageLauncher {
+    private static final Logger log = Logger.getLogger(DefaultNativeImageLauncher.class);
 
     private static final boolean IS_WINDOWS = System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("windows");
 
     private int httpPort;
     private int httpsPort;
     private long waitTimeSeconds;
+    private Duration shutdownTimeout;
     private String testProfile;
     private List<String> argLine;
     private Map<String, String> env;
@@ -41,37 +48,20 @@ public class DefaultNativeImageLauncher implements NativeImageLauncher {
     private Process quarkusProcess;
     private final Map<String, String> systemProps = new HashMap<>();
 
-    private boolean isSsl;
+    private Path logFile;
 
     @Override
     public void init(NativeImageInitContext initContext) {
         this.httpPort = initContext.httpPort();
         this.httpsPort = initContext.httpsPort();
         this.waitTimeSeconds = initContext.waitTime().getSeconds();
+        this.shutdownTimeout = initContext.shutdownTimeout();
         this.testProfile = initContext.testProfile();
         this.nativeImagePath = initContext.nativeImagePath();
         this.configuredOutputDirectory = initContext.getConfiguredOutputDirectory();
         this.argLine = initContext.argLine();
         this.env = initContext.env();
         this.testClass = initContext.testClass();
-    }
-
-    private Supplier<Boolean> createStartedSupplier() {
-        List<NativeImageStartedNotifier> startedNotifiers = new ArrayList<>();
-        for (NativeImageStartedNotifier i : ServiceLoader.load(NativeImageStartedNotifier.class)) {
-            startedNotifiers.add(i);
-        }
-        if (!startedNotifiers.isEmpty()) {
-            return () -> {
-                for (NativeImageStartedNotifier i : startedNotifiers) {
-                    if (i.isNativeImageStarted()) {
-                        return true;
-                    }
-                }
-                return false;
-            };
-        }
-        return null;
     }
 
     @Override
@@ -94,27 +84,24 @@ public class DefaultNativeImageLauncher implements NativeImageLauncher {
         }
     }
 
-    public void start() throws IOException {
+    @Override
+    public Optional<ListeningAddress> start() throws IOException {
         start(new String[0], true);
-
-        Path logFile = PropertyTestUtil.getLogFilePath();
-        Supplier<Boolean> startedSupplier = createStartedSupplier(); // keep the legacy SPI handling
+        LogRuntimeConfig logRuntimeConfig = ConfigProvider.getConfig().unwrap(SmallRyeConfig.class)
+                .getConfigMapping(LogRuntimeConfig.class);
+        logFile = logRuntimeConfig.file().path().toPath();
         Function<IntegrationTestStartedNotifier.Context, IntegrationTestStartedNotifier.Result> startedFunction = createStartedFunction();
-        if (startedSupplier != null) {
-            waitForStartedSupplier(startedSupplier, quarkusProcess, waitTimeSeconds);
-        } else if (startedFunction != null) {
-            IntegrationTestStartedNotifier.Result result = waitForStartedFunction(startedFunction, quarkusProcess,
-                    waitTimeSeconds, logFile);
-            isSsl = result.isSsl();
+        if (startedFunction != null) {
+            waitForStartedFunction(startedFunction, quarkusProcess, waitTimeSeconds, logRuntimeConfig.file().path().toPath());
+            return Optional.empty();
         } else {
-            ListeningAddress result = waitForCapturedListeningData(quarkusProcess, logFile, waitTimeSeconds);
-            updateConfigForPort(result.getPort());
-            isSsl = result.isSsl();
+            return waitForCapturedListeningData(quarkusProcess, logRuntimeConfig.file().path().toPath(), waitTimeSeconds);
         }
     }
 
     public void start(String[] programArgs, boolean handleIo) throws IOException {
-        System.setProperty("test.url", TestHTTPResourceManager.getUri());
+        SmallRyeConfig config = ConfigProvider.getConfig().unwrap(SmallRyeConfig.class);
+        LogRuntimeConfig logRuntimeConfig = config.getConfigMapping(LogRuntimeConfig.class);
 
         if (nativeImagePath == null) {
             nativeImagePath = guessPath(testClass);
@@ -127,13 +114,11 @@ public class DefaultNativeImageLauncher implements NativeImageLauncher {
         if (DefaultJarLauncher.HTTP_PRESENT) {
             args.add("-Dquarkus.http.port=" + httpPort);
             args.add("-Dquarkus.http.ssl-port=" + httpsPort);
-            // this won't be correct when using the random port but it's really only used by us for the rest client tests
-            // in the main module, since those tests hit the application itself
-            args.add("-Dtest.url=" + TestHTTPResourceManager.getUri());
+            args.add("-Dtest.url=" + LauncherUtil.generateTestUrl());
         }
-        Path logFile = PropertyTestUtil.getLogFilePath();
+        logFile = logRuntimeConfig.file().path().toPath();
         args.add("-Dquarkus.log.file.path=" + logFile.toAbsolutePath());
-        args.add("-Dquarkus.log.file.enable=true");
+        args.add("-Dquarkus.log.file.enabled=true");
         args.add("-Dquarkus.log.category.\"io.quarkus\".level=INFO");
         if (testProfile != null) {
             args.add("-Dquarkus.profile=" + testProfile);
@@ -144,14 +129,20 @@ public class DefaultNativeImageLauncher implements NativeImageLauncher {
         args.addAll(Arrays.asList(programArgs));
         System.out.println("Executing \"" + String.join(" ", args) + "\"");
 
-        Files.deleteIfExists(logFile);
-        Files.createDirectories(logFile.getParent());
+        try {
+            Files.deleteIfExists(logFile);
+            if (logFile.getParent() != null) {
+                Files.createDirectories(logFile.getParent());
+            }
+        } catch (FileSystemException e) {
+            log.warnf("Log file %s deletion failed, could happen on Windows, we can carry on.", logFile);
+        }
+
         if (handleIo) {
             quarkusProcess = LauncherUtil.launchProcessAndDrainIO(args, env);
         } else {
             quarkusProcess = LauncherUtil.launchProcess(args, env);
         }
-
     }
 
     private void waitForStartedSupplier(Supplier<Boolean> startedSupplier, Process quarkusProcess, long waitTime) {
@@ -164,7 +155,6 @@ public class DefaultNativeImageLauncher implements NativeImageLauncher {
             try {
                 Thread.sleep(100);
                 if (startedSupplier.get()) {
-                    isSsl = false;
                     started = true;
                     break;
                 }
@@ -265,10 +255,6 @@ public class DefaultNativeImageLauncher implements NativeImageLauncher {
         System.err.println("  native.image.path was not set, making a guess for the correct path of native image");
         System.err.println("  guessed path: " + guessedPath);
         System.err.println("======================================================================================");
-    }
-
-    public boolean listensOnSsl() {
-        return isSsl;
     }
 
     @Override

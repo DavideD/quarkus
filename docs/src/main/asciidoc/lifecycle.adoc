@@ -264,9 +264,17 @@ public class EagerAppBean {
    void init() { <1>
      doSomeCoolInit();
    }
+
+   @Startup
+   Uni<Void> initReactive() { <2>
+     return doSomeCoolReactiveInit();
+   }
 }
 ----
 <1> The bean is created and the `init()` method is invoked upon the contextual instance when the application starts.
+<2> The bean is created and the `initReactive()` method is invoked upon the contextual instance when the application
+starts, on a non-blocking thread, which requires the Quarkus Vert.x extension (there will be an error if it is not
+present).
 
 [[shutdown_annotation]]
 === Using `@Shutdown` to execute a business method of a CDI bean during application shutdown
@@ -339,5 +347,41 @@ This gives the infrastructure time to recognize that the instance is shutting do
 This feature can be enabled by setting the build-time property `quarkus.shutdown.delay-enabled` to `true`.
 The delay can then be configured by setting the runtime property `quarkus.shutdown.delay`.
 It is not set by default, thus no delay is applied.
+
+[[pre_shutdown_annotation]]
+=== Using `@ShutdownDelayInitiated` to execute a business method of a CDI bean when Quarkus shutdown delay initiates
+
+
+The `@io.quarkus.runtime.ShutdownDelayInitiated` annotation is used to mark a business method of a CDI bean that should be executed when the shutdown delay initiates.
+The annotated method must be non-private and non-static and declare no arguments. Furthermore, `quarkus.shutdown.delay-enabled` configuration needs to be set to `true`.
+
+
+TIP: Declared `@ShutdownDelayInitiated` methods are always executed and as such may block the shutdown procedure.
+
+The behavior is similar to a declaration of a `ShutdownDelayInitiatedEvent` observer.
+The following examples are functionally equivalent.
+
+[source,java]
+----
+import io.quarkus.runtime.ShutdownDelayInitiated;
+import io.quarkus.runtime.ShutdownDelayInitiatedEvent;
+import jakarta.enterprise.context.ApplicationScoped;
+
+@ApplicationScoped
+class ObservingBean1 {
+   void onPreShutdown(@Observes ShutdownDelayInitiatedEvent event) {
+      // place the logic here
+   }
+}
+
+@ApplicationScoped
+class ObservingBean2 {
+
+   @ShutdownDelayInitiated
+   void preShutdown() {
+      // place the logic here
+   }
+}
+----
 
 include::{includes}/duration-format-note.adoc[]

@@ -1,6 +1,9 @@
 package io.quarkus.runner.bootstrap;
 
 import static io.quarkus.commons.classloading.ClassLoaderHelper.fromClassNameToResourceName;
+import static io.quarkus.deployment.dev.testing.ApplicationPropertiesUtils.APPLICATION_PROPERTIES;
+import static io.quarkus.deployment.dev.testing.ApplicationPropertiesUtils.writeTempApplicationProperties;
+import static io.quarkus.runtime.configuration.ConfigSourceOrdinal.STARTUP_OVERRIDE;
 
 import java.io.Closeable;
 import java.io.File;
@@ -8,10 +11,13 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.nio.charset.StandardCharsets;
+import java.net.URISyntaxException;
+import java.net.URL;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,20 +35,26 @@ import io.quarkus.bootstrap.app.QuarkusBootstrap;
 import io.quarkus.bootstrap.app.RunningQuarkusApplication;
 import io.quarkus.bootstrap.app.StartupAction;
 import io.quarkus.bootstrap.classloading.QuarkusClassLoader;
+import io.quarkus.bootstrap.logging.InitialConfigurator;
 import io.quarkus.builder.BuildResult;
 import io.quarkus.deployment.builditem.ApplicationClassNameBuildItem;
+import io.quarkus.deployment.builditem.DevServicesAdditionalConfigBuildItem;
+import io.quarkus.deployment.builditem.DevServicesCustomizerBuildItem;
 import io.quarkus.deployment.builditem.DevServicesLauncherConfigResultBuildItem;
 import io.quarkus.deployment.builditem.DevServicesNetworkIdBuildItem;
+import io.quarkus.deployment.builditem.DevServicesRegistryBuildItem;
+import io.quarkus.deployment.builditem.DevServicesResultBuildItem;
 import io.quarkus.deployment.builditem.GeneratedClassBuildItem;
 import io.quarkus.deployment.builditem.GeneratedResourceBuildItem;
 import io.quarkus.deployment.builditem.MainClassBuildItem;
 import io.quarkus.deployment.builditem.RuntimeApplicationShutdownBuildItem;
 import io.quarkus.deployment.builditem.TransformedClassesBuildItem;
-import io.quarkus.deployment.configuration.RunTimeConfigurationGenerator;
+import io.quarkus.deployment.dev.testing.ApplicationPropertiesUtils;
+import io.quarkus.deployment.jvm.JvmModulesReconfigurer;
+import io.quarkus.deployment.jvm.ResolvedJVMRequirements;
 import io.quarkus.dev.appstate.ApplicationStateNotification;
 import io.quarkus.runtime.ApplicationLifecycleManager;
 import io.quarkus.runtime.Quarkus;
-import io.quarkus.runtime.configuration.RuntimeOverrideConfigSource;
 
 public class StartupActionImpl implements StartupAction {
 
@@ -50,13 +62,22 @@ public class StartupActionImpl implements StartupAction {
 
     private final CuratedApplication curatedApplication;
     private final QuarkusClassLoader runtimeClassLoader;
+    private ClassLoader deploymentClassLoader;
 
     private final String mainClassName;
     private final String applicationClassName;
     private final Map<String, String> devServicesProperties;
+    private final ResolvedJVMRequirements jvmRequirements;
+    private volatile boolean devServicesStarted = false;
+    private final List<DevServicesResultBuildItem> devServicesResults;
+    private final List<DevServicesCustomizerBuildItem> devServicesCustomizers;
+    private final List<DevServicesAdditionalConfigBuildItem> additionalConfigBuildItems;
     private final String devServicesNetworkId;
     private final List<RuntimeApplicationShutdownBuildItem> runtimeApplicationShutdownBuildItems;
     private final List<Closeable> runtimeCloseTasks = new ArrayList<>();
+    private final DevServicesRegistryBuildItem devServicesRegistry;
+
+    private static final JvmModulesReconfigurer jvmModulesReconfigurer = JvmModulesReconfigurer.getInstance();
 
     public StartupActionImpl(CuratedApplication curatedApplication, BuildResult buildResult) {
         this.curatedApplication = curatedApplication;
@@ -67,27 +88,46 @@ public class StartupActionImpl implements StartupAction {
         this.devServicesNetworkId = extractDevServicesNetworkId(buildResult);
         this.runtimeApplicationShutdownBuildItems = buildResult.consumeMulti(RuntimeApplicationShutdownBuildItem.class);
 
-        Map<String, byte[]> transformedClasses = extractTransformedClasses(buildResult);
+        this.devServicesResults = buildResult.consumeMulti(DevServicesResultBuildItem.class);
+        this.devServicesRegistry = buildResult.consumeOptional(DevServicesRegistryBuildItem.class);
+        this.devServicesCustomizers = buildResult.consumeMulti(DevServicesCustomizerBuildItem.class);
+        this.additionalConfigBuildItems = buildResult.consumeMulti(DevServicesAdditionalConfigBuildItem.class);
+        this.deploymentClassLoader = buildResult.getDeploymentClassLoader();
+
         QuarkusClassLoader baseClassLoader = curatedApplication.getOrCreateBaseRuntimeClassLoader();
         QuarkusClassLoader runtimeClassLoader;
 
         //so we have some differences between dev and test mode here.
         //test mode only has a single class loader, while dev uses a disposable runtime class loader
         //that is discarded between restarts
+        Map<String, byte[]> transformedClasses = extractTransformedClasses(buildResult);
         Map<String, byte[]> resources = new HashMap<>(extractGeneratedResources(buildResult, true));
         if (curatedApplication.isFlatClassPath()) {
             resources.putAll(extractGeneratedResources(buildResult, false));
             baseClassLoader.reset(resources, transformedClasses);
             runtimeClassLoader = baseClassLoader;
         } else {
-            baseClassLoader.reset(extractGeneratedResources(buildResult, false),
-                    transformedClasses);
+            baseClassLoader.reset(extractGeneratedResources(buildResult, false), transformedClasses);
             // TODO Need to do recreations in JUnitTestRunner for dev mode case
-            runtimeClassLoader = curatedApplication.createRuntimeClassLoader(
-                    resources, transformedClasses);
+            Path tempApplicationProperties = ApplicationPropertiesUtils
+                    .createTempApplicationProperties(STARTUP_OVERRIDE.getName());
+            runtimeClassLoader = curatedApplication.createRuntimeClassLoader(resources, transformedClasses,
+                    List.of(tempApplicationProperties));
         }
         this.runtimeClassLoader = runtimeClassLoader;
         runtimeClassLoader.setStartupAction(this);
+        // Adjust JVM module requirements for this app
+        jvmRequirements = buildResult.consume(ResolvedJVMRequirements.class);
+        // Apply to both base and runtime classloaders, as classes may be loaded from either
+        applyModuleConfigurationToClassloader(baseClassLoader);
+        if (runtimeClassLoader != baseClassLoader) {
+            applyModuleConfigurationToClassloader(runtimeClassLoader);
+        }
+    }
+
+    @Override
+    public void applyModuleConfigurationToClassloader(ClassLoader classLoader) {
+        jvmRequirements.applyJavaModuleConfigurationToRuntime(jvmModulesReconfigurer, classLoader);
     }
 
     /**
@@ -99,6 +139,9 @@ public class StartupActionImpl implements StartupAction {
      * of the JVM will exit when the app stops.
      */
     public RunningQuarkusApplication runMainClass(String... args) throws Exception {
+        // Start dev services that weren't started in the augmentation phase
+        ensureDevServicesStarted();
+        InitialConfigurator.DELAYED_HANDLER.buildTimeComplete();
 
         //first we hack around class loading in the fork join pool
         ForkJoinClassLoading.setForkJoinClassLoader(runtimeClassLoader);
@@ -108,10 +151,9 @@ public class StartupActionImpl implements StartupAction {
         //we have our class loaders
         ClassLoader old = Thread.currentThread().getContextClassLoader();
         Thread.currentThread().setContextClassLoader(runtimeClassLoader);
-        final String className = mainClassName;
         try {
             // force init here
-            Class<?> appClass = Class.forName(className, true, runtimeClassLoader);
+            Class<?> appClass = Class.forName(mainClassName, true, runtimeClassLoader);
             Method start = appClass.getMethod("main", String[].class);
             Thread t = new Thread(new Runnable() {
                 @Override
@@ -167,17 +209,6 @@ public class StartupActionImpl implements StartupAction {
                     }
                 }
             }, runtimeClassLoader);
-        } catch (Throwable t) {
-            // todo: dev mode expects run time config to be available immediately even if static init didn't complete.
-            try {
-                final Class<?> configClass = Class.forName(RunTimeConfigurationGenerator.CONFIG_CLASS_NAME, true,
-                        runtimeClassLoader);
-                configClass.getDeclaredMethod(RunTimeConfigurationGenerator.C_CREATE_RUN_TIME_CONFIG.getName())
-                        .invoke(null);
-            } catch (Throwable t2) {
-                t.addSuppressed(t2);
-            }
-            throw t;
         } finally {
             Thread.currentThread().setContextClassLoader(old);
         }
@@ -189,6 +220,8 @@ public class StartupActionImpl implements StartupAction {
     }
 
     private void doClose() {
+        devServicesStarted = false;
+        deploymentClassLoader = null;
         try {
             runtimeClassLoader.loadClass(Quarkus.class.getName()).getMethod("blockingExit").invoke(null);
         } catch (InvocationTargetException | NoSuchMethodException | IllegalAccessException
@@ -206,13 +239,16 @@ public class StartupActionImpl implements StartupAction {
 
     @Override
     public int runMainClassBlocking(String... args) throws Exception {
+        // Start dev services that weren't started in the augmentation phase
+        ensureDevServicesStarted();
+        InitialConfigurator.DELAYED_HANDLER.buildTimeComplete();
+
         //first we hack around class loading in the fork join pool
         ForkJoinClassLoading.setForkJoinClassLoader(runtimeClassLoader);
 
         //we have our class loaders
         ClassLoader old = Thread.currentThread().getContextClassLoader();
         Thread.currentThread().setContextClassLoader(runtimeClassLoader);
-        final String className = mainClassName;
         try {
             AtomicInteger result = new AtomicInteger();
             Class<?> lifecycleManager = Class.forName(ApplicationLifecycleManager.class.getName(), true, runtimeClassLoader);
@@ -224,7 +260,7 @@ public class StartupActionImpl implements StartupAction {
                 setDefaultExitCodeHandler.invoke(null, (Consumer<Integer>) result::set);
                 setAlreadyStartedCallback.invoke(null, (Consumer<Boolean>) alreadyStarted::set);
                 // force init here
-                Class<?> appClass = Class.forName(className, true, runtimeClassLoader);
+                Class<?> appClass = Class.forName(mainClassName, true, runtimeClassLoader);
                 Method start = appClass.getMethod("main", String[].class);
                 start.invoke(null, (Object) (args == null ? new String[0] : args));
 
@@ -273,13 +309,55 @@ public class StartupActionImpl implements StartupAction {
 
     @Override
     public void overrideConfig(Map<String, String> config) {
-        RuntimeOverrideConfigSource.setConfig(runtimeClassLoader, config);
+        if (config == null || config.isEmpty()) {
+            return;
+        }
+
+        try {
+            Enumeration<URL> resources = runtimeClassLoader.getResources(APPLICATION_PROPERTIES);
+            while (resources.hasMoreElements()) {
+                URL url = resources.nextElement();
+                if (url.toString().contains(STARTUP_OVERRIDE.getName())) {
+                    writeTempApplicationProperties(url.toURI(), config, STARTUP_OVERRIDE);
+                    break;
+                }
+            }
+        } catch (IOException | URISyntaxException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private void ensureDevServicesStarted() {
+        if (devServicesStarted) {
+            return;
+        }
+        devServicesStarted = true;
+        if (devServicesRegistry != null) {
+            if (deploymentClassLoader == null) {
+                throw new IllegalStateException("Dev services cannot be started without a deployment class loader.");
+            }
+            devServicesRegistry.startAll(devServicesResults, devServicesCustomizers, additionalConfigBuildItems,
+                    deploymentClassLoader);
+
+            devServicesProperties.putAll(devServicesRegistry.getConfigForAllRunningServices());
+        }
     }
 
     /**
      * Runs the application, and returns a handle that can be used to shut it down.
      */
     public RunningQuarkusApplication run(String... args) throws Exception {
+
+        if (runtimeClassLoader.isClosed()) {
+            throw new RuntimeException(
+                    "Internal error: An attempt was made to start an application which had already been started and closed. The affected ClassLoader is "
+                            + runtimeClassLoader);
+
+        }
+        // Start dev services that weren't started in the augmentation phase
+        ensureDevServicesStarted();
+        InitialConfigurator.DELAYED_HANDLER.buildTimeComplete();
+
         //first we hack around class loading in the fork join pool
         ForkJoinClassLoading.setForkJoinClassLoader(runtimeClassLoader);
 
@@ -287,27 +365,13 @@ public class StartupActionImpl implements StartupAction {
         ClassLoader old = Thread.currentThread().getContextClassLoader();
         try {
             Thread.currentThread().setContextClassLoader(runtimeClassLoader);
-            final String className = applicationClassName;
-            Class<?> appClass;
-            try {
-                // force init here
-                appClass = Class.forName(className, true, runtimeClassLoader);
-            } catch (Throwable t) {
-                // todo: dev mode expects run time config to be available immediately even if static init didn't complete.
-                try {
-                    final Class<?> configClass = Class.forName(RunTimeConfigurationGenerator.CONFIG_CLASS_NAME, true,
-                            runtimeClassLoader);
-                    configClass.getDeclaredMethod(RunTimeConfigurationGenerator.C_CREATE_RUN_TIME_CONFIG.getName())
-                            .invoke(null);
-                } catch (Throwable t2) {
-                    t.addSuppressed(t2);
-                }
-                throw t;
-            }
-
+            // force init here
+            Class<?> appClass = Class.forName(applicationClassName, true, runtimeClassLoader);
             Method start = appClass.getMethod("start", String[].class);
             Object application = appClass.getDeclaredConstructor().newInstance();
+
             start.invoke(application, (Object) args);
+
             Closeable closeTask = (Closeable) application;
             return new RunningQuarkusApplicationImpl(new Closeable() {
                 @Override
@@ -370,12 +434,14 @@ public class StartupActionImpl implements StartupAction {
     }
 
     @Override
-    public Map<String, String> getDevServicesProperties() {
+    public Map<String, String> getOrInitialiseDevServicesProperties() {
+        ensureDevServicesStarted();
         return devServicesProperties;
     }
 
     @Override
-    public String getDevServicesNetworkId() {
+    public String getOrInitialiseDevServicesNetworkId() {
+        ensureDevServicesStarted();
         return devServicesNetworkId;
     }
 
@@ -411,28 +477,28 @@ public class StartupActionImpl implements StartupAction {
 
     private static Map<String, byte[]> extractGeneratedResources(BuildResult buildResult, boolean applicationClasses) {
         Map<String, byte[]> data = new HashMap<>();
+        String debugClassesDir = BootstrapDebug.debugClassesDir();
+        String debugSourcesDir = BootstrapDebug.debugSourcesDir();
         for (GeneratedClassBuildItem i : buildResult.consumeMulti(GeneratedClassBuildItem.class)) {
             if (i.isApplicationClass() == applicationClasses) {
                 data.put(fromClassNameToResourceName(i.getName()), i.getClassData());
-                var debugClassesDir = BootstrapDebug.debugClassesDir();
                 if (debugClassesDir != null) {
                     try {
                         File debugPath = new File(debugClassesDir);
                         if (!debugPath.exists()) {
                             debugPath.mkdir();
                         }
-                        File classFile = new File(debugPath, i.getName() + ".class");
+                        File classFile = new File(debugPath, i.internalName() + ".class");
                         classFile.getParentFile().mkdirs();
                         try (FileOutputStream classWriter = new FileOutputStream(classFile)) {
                             classWriter.write(i.getClassData());
                         }
                         log.infof("Wrote %s", classFile.getAbsolutePath());
                     } catch (Exception t) {
-                        log.errorf(t, "Failed to write debug class files %s", i.getName());
+                        log.errorf(t, "Failed to write debug class file for %s", i.binaryName());
                     }
                 }
 
-                String debugSourcesDir = BootstrapDebug.debugSourcesDir();
                 if (debugSourcesDir != null) {
                     try {
                         if (i.getSource() != null) {
@@ -440,16 +506,15 @@ public class StartupActionImpl implements StartupAction {
                             if (!debugPath.exists()) {
                                 debugPath.mkdir();
                             }
-                            File sourceFile = new File(debugPath, i.getName() + ".zig");
+                            File sourceFile = new File(debugPath, i.internalName() + ".zig");
                             sourceFile.getParentFile().mkdirs();
-                            Files.write(sourceFile.toPath(), i.getSource().getBytes(StandardCharsets.UTF_8),
-                                    StandardOpenOption.CREATE);
+                            Files.writeString(sourceFile.toPath(), i.getSource(), StandardOpenOption.CREATE);
                             log.infof("Wrote source %s", sourceFile.getAbsolutePath());
                         } else {
-                            log.infof("Source not available: %s", i.getName());
+                            log.infof("Source not available: %s", i.binaryName());
                         }
                     } catch (Exception t) {
-                        log.errorf(t, "Failed to write debug source file %s", i.getName());
+                        log.errorf(t, "Failed to write debug source file for %s", i.binaryName());
                     }
                 }
             }

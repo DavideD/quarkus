@@ -21,7 +21,6 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -39,8 +38,6 @@ import io.quarkus.security.identity.IdentityProviderManager;
 import io.quarkus.security.identity.SecurityIdentity;
 import io.quarkus.security.identity.request.AuthenticationRequest;
 import io.quarkus.security.identity.request.UsernamePasswordAuthenticationRequest;
-import io.quarkus.vertx.http.runtime.VertxHttpBuildTimeConfig;
-import io.quarkus.vertx.http.runtime.VertxHttpConfig;
 import io.smallrye.mutiny.Uni;
 import io.vertx.ext.web.RoutingContext;
 
@@ -50,6 +47,7 @@ import io.vertx.ext.web.RoutingContext;
  */
 public class BasicAuthenticationMechanism implements HttpAuthenticationMechanism {
 
+    public static final int PRIORITY = 2000;
     private static final Logger log = Logger.getLogger(BasicAuthenticationMechanism.class);
 
     private final String challenge;
@@ -70,25 +68,46 @@ public class BasicAuthenticationMechanism implements HttpAuthenticationMechanism
 
     private final Charset charset;
     private final Map<Pattern, Charset> userAgentCharsets;
+    private final int priority;
 
-    BasicAuthenticationMechanism(VertxHttpConfig httpConfig, VertxHttpBuildTimeConfig vertxHttpBuildTimeConfig) {
-        this(httpConfig.auth().realm().orElse(null), vertxHttpBuildTimeConfig.auth().form().enabled());
-    }
-
+    /**
+     * @deprecated use {@link BasicAuthenticationMechanism(String, boolean)}
+     */
+    @Deprecated(forRemoval = true, since = "3.25")
     public BasicAuthenticationMechanism(final String realmName) {
         this(realmName, false);
     }
 
     public BasicAuthenticationMechanism(final String realmName, final boolean silent) {
-        this(realmName, silent, StandardCharsets.UTF_8, Collections.emptyMap());
+        this(realmName, silent, PRIORITY);
+    }
+
+    public BasicAuthenticationMechanism(final String realmName, final boolean silent, int priority) {
+        this(realmName, silent, StandardCharsets.UTF_8, Map.of(), priority);
     }
 
     public BasicAuthenticationMechanism(final String realmName, final boolean silent,
-            Charset charset, Map<Pattern, Charset> userAgentCharsets) {
+            Charset charset, Map<Pattern, Charset> userAgentCharsets, int priority) {
         this.challenge = realmName == null ? BASIC : BASIC_PREFIX + "realm=\"" + realmName + "\"";
         this.silent = silent;
         this.charset = charset;
-        this.userAgentCharsets = Collections.unmodifiableMap(new LinkedHashMap<>(userAgentCharsets));
+        this.userAgentCharsets = Map.copyOf(userAgentCharsets);
+        this.priority = priority;
+    }
+
+    private Charset getCharset(RoutingContext context) {
+        if (!userAgentCharsets.isEmpty()) {
+            String ua = context.request().headers().get(HttpHeaderNames.USER_AGENT);
+            if (ua != null) {
+                for (Map.Entry<Pattern, Charset> entry : userAgentCharsets.entrySet()) {
+                    if (entry.getKey().matcher(ua).find()) {
+                        return entry.getValue();
+                    }
+                }
+            }
+        }
+
+        return this.charset;
     }
 
     @Override
@@ -101,20 +120,14 @@ public class BasicAuthenticationMechanism implements HttpAuthenticationMechanism
 
                     String base64Challenge = current.substring(PREFIX_LENGTH);
                     String plainChallenge = null;
-                    byte[] decode = Base64.getDecoder().decode(base64Challenge);
-
-                    Charset charset = this.charset;
-                    if (!userAgentCharsets.isEmpty()) {
-                        String ua = context.request().headers().get(HttpHeaderNames.USER_AGENT);
-                        if (ua != null) {
-                            for (Map.Entry<Pattern, Charset> entry : userAgentCharsets.entrySet()) {
-                                if (entry.getKey().matcher(ua).find()) {
-                                    charset = entry.getValue();
-                                    break;
-                                }
-                            }
-                        }
+                    byte[] decode;
+                    try {
+                        decode = Base64.getDecoder().decode(base64Challenge);
+                    } catch (IllegalArgumentException illegalArgumentException) {
+                        return Uni.createFrom().failure(new AuthenticationFailedException(illegalArgumentException));
                     }
+
+                    Charset charset = getCharset(context);
 
                     plainChallenge = new String(decode, charset);
                     int colonPos;
@@ -171,6 +184,6 @@ public class BasicAuthenticationMechanism implements HttpAuthenticationMechanism
 
     @Override
     public int getPriority() {
-        return 2000;
+        return priority;
     }
 }

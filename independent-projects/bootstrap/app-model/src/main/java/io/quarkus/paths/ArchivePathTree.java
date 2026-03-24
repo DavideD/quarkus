@@ -9,6 +9,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -71,6 +72,7 @@ public class ArchivePathTree extends PathTreeWithManifest implements PathTree {
 
     protected final Path archive;
     private final PathFilter pathFilter;
+    private transient volatile Set<String> resourceNames;
 
     ArchivePathTree(Path archive) {
         this(archive, null);
@@ -107,14 +109,25 @@ public class ArchivePathTree extends PathTreeWithManifest implements PathTree {
     }
 
     @Override
-    public void walkIfContains(String relativePath, PathVisitor visitor) {
-        ensureResourcePath(relativePath);
-        if (!PathFilter.isVisible(pathFilter, relativePath)) {
+    public void walkRaw(PathVisitor visitor) {
+        try (FileSystem fs = openFs()) {
+            final Path dir = fs.getPath("/");
+            PathTreeVisit.walk(archive, dir, dir, pathFilter, Map.of(), visitor);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to read " + archive, e);
+        }
+    }
+
+    @Override
+    public void walkIfContains(String resourceDirName, PathVisitor visitor) {
+        ensureResourcePath(resourceDirName);
+        if (!PathFilter.isVisible(pathFilter, resourceDirName)) {
             return;
         }
         try (FileSystem fs = openFs()) {
+            final String dirPath = PathTreeVisit.resourceNameToFsPath(resourceDirName, fs);
             for (Path root : fs.getRootDirectories()) {
-                final Path walkDir = root.resolve(relativePath);
+                final Path walkDir = root.resolve(dirPath);
                 if (Files.exists(walkDir)) {
                     PathTreeVisit.walk(archive, root, walkDir, pathFilter, getMultiReleaseMapping(), visitor);
                 }
@@ -125,19 +138,27 @@ public class ArchivePathTree extends PathTreeWithManifest implements PathTree {
     }
 
     private void ensureResourcePath(String path) {
-        DirectoryPathTree.ensureResourcePath(archive.getFileSystem(), path);
+        PathTreeVisit.ensureResourcePath(archive.getFileSystem(), path);
     }
 
     @Override
-    protected <T> T apply(String relativePath, Function<PathVisit, T> func, boolean manifestEnabled) {
-        ensureResourcePath(relativePath);
-        if (!PathFilter.isVisible(pathFilter, relativePath)) {
+    public Set<String> getResourceNames() {
+        return resourceNames == null ? resourceNames = super.getResourceNames() : resourceNames;
+    }
+
+    private String resolveResourceName(String resourceName, boolean manifestEnabled) {
+        return manifestEnabled ? toMultiReleaseResourceName(resourceName) : resourceName;
+    }
+
+    @Override
+    protected <T> T apply(String resourceName, Function<PathVisit, T> func, boolean manifestEnabled) {
+        ensureResourcePath(resourceName);
+        if (!PathFilter.isVisible(pathFilter, resourceName)) {
             return func.apply(null);
         }
-        if (manifestEnabled) {
-            relativePath = toMultiReleaseRelativePath(relativePath);
-        }
         try (FileSystem fs = openFs()) {
+            final String relativePath = PathTreeVisit.resourceNameToFsPath(
+                    resolveResourceName(resourceName, manifestEnabled), fs);
             for (Path root : fs.getRootDirectories()) {
                 final Path path = root.resolve(relativePath);
                 if (!Files.exists(path)) {
@@ -152,16 +173,15 @@ public class ArchivePathTree extends PathTreeWithManifest implements PathTree {
     }
 
     @Override
-    public void accept(String relativePath, Consumer<PathVisit> consumer) {
-        ensureResourcePath(relativePath);
-        if (!PathFilter.isVisible(pathFilter, relativePath)) {
+    public void accept(String resourceName, Consumer<PathVisit> consumer) {
+        ensureResourcePath(resourceName);
+        if (!PathFilter.isVisible(pathFilter, resourceName)) {
             consumer.accept(null);
             return;
         }
-        if (manifestEnabled) {
-            relativePath = toMultiReleaseRelativePath(relativePath);
-        }
         try (FileSystem fs = openFs()) {
+            final String relativePath = PathTreeVisit.resourceNameToFsPath(
+                    resolveResourceName(resourceName, manifestEnabled), fs);
             for (Path root : fs.getRootDirectories()) {
                 final Path path = root.resolve(relativePath);
                 if (!Files.exists(path)) {
@@ -177,15 +197,14 @@ public class ArchivePathTree extends PathTreeWithManifest implements PathTree {
     }
 
     @Override
-    public boolean contains(String relativePath) {
-        ensureResourcePath(relativePath);
-        if (!PathFilter.isVisible(pathFilter, relativePath)) {
+    public boolean contains(String resourceName) {
+        ensureResourcePath(resourceName);
+        if (!PathFilter.isVisible(pathFilter, resourceName)) {
             return false;
         }
-        if (manifestEnabled) {
-            relativePath = toMultiReleaseRelativePath(relativePath);
-        }
         try (FileSystem fs = openFs()) {
+            final String relativePath = PathTreeVisit.resourceNameToFsPath(
+                    resolveResourceName(resourceName, manifestEnabled), fs);
             for (Path root : fs.getRootDirectories()) {
                 final Path path = root.resolve(relativePath);
                 if (Files.exists(path)) {
@@ -309,22 +328,22 @@ public class ArchivePathTree extends PathTreeWithManifest implements PathTree {
         }
 
         @Override
-        protected <T> T apply(String relativePath, Function<PathVisit, T> func, boolean manifestEnabled) {
+        protected <T> T apply(String resourceName, Function<PathVisit, T> func, boolean manifestEnabled) {
             lock.readLock().lock();
             try {
                 ensureOpen();
-                return super.apply(relativePath, func, manifestEnabled);
+                return super.apply(resourceName, func, manifestEnabled);
             } finally {
                 lock.readLock().unlock();
             }
         }
 
         @Override
-        public void accept(String relativePath, Consumer<PathVisit> consumer) {
+        public void accept(String resourceName, Consumer<PathVisit> consumer) {
             lock.readLock().lock();
             try {
                 ensureOpen();
-                super.accept(relativePath, consumer);
+                super.accept(resourceName, consumer);
             } finally {
                 lock.readLock().unlock();
             }
@@ -342,33 +361,49 @@ public class ArchivePathTree extends PathTreeWithManifest implements PathTree {
         }
 
         @Override
-        public void walkIfContains(String relativePath, PathVisitor visitor) {
+        public void walkRaw(PathVisitor visitor) {
             lock.readLock().lock();
             try {
                 ensureOpen();
-                super.walkIfContains(relativePath, visitor);
+                super.walkRaw(visitor);
             } finally {
                 lock.readLock().unlock();
             }
         }
 
         @Override
-        public boolean contains(String relativePath) {
+        public void walkIfContains(String resourceDirName, PathVisitor visitor) {
             lock.readLock().lock();
             try {
                 ensureOpen();
-                return super.contains(relativePath);
+                super.walkIfContains(resourceDirName, visitor);
             } finally {
                 lock.readLock().unlock();
             }
         }
 
         @Override
-        public Path getPath(String relativePath) {
+        public Set<String> getResourceNames() {
+            return resourceNames == null ? resourceNames = super.getResourceNames() : resourceNames;
+        }
+
+        @Override
+        public boolean contains(String resourceName) {
             lock.readLock().lock();
             try {
                 ensureOpen();
-                return super.getPath(relativePath);
+                return super.contains(resourceName);
+            } finally {
+                lock.readLock().unlock();
+            }
+        }
+
+        @Override
+        public Path getPath(String resourceName) {
+            lock.readLock().lock();
+            try {
+                ensureOpen();
+                return super.getPath(resourceName);
             } finally {
                 lock.readLock().unlock();
             }

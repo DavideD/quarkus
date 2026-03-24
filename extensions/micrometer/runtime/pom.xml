@@ -85,12 +85,6 @@
         </dependency>
 
         <dependency>
-            <groupId>org.eclipse.microprofile.metrics</groupId>
-            <artifactId>microprofile-metrics-api</artifactId>
-            <optional>true</optional>
-        </dependency>
-
-        <dependency>
             <groupId>io.smallrye.reactive</groupId>
             <artifactId>smallrye-reactive-messaging-api</artifactId>
             <optional>true</optional>
@@ -99,6 +93,12 @@
         <dependency>
             <groupId>org.apache.kafka</groupId>
             <artifactId>kafka-clients</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <!-- TODO: remove this after upgrading to kafka-clients that already depends on the new lz4 groupId -->
+        <dependency>
+            <groupId>at.yawk.lz4</groupId>
+            <artifactId>lz4-java</artifactId>
             <optional>true</optional>
         </dependency>
         <dependency>

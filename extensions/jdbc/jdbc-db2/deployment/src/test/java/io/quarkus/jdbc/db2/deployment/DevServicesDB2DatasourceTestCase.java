@@ -22,8 +22,7 @@ public class DevServicesDB2DatasourceTestCase {
 
     @RegisterExtension
     static QuarkusUnitTest test = new QuarkusUnitTest()
-            .withApplicationRoot((jar) -> jar
-                    .addAsResource("container-license-acceptance.txt"))
+            .withConfigurationResource("application.properties")
             // Expect no warnings (in particular from Agroal)
             .setLogRecordPredicate(record -> record.getLevel().intValue() >= Level.WARNING.intValue()
                     // There are other warnings: JDK8, TestContainers, drivers, ...
@@ -42,7 +41,7 @@ public class DevServicesDB2DatasourceTestCase {
         AgroalConnectionPoolConfiguration configuration = dataSource.getConfiguration().connectionPoolConfiguration();
         assertTrue(configuration.connectionFactoryConfiguration().jdbcUrl().contains("jdbc:db2:"));
         assertEquals("quarkus", configuration.connectionFactoryConfiguration().principal().getName());
-        assertEquals(20, configuration.maxSize());
+        assertEquals(50, configuration.maxSize());
         assertThat(configuration.exceptionSorter()).isInstanceOf(DB2ExceptionSorter.class);
 
         try (Connection connection = dataSource.getConnection()) {

@@ -28,7 +28,7 @@
         <!-- Test dependencies -->
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-junit5-internal</artifactId>
+            <artifactId>quarkus-junit-internal</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -112,7 +112,7 @@
                         <configuration>
                             <skip>false</skip>
                             <systemPropertyVariables>
-                                <keycloak.docker.image>${keycloak.docker.legacy.image}</keycloak.docker.image>
+                                <keycloak.docker.image>${keycloak.docker.image}</keycloak.docker.image>
                                 <keycloak.use.https>false</keycloak.use.https>
                             </systemPropertyVariables>
                         </configuration>

@@ -41,6 +41,11 @@ public class MutableStandardJvmOption extends MutableBaseJvmOption<MutableStanda
     }
 
     @Override
+    protected String getPropertyGroupPrefix() {
+        return PROPERTY_GROUP_PREFIX;
+    }
+
+    @Override
     protected String getQuarkusExtensionPropertyPrefix() {
         return COMPLETE_PROPERTY_PREFIX;
     }
@@ -64,7 +69,7 @@ public class MutableStandardJvmOption extends MutableBaseJvmOption<MutableStanda
         var name = getName();
         var values = getValues();
         if (values.size() == 1) {
-            return List.of(DASH_DASH + name + EQUALS + EQUALS + values.iterator().next());
+            return List.of(DASH_DASH + name + EQUALS + values.iterator().next());
         }
         final Map<String, Set<String>> modulePackages = new HashMap<>(values.size());
         for (String value : values) {

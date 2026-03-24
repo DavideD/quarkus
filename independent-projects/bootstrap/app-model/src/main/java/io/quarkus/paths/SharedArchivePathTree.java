@@ -1,11 +1,11 @@
 package io.quarkus.paths;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.file.FileSystem;
 import java.nio.file.Path;
 import java.util.Collection;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -60,11 +60,11 @@ class SharedArchivePathTree extends ArchivePathTree {
             }
         }
         try {
-            this.lastOpen = new SharedOpenArchivePathTree(openFs());
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
+            lastOpen = this.lastOpen = new SharedOpenArchivePathTree(openFs());
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to read " + archive, e);
         }
-        return new CallerOpenPathTree(this.lastOpen);
+        return new CallerOpenPathTree(lastOpen);
     }
 
     private class SharedOpenArchivePathTree extends OpenArchivePathTree {
@@ -180,28 +180,38 @@ class SharedArchivePathTree extends ArchivePathTree {
         }
 
         @Override
-        public void walkIfContains(String relativePath, PathVisitor visitor) {
-            delegate.walkIfContains(relativePath, visitor);
+        public void walkRaw(PathVisitor visitor) {
+            delegate.walkRaw(visitor);
         }
 
         @Override
-        public <T> T apply(String relativePath, Function<PathVisit, T> func) {
-            return delegate.apply(relativePath, func);
+        public void walkIfContains(String resourceDirName, PathVisitor visitor) {
+            delegate.walkIfContains(resourceDirName, visitor);
         }
 
         @Override
-        public void accept(String relativePath, Consumer<PathVisit> consumer) {
-            delegate.accept(relativePath, consumer);
+        public Set<String> getResourceNames() {
+            return delegate.getResourceNames();
         }
 
         @Override
-        public void acceptAll(String relativePath, Consumer<PathVisit> consumer) {
-            delegate.acceptAll(relativePath, consumer);
+        public <T> T apply(String resourceName, Function<PathVisit, T> func) {
+            return delegate.apply(resourceName, func);
         }
 
         @Override
-        public boolean contains(String relativePath) {
-            return delegate.contains(relativePath);
+        public void accept(String resourceName, Consumer<PathVisit> consumer) {
+            delegate.accept(resourceName, consumer);
+        }
+
+        @Override
+        public void acceptAll(String resourceName, Consumer<PathVisit> consumer) {
+            delegate.acceptAll(resourceName, consumer);
+        }
+
+        @Override
+        public boolean contains(String resourceName) {
+            return delegate.contains(resourceName);
         }
 
         @Override

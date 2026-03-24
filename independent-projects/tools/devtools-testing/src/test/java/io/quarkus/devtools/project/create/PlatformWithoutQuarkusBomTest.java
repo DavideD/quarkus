@@ -107,12 +107,12 @@ public class PlatformWithoutQuarkusBomTest extends MultiplePlatformBomsTestBase 
             var codestartsDir = fs.getPath("codestarts");
             Files.createDirectories(codestartsDir);
             PathTree.ofDirectoryOrArchive(dir).walk(visit -> {
-                final String relativePath = visit.getRelativePath();
+                final String relativePath = visit.getResourceName();
                 if (relativePath.isEmpty()) {
                     return;
                 }
                 try {
-                    Files.copy(visit.getPath(), codestartsDir.resolve(visit.getRelativePath()));
+                    Files.copy(visit.getPath(), codestartsDir.resolve(visit.getResourceName()));
                 } catch (IOException e) {
                     throw new UncheckedIOException(e);
                 }
@@ -175,8 +175,8 @@ public class PlatformWithoutQuarkusBomTest extends MultiplePlatformBomsTestBase 
 
         assertModel(projectDir,
                 List.of(mainPlatformBom(),
-                        ArtifactCoords.pom("${quarkus.platform.group-id}", "quarkus-zoo-bom", "${quarkus.platform.version}"),
-                        ArtifactCoords.pom(MAIN_PLATFORM_KEY, "acme-magic-bom", "7.0.7")),
+                        ArtifactCoords.pom(MAIN_PLATFORM_KEY, "acme-magic-bom", "7.0.7"),
+                        ArtifactCoords.pom("${quarkus.platform.group-id}", "quarkus-zoo-bom", "${quarkus.platform.version}")),
                 List.of(ArtifactCoords.jar("org.acme.platform", "acme-magic", null),
                         ArtifactCoords.jar("org.quarkus.platform", "quarkus-giraffe", null)),
                 "2.0.4");

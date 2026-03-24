@@ -1,5 +1,8 @@
 package io.quarkus.oidc.runtime;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
@@ -8,12 +11,14 @@ import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Event;
 import jakarta.enterprise.inject.Instance;
+import jakarta.enterprise.inject.Instance.Handle;
 import jakarta.enterprise.inject.spi.BeanManager;
 import jakarta.inject.Inject;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
+import io.quarkus.oidc.AuthenticationCompletionAction;
 import io.quarkus.oidc.JavaScriptRequestChecker;
 import io.quarkus.oidc.OIDCException;
 import io.quarkus.oidc.OidcTenantConfig;
@@ -24,6 +29,7 @@ import io.quarkus.oidc.TokenIntrospectionCache;
 import io.quarkus.oidc.TokenStateManager;
 import io.quarkus.oidc.UserInfo;
 import io.quarkus.oidc.UserInfoCache;
+import io.quarkus.security.AuthenticationFailedException;
 import io.quarkus.security.identity.SecurityIdentity;
 import io.quarkus.security.spi.runtime.BlockingSecurityExecutor;
 import io.quarkus.security.spi.runtime.SecurityEventHelper;
@@ -37,6 +43,8 @@ public class DefaultTenantConfigResolver {
     private static final String CURRENT_STATIC_TENANT_ID = "static.tenant.id";
     private static final String CURRENT_STATIC_TENANT_ID_NULL = "static.tenant.id.null";
     private static final String CURRENT_DYNAMIC_TENANT_CONFIG = "dynamic.tenant.config";
+    private static final String REPLACE_TENANT_CONFIG_CONTEXT = "replace-tenant-configuration-context";
+    private static final String REMOVE_SESSION_COOKIE = "remove-session-cookie";
     private final ConcurrentHashMap<String, BackChannelLogoutTokenCache> backChannelLogoutTokens = new ConcurrentHashMap<>();
     private final BlockingTaskRunner<OidcTenantConfig> blockingRequestContext;
     private final boolean securityEventObserved;
@@ -50,6 +58,8 @@ public class DefaultTenantConfigResolver {
 
     @Inject
     Instance<JavaScriptRequestChecker> javaScriptRequestChecker;
+
+    List<AuthenticationCompletionAction> authenticationCompletionActions;
 
     @Inject
     Instance<TokenStateManager> tokenStateManager;
@@ -69,6 +79,7 @@ public class DefaultTenantConfigResolver {
 
     DefaultTenantConfigResolver(BlockingSecurityExecutor blockingExecutor, BeanManager beanManager,
             Instance<TenantResolver> tenantResolverInstance,
+            Instance<AuthenticationCompletionAction> authenticationCompletionAction,
             @ConfigProperty(name = "quarkus.oidc.resolve-tenants-with-issuer") boolean resolveTenantsWithIssuer,
             @ConfigProperty(name = "quarkus.security.events.enabled") boolean securityEventsEnabled,
             @ConfigProperty(name = "quarkus.http.root-path") String rootPath, TenantConfigBean tenantConfigBean) {
@@ -80,6 +91,7 @@ public class DefaultTenantConfigResolver {
         this.rootPath = rootPath;
         this.staticTenantResolver = new StaticTenantResolver(tenantConfigBean, rootPath, resolveTenantsWithIssuer,
                 tenantResolverInstance);
+        this.authenticationCompletionActions = authenticationCompletionActions(authenticationCompletionAction);
     }
 
     @PostConstruct
@@ -99,6 +111,11 @@ public class DefaultTenantConfigResolver {
         if (javaScriptRequestChecker.isAmbiguous()) {
             throw new IllegalStateException("Multiple " + JavaScriptRequestChecker.class + " beans registered");
         }
+
+    }
+
+    List<AuthenticationCompletionAction> authenticationCompletionActions() {
+        return authenticationCompletionActions;
     }
 
     Uni<OidcTenantConfig> resolveConfig(RoutingContext context) {
@@ -229,6 +246,19 @@ public class DefaultTenantConfigResolver {
         return userInfoCache.isResolvable() ? userInfoCache.get() : null;
     }
 
+    private static List<AuthenticationCompletionAction> authenticationCompletionActions(
+            Instance<AuthenticationCompletionAction> authorizationCodeFlowCompletionAction) {
+        if (authorizationCodeFlowCompletionAction.isResolvable()) {
+            List<AuthenticationCompletionAction> actions = new ArrayList<>();
+            for (Handle<AuthenticationCompletionAction> h : authorizationCodeFlowCompletionAction.handles()) {
+                actions.add(h.get());
+            }
+            return Collections.unmodifiableList(actions);
+        } else {
+            return List.of();
+        }
+    }
+
     private Uni<OidcTenantConfig> getDynamicTenantConfig(RoutingContext context) {
         if (isTenantSetByAnnotation(context, context.get(OidcUtils.TENANT_ID_ATTRIBUTE))) {
             return Uni.createFrom().nullItem();
@@ -259,13 +289,46 @@ public class DefaultTenantConfigResolver {
 
         return getDynamicTenantConfig(context).chain(new Function<OidcTenantConfig, Uni<? extends TenantConfigContext>>() {
             @Override
-            public Uni<? extends TenantConfigContext> apply(OidcTenantConfig tenantConfig) {
+            public Uni<TenantConfigContext> apply(OidcTenantConfig tenantConfig) {
                 if (tenantConfig != null) {
                     var tenantId = tenantConfig.tenantId()
                             .orElseThrow(() -> new OIDCException("Tenant configuration must have tenant id"));
                     var tenantContext = tenantConfigBean.getDynamicTenant(tenantId);
                     if (tenantContext == null) {
                         return tenantConfigBean.createDynamicTenantContext(tenantConfig);
+                    } else if (tenantContext.getOidcTenantConfig() != tenantConfig) {
+
+                        Uni<TenantConfigContext> dynamicContextUni = null;
+                        if (Boolean.valueOf(context.get(REPLACE_TENANT_CONFIG_CONTEXT))) {
+                            // replace the context and reconnect
+                            dynamicContextUni = tenantConfigBean.replaceDynamicTenantContext(tenantConfig);
+                        } else {
+                            // update the context without reconnect
+                            dynamicContextUni = tenantConfigBean.updateDynamicTenantContext(tenantConfig);
+                        }
+                        final Uni<TenantConfigContext> contextUni = dynamicContextUni;
+                        if (Boolean.valueOf(context.get(REMOVE_SESSION_COOKIE))) {
+                            final String message = """
+                                    Requesting re-authentication for the tenant %s to align with the new dynamic tenant context requirements.
+                                    """
+                                    .formatted(tenantId);
+                            LOG.debug(message);
+                            // Clear the session cookie using the current configuration
+                            return Uni.createFrom().item(tenantContext.getOidcTenantConfig())
+                                    .chain(new Function<OidcTenantConfig, Uni<? extends Void>>() {
+                                        @Override
+                                        public Uni<Void> apply(OidcTenantConfig oidcConfig) {
+                                            OidcUtils.setClearSiteData(context, oidcConfig);
+                                            return OidcUtils.removeSessionCookie(context, oidcConfig, tokenStateManager.get());
+                                        }
+                                    })
+                                    // Deal with updating or replacing the dynamic context
+                                    .chain(() -> contextUni)
+                                    // Finally, request re-authentication
+                                    .onItem().failWith(() -> new AuthenticationFailedException(message));
+                        } else {
+                            return dynamicContextUni;
+                        }
                     } else {
                         return Uni.createFrom().item(tenantContext);
                     }
@@ -287,7 +350,7 @@ public class DefaultTenantConfigResolver {
         return enableHttpForwardedPrefix;
     }
 
-    public Map<String, BackChannelLogoutTokenCache> getBackChannelLogoutTokens() {
+    Map<String, BackChannelLogoutTokenCache> getBackChannelLogoutTokens() {
         return backChannelLogoutTokens;
     }
 

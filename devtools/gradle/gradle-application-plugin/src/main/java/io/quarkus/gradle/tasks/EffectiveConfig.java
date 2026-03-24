@@ -1,5 +1,6 @@
 package io.quarkus.gradle.tasks;
 
+import static io.smallrye.config.ConfigMappings.ConfigClass.configClass;
 import static java.util.Collections.emptyMap;
 import static java.util.Collections.emptySet;
 import static java.util.Collections.unmodifiableMap;
@@ -13,6 +14,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -25,9 +27,12 @@ import io.quarkus.deployment.configuration.ConfigCompatibility;
 import io.quarkus.deployment.pkg.NativeConfig;
 import io.quarkus.deployment.pkg.PackageConfig;
 import io.quarkus.runtime.configuration.ConfigUtils;
+import io.smallrye.config.ConfigValue;
+import io.smallrye.config.DefaultValuesConfigSource;
 import io.smallrye.config.Expressions;
 import io.smallrye.config.PropertiesConfigSource;
 import io.smallrye.config.SmallRyeConfig;
+import io.smallrye.config.SysPropConfigSource;
 import io.smallrye.config.source.yaml.YamlConfigSourceLoader;
 
 /**
@@ -42,6 +47,7 @@ import io.smallrye.config.source.yaml.YamlConfigSourceLoader;
 public final class EffectiveConfig {
     private final SmallRyeConfig config;
     private final Map<String, String> values;
+    private final Map<String, String> quarkusValues;
 
     private EffectiveConfig(Builder builder) {
         // Effective "ordinals" for the config sources:
@@ -87,6 +93,7 @@ public final class EffectiveConfig {
                 .withInterceptors(ConfigCompatibility.FrontEnd.instance(), ConfigCompatibility.BackEnd.instance())
                 .build();
         this.values = generateFullConfigMap(config);
+        this.quarkusValues = generateQuarkusConfigMap(config);
     }
 
     public SmallRyeConfig getConfig() {
@@ -95,6 +102,10 @@ public final class EffectiveConfig {
 
     public Map<String, String> getValues() {
         return values;
+    }
+
+    public Map<String, String> getQuarkusValues() {
+        return quarkusValues;
     }
 
     private Map<String, String> asStringMap(Map<String, ?> map) {
@@ -109,14 +120,68 @@ public final class EffectiveConfig {
 
     @VisibleForTesting
     static Map<String, String> generateFullConfigMap(SmallRyeConfig config) {
+        Set<String> excludeNames = new HashSet<>();
+        excludeNames.addAll(configClass(PackageConfig.class).getProperties().keySet());
+        excludeNames.addAll(configClass(NativeConfig.class).getProperties().keySet());
         return Expressions.withoutExpansion(new Supplier<Map<String, String>>() {
             @Override
             public Map<String, String> get() {
                 Map<String, String> properties = new HashMap<>();
                 for (String propertyName : config.getPropertyNames()) {
-                    String value = config.getRawValue(propertyName);
-                    if (value != null) {
-                        properties.put(propertyName, value);
+                    ConfigValue configValue = config.getConfigValue(propertyName);
+                    if (configValue.getValue() != null) {
+                        // Exclude defaults coming from PackageConfig and NativeConfig, as this Map as passed as
+                        // system properties to Gradle workers and, we loose the ability to determine if it was set by
+                        // the user to evaluate deprecated configuration
+                        if (!excludeNames.contains(configValue.getName()) || !configValue.isDefault()) {
+                            properties.put(propertyName, configValue.getValue());
+                        }
+                    }
+                }
+                return unmodifiableMap(properties);
+            }
+        });
+    }
+
+    /**
+     * Constructs a Map with the list of Quarkus property names that must be propagated to the Gradle workers.
+     * <p>
+     * This only takes into account the configuration that is not already available in Quarkus, including properties
+     * provided by Gradle tasks or files. System Properties are also included, since Gradle workers run on a separate
+     * VM that does not have access to the original System Properties set by the process.
+     * <p>
+     * Environment Variables do not require propagation, since all workers can the Environment. Configuration files
+     * like {@code application.properties} are already available in Quarkus, so we can skip them as well.
+     */
+    static Map<String, String> generateQuarkusConfigMap(SmallRyeConfig config) {
+        Set<String> excludeNames = new HashSet<>();
+        excludeNames.addAll(configClass(PackageConfig.class).getProperties().keySet());
+        excludeNames.addAll(configClass(NativeConfig.class).getProperties().keySet());
+        Set<String> propagateSources = new HashSet<>();
+        propagateSources.add("PropertiesConfigSource[source=forcedProperties]");
+        propagateSources.add("PropertiesConfigSource[source=taskProperties]");
+        propagateSources.add("PropertiesConfigSource[source=quarkusBuildProperties]");
+        propagateSources.add("PropertiesConfigSource[source=projectProperties]");
+        propagateSources.add("PropertiesConfigSource[source=platformProperties]");
+        propagateSources.add(SysPropConfigSource.NAME);
+        // It may look weird to include default values, but we do it because of EffectiveConfigProvider#buildEffectiveConfiguration
+        propagateSources.add(DefaultValuesConfigSource.NAME);
+        return Expressions.withoutExpansion(new Supplier<Map<String, String>>() {
+            @Override
+            public Map<String, String> get() {
+                Map<String, String> properties = new HashMap<>();
+                for (String propertyName : config.getPropertyNames()) {
+                    if (propertyName.startsWith("quarkus.") || propertyName.startsWith("platform.quarkus.")) {
+                        ConfigValue configValue = config.getConfigValue(propertyName);
+                        // Only propagate properties from sources not available in Quarkus
+                        if (configValue.getValue() != null && propagateSources.contains(configValue.getConfigSourceName())) {
+                            // Exclude defaults coming from PackageConfig and NativeConfig, as this Map as passed as
+                            // system properties to Gradle workers and, we loose the ability to determine if it was set by
+                            // the user to evaluate deprecated configuration
+                            if (!excludeNames.contains(configValue.getName()) || !configValue.isDefault()) {
+                                properties.put(propertyName, configValue.getValue());
+                            }
+                        }
                     }
                 }
                 return unmodifiableMap(properties);

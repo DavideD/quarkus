@@ -43,22 +43,17 @@
                 </exclusion>
             </exclusions>
         </dependency>
+        <!-- TODO: remove this after upgrading to kafka-clients that already depends on the new lz4 groupId -->
+        <dependency>
+            <groupId>at.yawk.lz4</groupId>
+            <artifactId>lz4-java</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.graalvm.sdk</groupId>
             <artifactId>nativeimage</artifactId>
             <scope>provided</scope>
         </dependency>
     </dependencies>
-
-    <repositories>
-        <repository>
-            <id>confluent</id>
-            <url>https://packages.confluent.io/maven/</url>
-            <snapshots>
-                <enabled>false</enabled>
-            </snapshots>
-        </repository>
-    </repositories>
 
     <build>
         <!-- Mark this as a runtime dependency, so to make sure it's included on the final classpath during native-image -->

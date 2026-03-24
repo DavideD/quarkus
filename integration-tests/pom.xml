@@ -21,6 +21,10 @@
         <gpg.skip>true</gpg.skip>
         <quarkus.build.skip>${skipTests}</quarkus.build.skip>
         <native.surefire.skip>${skipTests}</native.surefire.skip>
+        <skipSurefireTests>${skipTests}</skipSurefireTests>
+
+        <!-- for now, relax forbiddenapis in ITs entirely, we will provide a specific configuration file later -->
+        <forbiddenapis-maven-plugin.phase>none</forbiddenapis-maven-plugin.phase>
     </properties>
 
     <!-- modules are in profile test-modules -->
@@ -90,6 +94,7 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
                     <configuration>
+                        <skip>${skipSurefireTests}</skip>
                         <systemPropertyVariables>
                             <junit.quarkus.orderer.secondary-orderer>
                                 org.junit.jupiter.api.ClassOrderer$OrderAnnotation
@@ -155,6 +160,7 @@
                 </property>
             </activation>
             <modules>
+                <module>core</module>
                 <module>avro-reload</module>
                 <module>awt</module>
                 <module>awt-packaging</module>
@@ -190,7 +196,6 @@
                 <module>jpa</module>
                 <module>jpa-mapping-xml</module>
                 <module>jpa-db2</module>
-                <module>jpa-derby</module>
                 <module>jpa-postgresql</module>
                 <module>jpa-postgresql-withxml</module>
                 <module>jpa-mariadb</module>
@@ -224,7 +229,9 @@
                 <module>hibernate-orm-tenancy</module>
                 <module>hibernate-orm-jpamodelgen</module>
                 <module>hibernate-orm-data</module>
+                <module>hibernate-orm-panache-data</module>
                 <module>hibernate-orm-envers</module>
+                <module>hibernate-orm-spatial</module>
                 <module>vertx-http</module>
                 <module>vertx-http-compressors</module>
                 <module>vertx-web</module>
@@ -250,6 +257,7 @@
                 <module>liquibase</module>
                 <module>liquibase-mongodb</module>
                 <module>observability-lgtm</module>
+                <module>observability-lgtm-fixedports</module>
                 <module>observability-lgtm-prometheus</module>
                 <module>oidc</module>
                 <module>oidc-client</module>
@@ -277,6 +285,7 @@
                 <module>reactive-mysql-client</module>
                 <module>reactive-mssql-client</module>
                 <module>reactive-oracle-client</module>
+                <module>devservices</module>
                 <module>test-extension</module>
                 <module>amazon-lambda</module>
                 <module>amazon-lambda-s3event</module>
@@ -286,7 +295,6 @@
                 <module>amazon-lambda-rest-reactive-routes</module>
                 <module>amazon-lambda-rest-funqy</module>
                 <module>amazon-lambda-rest-servlet</module>
-                <module>amazon-lambda-http-resteasy</module>
                 <module>amazon-lambda-http-resteasy-reactive</module>
                 <module>container-image</module>
                 <module>kubernetes</module>
@@ -303,6 +311,7 @@
                 <module>resteasy-mutiny</module>
                 <module>virtual-http</module>
                 <module>virtual-http-resteasy</module>
+                <module>command-mode</module>
                 <module>maven</module>
                 <module>scala</module>
                 <module>kotlin</module>
@@ -318,17 +327,20 @@
                 <module>vertx-graphql</module>
                 <module>smallrye-config</module>
                 <module>smallrye-context-propagation</module>
-                <module>smallrye-metrics</module>
                 <module>smallrye-graphql</module>
                 <module>smallrye-graphql-client</module>
                 <module>smallrye-graphql-client-keycloak</module>
-                <module>smallrye-stork-registration</module>
+                <module>smallrye-stork-consul-registration-prod-mode</module>
+                <module>smallrye-stork-consul-registration</module>
+                <module>smallrye-stork-consul-registration-health-check</module>
                 <module>jpa-without-entity</module>
                 <module>quartz</module>
+                <module>quartz-deferred-datasource</module>
                 <module>redis-client</module>
                 <module>redis-cache</module>
                 <module>logging-gelf</module>
                 <module>cache</module>
+                <module>cache-multiple-backends</module>
                 <module>qute</module>
                 <module>injectmock</module>
                 <module>reactive-messaging-amqp</module>
@@ -358,7 +370,6 @@
                 <module>ide-launcher</module>
                 <module>elasticsearch-rest-client</module>
                 <module>elasticsearch-java-client</module>
-                <module>micrometer-mp-metrics</module>
                 <module>micrometer-prometheus</module>
                 <module>micrometer-security</module>
                 <module>micrometer-opentelemetry</module>
@@ -383,6 +394,7 @@
                 <module>jaxp</module>
                 <module>mailer</module>
                 <module>native-config-profile</module>
+                <module>native-image-annotations</module>
                 <module>logging-min-level-unset</module>
                 <module>logging-min-level-set</module>
                 <module>logging-panache</module>
@@ -414,6 +426,9 @@
                 <module>grpc-stork-simple</module>
                 <module>grpc-exceptions</module>
                 <module>grpc-test-random-port</module>
+                <module>grpc-proto3</module>
+                <module>grpc-proto4</module>
+                <module>grpc-encoding</module>
                 <module>google-cloud-functions-http</module>
                 <module>google-cloud-functions</module>
                 <module>istio</module>
@@ -443,6 +458,7 @@
             </activation>
             <properties>
                 <quarkus.native.enabled>true</quarkus.native.enabled>
+                <quarkus.package.jar.enabled>false</quarkus.package.jar.enabled>
             </properties>
             <build>
                 <pluginManagement>

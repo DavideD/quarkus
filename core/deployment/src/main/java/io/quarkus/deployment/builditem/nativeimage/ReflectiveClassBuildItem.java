@@ -3,10 +3,12 @@ package io.quarkus.deployment.builditem.nativeimage;
 import static java.util.Arrays.stream;
 
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 
+import org.jboss.logging.Logger;
+
 import io.quarkus.builder.item.MultiBuildItem;
-import io.quarkus.logging.Log;
 
 /**
  * Used to register a class for reflection in native mode
@@ -14,7 +16,7 @@ import io.quarkus.logging.Log;
 public final class ReflectiveClassBuildItem extends MultiBuildItem {
 
     // The names of the classes that should be registered for reflection
-    private final List<String> className;
+    private final Collection<String> className;
     private final boolean methods;
     private final boolean queryMethods;
     private final boolean fields;
@@ -27,20 +29,26 @@ public final class ReflectiveClassBuildItem extends MultiBuildItem {
     private final boolean unsafeAllocated;
     private final String reason;
 
+    private static final Logger log = Logger.getLogger(ReflectiveClassBuildItem.class);
+
     public static Builder builder(Class<?>... classes) {
-        String[] classNames = stream(classes)
+        List<String> classNames = stream(classes)
                 .map(aClass -> {
                     if (aClass == null) {
                         throw new NullPointerException();
                     }
                     return aClass.getName();
                 })
-                .toArray(String[]::new);
+                .toList();
 
         return new Builder().className(classNames);
     }
 
     public static Builder builder(String... classNames) {
+        return new Builder().className(Arrays.asList(classNames));
+    }
+
+    public static Builder builder(Collection<String> classNames) {
         return new Builder().className(classNames);
     }
 
@@ -127,15 +135,23 @@ public final class ReflectiveClassBuildItem extends MultiBuildItem {
             boolean queryMethods,
             boolean fields, boolean classes, boolean weak, boolean serialization,
             boolean unsafeAllocated, String reason, String... className) {
+        this(constructors, publicConstructors, queryConstructors, methods, queryMethods, fields, classes, weak, serialization,
+                unsafeAllocated, reason, Arrays.asList(className));
+    }
+
+    ReflectiveClassBuildItem(boolean constructors, boolean publicConstructors, boolean queryConstructors, boolean methods,
+            boolean queryMethods,
+            boolean fields, boolean classes, boolean weak, boolean serialization,
+            boolean unsafeAllocated, String reason, Collection<String> className) {
         for (String i : className) {
             if (i == null) {
                 throw new NullPointerException();
             }
         }
-        this.className = Arrays.asList(className);
+        this.className = className;
         this.methods = methods;
         if (methods && queryMethods) {
-            Log.warnf(
+            log.warnf(
                     "Both methods and queryMethods are set to true for classes: %s. queryMethods is redundant and will be ignored",
                     String.join(", ", className));
             this.queryMethods = false;
@@ -147,7 +163,7 @@ public final class ReflectiveClassBuildItem extends MultiBuildItem {
         this.constructors = constructors;
         this.publicConstructors = publicConstructors;
         if (constructors && queryConstructors) {
-            Log.warnf(
+            log.warnf(
                     "Both constructors and queryConstructors are set to true for classes: %s. queryConstructors is redundant and will be ignored",
                     String.join(", ", className));
             this.queryConstructors = false;
@@ -160,7 +176,7 @@ public final class ReflectiveClassBuildItem extends MultiBuildItem {
         this.reason = reason;
     }
 
-    public List<String> getClassNames() {
+    public Collection<String> getClassNames() {
         return className;
     }
 
@@ -192,15 +208,6 @@ public final class ReflectiveClassBuildItem extends MultiBuildItem {
         return queryConstructors;
     }
 
-    /**
-     * @deprecated As of GraalVM 21.2 finalFieldsWritable is no longer needed when registering fields for reflection. This will
-     *             be removed in a future version of Quarkus.
-     */
-    @Deprecated
-    public boolean areFinalFieldsWritable() {
-        return false;
-    }
-
     public boolean isWeak() {
         return weak;
     }
@@ -218,7 +225,7 @@ public final class ReflectiveClassBuildItem extends MultiBuildItem {
     }
 
     public static class Builder {
-        private String[] className;
+        private Collection<String> className;
         private boolean constructors = true;
         private boolean publicConstructors = false;
         private boolean queryConstructors;
@@ -234,8 +241,15 @@ public final class ReflectiveClassBuildItem extends MultiBuildItem {
         private Builder() {
         }
 
+        /**
+         * Prefer the {@link #builder(Collection)} variant whenever possible.
+         */
         public Builder className(String[] className) {
-            this.className = className;
+            return className(Arrays.stream(className).toList());
+        }
+
+        public Builder className(Collection<String> classNames) {
+            this.className = classNames;
             return this;
         }
 
@@ -332,8 +346,9 @@ public final class ReflectiveClassBuildItem extends MultiBuildItem {
         }
 
         /**
-         * @deprecated As of GraalVM 21.2 finalFieldsWritable is no longer needed when registering fields for reflection. This
-         *             will be removed in a future version of Quarkus.
+         * @deprecated This is a no-op and was kept for a couple more versions for extension compatibility (e.g. for
+         *             Blaze-Persistence).
+         *             We should be able to drop it in 3.31 but let's check before doing so.
          */
         @Deprecated(forRemoval = true)
         public Builder finalFieldsWritable(boolean finalFieldsWritable) {

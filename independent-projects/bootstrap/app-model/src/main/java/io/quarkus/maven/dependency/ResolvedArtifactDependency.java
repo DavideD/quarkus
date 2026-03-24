@@ -4,8 +4,10 @@ import java.io.Serializable;
 import java.nio.file.Path;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
+import io.quarkus.bootstrap.model.MappableCollectionFactory;
 import io.quarkus.bootstrap.workspace.WorkspaceModule;
 import io.quarkus.paths.PathCollection;
 import io.quarkus.paths.PathList;
@@ -18,6 +20,7 @@ public class ResolvedArtifactDependency extends ArtifactDependency implements Re
     private PathCollection paths;
     private final WorkspaceModule module;
     private final Collection<ArtifactCoords> deps;
+    private final Collection<Dependency> directDeps;
     private volatile transient PathTree contentTree;
 
     public ResolvedArtifactDependency(ArtifactCoords coords) {
@@ -39,6 +42,7 @@ public class ResolvedArtifactDependency extends ArtifactDependency implements Re
         this.paths = resolvedPath;
         this.module = null;
         this.deps = List.of();
+        this.directDeps = List.of();
     }
 
     public ResolvedArtifactDependency(ArtifactCoords coords, PathCollection resolvedPaths) {
@@ -46,6 +50,7 @@ public class ResolvedArtifactDependency extends ArtifactDependency implements Re
         this.paths = resolvedPaths;
         this.module = null;
         this.deps = List.of();
+        this.directDeps = List.of();
     }
 
     public ResolvedArtifactDependency(ResolvedDependencyBuilder builder) {
@@ -53,6 +58,7 @@ public class ResolvedArtifactDependency extends ArtifactDependency implements Re
         this.paths = builder.getResolvedPaths();
         this.module = builder.getWorkspaceModule();
         this.deps = builder.getDependencies();
+        this.directDeps = builder.getDirectDependencies();
     }
 
     @Override
@@ -80,6 +86,18 @@ public class ResolvedArtifactDependency extends ArtifactDependency implements Re
     }
 
     @Override
+    public Collection<Dependency> getDirectDependencies() {
+        return directDeps;
+    }
+
+    @Override
+    public Map<String, Object> asMap(MappableCollectionFactory factory) {
+        final Map<String, Object> map = factory.newMap();
+        ResolvedDependencyBuilder.putInMap(this, map, factory);
+        return map;
+    }
+
+    @Override
     public int hashCode() {
         final int prime = 31;
         int result = super.hashCode();
@@ -93,10 +111,9 @@ public class ResolvedArtifactDependency extends ArtifactDependency implements Re
             return true;
         if (!super.equals(obj))
             return false;
-        if (!(obj instanceof ResolvableDependency))
+        if (!(obj instanceof ResolvableDependency other))
             return false;
-        ResolvableDependency other = (ResolvableDependency) obj;
-        return Objects.equals(module, other.getWorkspaceModule()) && Objects.equals(paths, other.getResolvedPaths());
+        return Objects.equals(paths, other.getResolvedPaths()) && Objects.equals(module, other.getWorkspaceModule());
     }
 
     @Override
@@ -104,7 +121,7 @@ public class ResolvedArtifactDependency extends ArtifactDependency implements Re
         final StringBuilder buf = new StringBuilder();
         buf.append(toGACTVString()).append(paths);
         if (module != null) {
-            buf.append(" " + module);
+            buf.append(" ").append(module);
         }
         return buf.toString();
     }

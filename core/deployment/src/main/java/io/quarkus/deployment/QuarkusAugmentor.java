@@ -4,7 +4,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Properties;
@@ -21,6 +21,7 @@ import io.quarkus.bootstrap.model.ApplicationModel;
 import io.quarkus.builder.BuildChain;
 import io.quarkus.builder.BuildChainBuilder;
 import io.quarkus.builder.BuildExecutionBuilder;
+import io.quarkus.builder.BuildMetrics;
 import io.quarkus.builder.BuildResult;
 import io.quarkus.builder.item.BuildItem;
 import io.quarkus.deployment.builditem.AdditionalApplicationArchiveBuildItem;
@@ -33,11 +34,13 @@ import io.quarkus.deployment.builditem.QuarkusBuildCloseablesBuildItem;
 import io.quarkus.deployment.builditem.RawCommandLineArgumentsBuildItem;
 import io.quarkus.deployment.builditem.RuntimeApplicationShutdownBuildItem;
 import io.quarkus.deployment.builditem.ShutdownContextBuildItem;
+import io.quarkus.deployment.logging.LoggingSetupBuildItem;
+import io.quarkus.deployment.logging.StaticInitLoggingSetupBuildItem;
 import io.quarkus.deployment.pkg.builditem.BuildSystemTargetBuildItem;
 import io.quarkus.dev.spi.DevModeType;
 import io.quarkus.paths.PathCollection;
+import io.quarkus.runtime.JVMUnsafeWarningsControl;
 import io.quarkus.runtime.LaunchMode;
-import io.quarkus.runtime.util.JavaVersionUtil;
 import io.smallrye.config.SmallRyeConfigProviderResolver;
 
 public class QuarkusAugmentor {
@@ -49,6 +52,7 @@ public class QuarkusAugmentor {
     private final PathCollection root;
     private final Set<Class<? extends BuildItem>> finalResults;
     private final List<Consumer<BuildChainBuilder>> buildChainCustomizers;
+    private final List<Consumer<BuildExecutionBuilder>> buildExecutionCustomizers;
     private final LaunchMode launchMode;
     private final DevModeType devModeType;
     private final List<PathCollection> additionalApplicationArchives;
@@ -69,8 +73,9 @@ public class QuarkusAugmentor {
     QuarkusAugmentor(Builder builder) {
         this.classLoader = builder.classLoader;
         this.root = builder.root;
-        this.finalResults = new HashSet<>(builder.finalResults);
+        this.finalResults = new LinkedHashSet<>(builder.finalResults);
         this.buildChainCustomizers = new ArrayList<>(builder.buildChainCustomizers);
+        this.buildExecutionCustomizers = new ArrayList<>(builder.buildExecutionCustomizers);
         this.launchMode = builder.launchMode;
         this.additionalApplicationArchives = new ArrayList<>(builder.additionalApplicationArchives);
         this.excludedFromIndexing = builder.excludedFromIndexing;
@@ -91,11 +96,12 @@ public class QuarkusAugmentor {
     }
 
     public BuildResult run() throws Exception {
-        if (!JavaVersionUtil.isJava17OrHigher()) {
+        if (!(Runtime.version().major() >= 17)) {
             throw new IllegalStateException("Quarkus applications require Java 17 or higher to build");
         }
         long start = System.nanoTime();
         log.debug("Beginning Quarkus augmentation");
+        runtimeInitializeForAugmentation();
         ClassLoader originalClassLoader = Thread.currentThread().getContextClassLoader();
         QuarkusBuildCloseablesBuildItem buildCloseables = new QuarkusBuildCloseablesBuildItem();
         try {
@@ -112,6 +118,9 @@ public class QuarkusAugmentor {
 
             Thread.currentThread().setContextClassLoader(classLoader);
             chainBuilder.loadProviders(classLoader);
+
+            chainBuilder.addPriorityItem(LoggingSetupBuildItem.class);
+            chainBuilder.addPriorityItem(StaticInitLoggingSetupBuildItem.class);
 
             chainBuilder
                     .addInitial(QuarkusBuildCloseablesBuildItem.class)
@@ -132,6 +141,14 @@ public class QuarkusAugmentor {
             }
             if (launchMode.isDevOrTest()) {
                 chainBuilder.addFinal(RuntimeApplicationShutdownBuildItem.class);
+            }
+            if (System.getProperty(BuildMetrics.BUILDER_METRICS_ENABLED) == null
+                    && launchMode.isDev()
+                    && !launchMode.isRemoteDev()) {
+                // If quarkus.builder.metrics.enabled is not set then
+                // collect build metrics in dev mode but not in remote-dev
+                // (as it could cause issues with container permissions)
+                System.setProperty("quarkus.builder.metrics.enabled", "true");
             }
 
             final ArchiveRootBuildItem.Builder rootBuilder = ArchiveRootBuildItem.builder();
@@ -158,23 +175,25 @@ public class QuarkusAugmentor {
             for (PathCollection i : additionalApplicationArchives) {
                 execBuilder.produce(new AdditionalApplicationArchiveBuildItem(i));
             }
+            for (Consumer<BuildExecutionBuilder> customizer : buildExecutionCustomizers) {
+                customizer.accept(execBuilder);
+            }
+
             BuildResult buildResult = execBuilder.execute();
             String message = "Quarkus augmentation completed in " + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)
                     + "ms";
-            if (launchMode == LaunchMode.NORMAL) {
+            if (launchMode.isProduction()) {
                 log.info(message);
-                if (Boolean.parseBoolean(System.getProperty("quarkus.debug.dump-build-metrics"))) {
-                    buildResult.getMetrics().dumpTo(targetDir.resolve("build-metrics.json"));
-                }
             } else {
                 //test and dev mode already report the total startup time, no need to add noise to the logs
                 log.debug(message);
-
-                // Dump the metrics in the dev mode but not remote-dev (as it could cause issues with container permissions)
-                if ((launchMode == LaunchMode.DEVELOPMENT) && !LaunchMode.isRemoteDev()) {
-                    buildResult.getMetrics().dumpTo(targetDir.resolve("build-metrics.json"));
-                }
             }
+
+            // If enabled then dump build metrics to a JSON file in the build directory
+            if (targetDir != null) {
+                buildResult.getMetrics().dumpTo(targetDir.resolve("build-metrics.json"));
+            }
+
             return buildResult;
         } finally {
             try {
@@ -186,6 +205,14 @@ public class QuarkusAugmentor {
             Thread.currentThread().setContextClassLoader(originalClassLoader);
             buildCloseables.close();
         }
+    }
+
+    /**
+     * Not strictly related to Augmentation, but we want these annoying warnings
+     * disabled before any augmentation process begins.
+     */
+    private void runtimeInitializeForAugmentation() {
+        JVMUnsafeWarningsControl.disableUnsafeRelatedWarnings();
     }
 
     public static Builder builder() {
@@ -203,8 +230,9 @@ public class QuarkusAugmentor {
         ClassLoader classLoader;
         PathCollection root;
         Path targetDir;
-        Set<Class<? extends BuildItem>> finalResults = new HashSet<>();
+        Set<Class<? extends BuildItem>> finalResults = new LinkedHashSet<>();
         private final List<Consumer<BuildChainBuilder>> buildChainCustomizers = new ArrayList<>();
+        private final List<Consumer<BuildExecutionBuilder>> buildExecutionCustomizers = new ArrayList<>();
         LaunchMode launchMode = LaunchMode.NORMAL;
         LiveReloadBuildItem liveReloadState = new LiveReloadBuildItem();
         Properties buildSystemProperties;
@@ -221,6 +249,11 @@ public class QuarkusAugmentor {
 
         public Builder addBuildChainCustomizer(Consumer<BuildChainBuilder> customizer) {
             this.buildChainCustomizers.add(customizer);
+            return this;
+        }
+
+        public Builder addBuildExecutionCustomizer(Consumer<BuildExecutionBuilder> customizer) {
+            this.buildExecutionCustomizers.add(customizer);
             return this;
         }
 

@@ -1,10 +1,8 @@
 package io.quarkus.mongodb.panache.common.runtime;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import static com.mongodb.client.model.Filters.in;
+
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -39,6 +37,7 @@ import io.quarkus.mongodb.panache.common.MongoEntity;
 import io.quarkus.mongodb.panache.common.binder.NativeQueryBinder;
 import io.quarkus.mongodb.panache.common.binder.PanacheQlQueryBinder;
 import io.quarkus.mongodb.panache.common.transaction.MongoTransactionException;
+import io.quarkus.mongodb.runtime.MongoClientBeanUtil;
 import io.quarkus.panache.common.Parameters;
 import io.quarkus.panache.common.Sort;
 
@@ -355,7 +354,7 @@ public abstract class MongoOperations<QueryType, UpdateType> {
     private ClientSession registerClientSession(MongoEntity mongoEntity,
             TransactionSynchronizationRegistry registry) {
         TransactionManager transactionManager = Arc.container().instance(TransactionManager.class).get();
-        MongoClient client = BeanUtils.clientFromArc(mongoEntity, MongoClient.class, false);
+        MongoClient client = MongoClientBeanUtil.mongoClient(BeanUtils.beanName(mongoEntity));
         ClientSession clientSession = client.startSession();
         clientSession.startTransaction();//TODO add txoptions from annotation
         registry.putResource(SESSION_KEY, clientSession);
@@ -394,7 +393,7 @@ public abstract class MongoOperations<QueryType, UpdateType> {
     }
 
     private MongoDatabase mongoDatabase(MongoEntity mongoEntity) {
-        MongoClient mongoClient = BeanUtils.clientFromArc(mongoEntity, MongoClient.class, false);
+        MongoClient mongoClient = MongoClientBeanUtil.mongoClient(BeanUtils.beanName(mongoEntity));
         if (mongoEntity != null && !mongoEntity.database().isEmpty()) {
             return mongoClient.getDatabase(mongoEntity.database());
         }
@@ -423,6 +422,13 @@ public abstract class MongoOperations<QueryType, UpdateType> {
 
     public Optional findByIdOptional(Class<?> entityClass, Object id) {
         return Optional.ofNullable(findById(entityClass, id));
+    }
+
+    public <Entity, ID> List<Entity> findByIds(Class<?> entityClass, List<ID> ids) {
+        MongoCollection collection = mongoCollection(entityClass);
+        ClientSession session = getSession(entityClass);
+        return session == null ? (List<Entity>) collection.find(in(ID, ids)).into(new ArrayList<>())
+                : (List<Entity>) collection.find(session, in(ID, ids)).into(new ArrayList<>());
     }
 
     public QueryType find(Class<?> entityClass, String query, Object... params) {

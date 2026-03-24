@@ -52,8 +52,10 @@ import io.quarkus.deployment.annotations.Record;
 import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.GeneratedClassBuildItem;
+import io.quarkus.deployment.builditem.LaunchModeBuildItem;
 import io.quarkus.deployment.builditem.RunTimeConfigurationDefaultBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
+import io.quarkus.deployment.builditem.nativeimage.ServiceProviderBuildItem;
 import io.quarkus.deployment.metrics.MetricsCapabilityBuildItem;
 import io.quarkus.deployment.recording.RecorderContext;
 import io.quarkus.gizmo.ClassCreator;
@@ -78,6 +80,7 @@ import io.quarkus.smallrye.reactivemessaging.runtime.HealthCenterFilter;
 import io.quarkus.smallrye.reactivemessaging.runtime.HealthCenterInterceptor;
 import io.quarkus.smallrye.reactivemessaging.runtime.QuarkusMediatorConfiguration;
 import io.quarkus.smallrye.reactivemessaging.runtime.QuarkusWorkerPoolRegistry;
+import io.quarkus.smallrye.reactivemessaging.runtime.ReactiveMessagingConfigBuilderCustomizer;
 import io.quarkus.smallrye.reactivemessaging.runtime.ReactiveMessagingConfiguration;
 import io.quarkus.smallrye.reactivemessaging.runtime.RequestScopedDecorator;
 import io.quarkus.smallrye.reactivemessaging.runtime.SmallRyeReactiveMessagingLifecycle;
@@ -101,13 +104,6 @@ public class SmallRyeReactiveMessagingProcessor {
 
     static final String DEFAULT_VIRTUAL_THREADS_MAX_CONCURRENCY = "1024";
     static final String INVOKER_SUFFIX = "_SmallRyeMessagingInvoker";
-
-    static String channelPropertyFormat = "mp.messaging.%s.%s.%s";
-
-    public static String getChannelPropertyKey(String channelName, String propertyName, boolean incoming) {
-        return String.format(channelPropertyFormat, incoming ? "incoming" : "outgoing",
-                channelName.contains(".") ? "\"" + channelName + "\"" : channelName, propertyName);
-    }
 
     @BuildStep
     FeatureBuildItem feature() {
@@ -263,7 +259,9 @@ public class SmallRyeReactiveMessagingProcessor {
 
     @BuildStep
     @Record(STATIC_INIT)
-    public void build(SmallRyeReactiveMessagingRecorder recorder, RecorderContext recorderContext,
+    public void build(SmallRyeReactiveMessagingRecorder recorder,
+            LaunchModeBuildItem launchMode,
+            RecorderContext recorderContext,
             BuildProducer<SyntheticBeanBuildItem> syntheticBeans,
             List<MediatorBuildItem> mediatorMethods,
             List<ConnectorManagedChannelBuildItem> connectorManagedChannels,
@@ -310,6 +308,10 @@ public class SmallRyeReactiveMessagingProcessor {
                     defaultConfig.produce(new RunTimeConfigurationDefaultBuildItem(
                             "smallrye.messaging.worker." + poolName + ".max-concurrency",
                             DEFAULT_VIRTUAL_THREADS_MAX_CONCURRENCY));
+                }
+                if (launchMode.getLaunchMode().isDevOrTest()) {
+                    defaultConfig.produce(new RunTimeConfigurationDefaultBuildItem(
+                            "smallrye.messaging.worker." + poolName + ".shutdown-timeout", "0"));
                 }
                 workerConfigurations.add(new WorkerConfiguration(methodInfo.declaringClass().toString(),
                         methodInfo.name(), poolName, methodInfo.hasAnnotation(RUN_ON_VIRTUAL_THREAD)));
@@ -551,6 +553,13 @@ public class SmallRyeReactiveMessagingProcessor {
                             "io.quarkus.smallrye.reactivemessaging.runtime.kotlin.ApplicationCoroutineScope")
                     .setUnremovable().build());
         }
+    }
+
+    @BuildStep
+    void configCustomizer(BuildProducer<ServiceProviderBuildItem> serviceProvider) {
+        // Config mapping between SmallRye / MP and Quarkus
+        serviceProvider.produce(ServiceProviderBuildItem
+                .allProvidersFromClassPath(ReactiveMessagingConfigBuilderCustomizer.class.getName()));
     }
 
     private void ensureKotlinCoroutinesEnabled(CoroutineConfigurationBuildItem coroutineConfigurationBuildItem,

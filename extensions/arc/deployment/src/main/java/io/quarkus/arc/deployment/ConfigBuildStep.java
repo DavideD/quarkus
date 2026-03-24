@@ -8,6 +8,7 @@ import static io.quarkus.deployment.builditem.ConfigClassBuildItem.Kind.PROPERTI
 import static io.quarkus.deployment.configuration.ConfigMappingUtils.CONFIG_MAPPING_NAME;
 import static io.quarkus.deployment.configuration.ConfigMappingUtils.processConfigClasses;
 import static io.smallrye.config.ConfigMappings.ConfigClass.configClass;
+import static java.util.stream.Collectors.toCollection;
 import static java.util.stream.Collectors.toList;
 import static java.util.stream.Collectors.toSet;
 import static org.eclipse.microprofile.config.inject.ConfigProperties.UNCONFIGURED_PREFIX;
@@ -22,14 +23,12 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
-
-import jakarta.enterprise.context.Dependent;
-import jakarta.enterprise.inject.CreationException;
 
 import org.eclipse.microprofile.config.ConfigValue;
 import org.eclipse.microprofile.config.inject.ConfigProperties;
@@ -68,13 +67,12 @@ import io.quarkus.deployment.builditem.ConfigMappingBuildItem;
 import io.quarkus.deployment.builditem.ConfigPropertiesBuildItem;
 import io.quarkus.deployment.builditem.ConfigurationBuildItem;
 import io.quarkus.deployment.builditem.GeneratedClassBuildItem;
+import io.quarkus.deployment.builditem.ServiceStartBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveMethodBuildItem;
-import io.quarkus.deployment.configuration.definition.RootDefinition;
+import io.quarkus.deployment.pkg.NativeConfig;
 import io.quarkus.deployment.recording.RecorderContext;
-import io.quarkus.gizmo.ResultHandle;
 import io.quarkus.hibernate.validator.spi.AdditionalConstrainedClassBuildItem;
-import io.quarkus.runtime.annotations.ConfigPhase;
 import io.smallrye.config.ConfigMappings.ConfigClass;
 import io.smallrye.config.inject.ConfigProducer;
 
@@ -230,7 +228,7 @@ public class ConfigBuildStep {
                 configProperties.stream()
                         .filter(ConfigPropertyBuildItem::isStaticInit)
                         .map(p -> configPropertyToConfigValidation(p, reflectiveClass))
-                        .collect(toSet()));
+                        .collect(toCollection(LinkedHashSet::new)));
     }
 
     @BuildStep
@@ -244,28 +242,7 @@ public class ConfigBuildStep {
                 configProperties.stream()
                         .filter(ConfigPropertyBuildItem::isRuntimeInit)
                         .map(p -> configPropertyToConfigValidation(p, reflectiveClass))
-                        .collect(toSet()));
-    }
-
-    @BuildStep
-    void registerConfigRootsAsBeans(ConfigurationBuildItem configItem, BuildProducer<SyntheticBeanBuildItem> syntheticBeans) {
-        for (RootDefinition rootDefinition : configItem.getReadResult().getAllRoots()) {
-            if (rootDefinition.getConfigPhase() == ConfigPhase.BUILD_AND_RUN_TIME_FIXED
-                    || rootDefinition.getConfigPhase() == ConfigPhase.RUN_TIME) {
-                Class<?> configRootClass = rootDefinition.getConfigurationClass();
-                syntheticBeans.produce(SyntheticBeanBuildItem.configure(configRootClass).types(configRootClass)
-                        .scope(Dependent.class).creator(mc -> {
-                            // e.g. return Config.ApplicationConfig
-                            ResultHandle configRoot = mc.readStaticField(rootDefinition.getDescriptor());
-                            // BUILD_AND_RUN_TIME_FIXED roots are always set before the container is started (in the static initializer of the generated Config class)
-                            // However, RUN_TIME roots may be not be set when the bean instance is created
-                            mc.ifNull(configRoot).trueBranch().throwException(CreationException.class,
-                                    String.format("Config root [%s] with config phase [%s] not initialized yet.",
-                                            configRootClass.getName(), rootDefinition.getConfigPhase().name()));
-                            mc.returnValue(configRoot);
-                        }).done());
-            }
-        }
+                        .collect(toCollection(LinkedHashSet::new)));
     }
 
     @BuildStep
@@ -289,6 +266,8 @@ public class ConfigBuildStep {
 
     @BuildStep
     void generateConfigProperties(
+            NativeConfig nativeConfig,
+            ConfigurationBuildItem configItem,
             CombinedIndexBuildItem combinedIndex,
             BuildProducer<GeneratedClassBuildItem> generatedClasses,
             BuildProducer<ReflectiveClassBuildItem> reflectiveClasses,
@@ -296,42 +275,32 @@ public class ConfigBuildStep {
             BuildProducer<ConfigClassBuildItem> configClasses,
             BuildProducer<AdditionalConstrainedClassBuildItem> additionalConstrainedClasses) {
 
-        processConfigClasses(combinedIndex, generatedClasses, reflectiveClasses, reflectiveMethods, configClasses,
-                additionalConstrainedClasses, MP_CONFIG_PROPERTIES_NAME);
+        Map<String, GeneratedClassBuildItem> generatedConfigClasses = new HashMap<>();
+        processConfigClasses(nativeConfig, configItem, combinedIndex, generatedConfigClasses, reflectiveClasses,
+                reflectiveMethods,
+                configClasses, additionalConstrainedClasses, MP_CONFIG_PROPERTIES_NAME);
+
+        for (GeneratedClassBuildItem generatedConfigClass : generatedConfigClasses.values()) {
+            generatedClasses.produce(generatedConfigClass);
+        }
     }
 
     @BuildStep
     void registerConfigMappingsBean(
             BeanRegistrationPhaseBuildItem beanRegistration,
             List<ConfigClassBuildItem> configClasses,
-            CombinedIndexBuildItem combinedIndex,
             BuildProducer<BeanConfiguratorBuildItem> beanConfigurator) {
 
         if (configClasses.isEmpty()) {
             return;
         }
 
-        Set<ConfigClassBuildItem> configMappings = new HashSet<>();
-
-        // Add beans for all unremovable mappings
-        for (ConfigClassBuildItem configClass : configClasses) {
-            if (configClass.getConfigClass().isAnnotationPresent(Unremovable.class)) {
-                configMappings.add(configClass);
-            }
-        }
-
-        // Add beans for all injection points
-        Map<Type, ConfigClassBuildItem> configMappingTypes = configClassesToTypesMap(configClasses, MAPPING);
-        for (InjectionPointInfo injectionPoint : beanRegistration.getInjectionPoints()) {
-            Type type = Type.create(injectionPoint.getRequiredType().name(), Type.Kind.CLASS);
-            ConfigClassBuildItem configClass = configMappingTypes.get(type);
-            if (configClass != null) {
-                configMappings.add(configClass);
-            }
-        }
-
         // Generate the mappings beans
-        for (ConfigClassBuildItem configClass : configMappings) {
+        for (ConfigClassBuildItem configClass : configClasses) {
+            if (!configClass.isMapping()) {
+                continue;
+            }
+
             BeanConfigurator<Object> bean = beanRegistration.getContext()
                     .configure(configClass.getConfigClass())
                     .types(configClass.getTypes().toArray(new Type[] {}))
@@ -352,41 +321,35 @@ public class ConfigBuildStep {
     void registerConfigPropertiesBean(
             BeanRegistrationPhaseBuildItem beanRegistration,
             List<ConfigClassBuildItem> configClasses,
-            CombinedIndexBuildItem combinedIndex,
             BuildProducer<BeanConfiguratorBuildItem> beanConfigurator) {
 
         if (configClasses.isEmpty()) {
             return;
         }
 
-        Map<Type, ConfigClassBuildItem> configPropertiesTypes = configClassesToTypesMap(configClasses, PROPERTIES);
-        Set<ConfigClassBuildItem> configProperties = new HashSet<>();
-        for (InjectionPointInfo injectionPoint : beanRegistration.getInjectionPoints()) {
-            AnnotationInstance instance = injectionPoint.getRequiredQualifier(MP_CONFIG_PROPERTIES_NAME);
-            if (instance == null) {
+        // Generate the mappings beans
+        for (ConfigClassBuildItem configClass : configClasses) {
+            if (!configClass.isProperties()) {
                 continue;
             }
 
-            Type type = Type.create(injectionPoint.getRequiredType().name(), Type.Kind.CLASS);
-            ConfigClassBuildItem configClass = configPropertiesTypes.get(type);
-            if (configClass != null) {
-                configProperties.add(configClass);
-            }
-        }
+            BeanConfigurator<Object> bean = beanRegistration.getContext()
+                    .configure(configClass.getConfigClass())
+                    .types(configClass.getTypes().toArray(new Type[] {}))
+                    .addQualifier(create(MP_CONFIG_PROPERTIES_NAME, null,
+                            new AnnotationValue[] {
+                                    createStringValue("prefix", configClass.getPrefix())
+                            }))
+                    .creator(ConfigMappingCreator.class)
+                    .addInjectionPoint(ClassType.create(DotNames.INJECTION_POINT))
+                    .param("type", configClass.getConfigClass())
+                    .param("prefix", configClass.getPrefix());
 
-        for (ConfigClassBuildItem configClass : configProperties) {
-            beanConfigurator.produce(new BeanConfiguratorBuildItem(
-                    beanRegistration.getContext()
-                            .configure(configClass.getConfigClass())
-                            .types(configClass.getTypes().toArray(new Type[] {}))
-                            .addQualifier(create(MP_CONFIG_PROPERTIES_NAME, null,
-                                    new AnnotationValue[] {
-                                            createStringValue("prefix", configClass.getPrefix())
-                                    }))
-                            .creator(ConfigMappingCreator.class)
-                            .addInjectionPoint(ClassType.create(DotNames.INJECTION_POINT))
-                            .param("type", configClass.getConfigClass())
-                            .param("prefix", configClass.getPrefix())));
+            if (configClass.getConfigClass().isAnnotationPresent(Unremovable.class)) {
+                bean.unremovable();
+            }
+
+            beanConfigurator.produce(new BeanConfiguratorBuildItem(bean));
         }
     }
 
@@ -437,14 +400,14 @@ public class ConfigBuildStep {
         }
 
         if (arcConfig.shouldEnableBeanRemoval()) {
-            Set<String> unremovableClassNames = unremovableBeans.stream()
+            Set<DotName> unremovableClassNames = unremovableBeans.stream()
                     .map(UnremovableBeanBuildItem::getClassNames)
                     .flatMap(Collection::stream)
                     .collect(toSet());
 
             for (ConfigClassBuildItem configClass : configMappingTypes.values()) {
                 if (configClass.getConfigClass().isAnnotationPresent(Unremovable.class)
-                        || unremovableClassNames.contains(configClass.getName().toString())) {
+                        || unremovableClassNames.contains(configClass.getName())) {
                     toRegister.add(new ConfigMappingBuildItem(configClass.getConfigClass(), configClass.getPrefix()));
                 }
             }
@@ -491,15 +454,28 @@ public class ConfigBuildStep {
         toRegister.forEach(configProperties::produce);
     }
 
+    /**
+     * Registers the {@link org.eclipse.microprofile.config.inject.ConfigProperties} beans after
+     * the creation of {@link io.smallrye.config.SmallRyeConfig}. It should be possible to register these in the config
+     * builder during build time, but unfortunately the MP Config TCK requires to throw a
+     * {@link jakarta.enterprise.inject.spi.DeploymentException} when a
+     * {@link org.eclipse.microprofile.config.inject.ConfigProperties} bean cannot be initialized (due to missing
+     * configuration). When {@link io.smallrye.config.SmallRyeConfig} cannot map a config class, it throws a
+     * {@link io.smallrye.config.ConfigValidationException}. The recorder catches this exception and throws the
+     * expected {@link jakarta.enterprise.inject.spi.DeploymentException}.
+     */
     @BuildStep
     @Record(RUNTIME_INIT)
     void registerConfigClasses(
             RecorderContext context,
             ConfigRecorder recorder,
-            List<ConfigMappingBuildItem> configMappings,
-            List<ConfigPropertiesBuildItem> configProperties) throws Exception {
+            List<ConfigPropertiesBuildItem> configProperties,
+            BuildProducer<ServiceStartBuildItem> serviceStart) throws Exception {
 
-        // TODO - Register ConfigProperties during build time
+        if (configProperties.isEmpty()) {
+            return;
+        }
+
         context.registerNonDefaultConstructor(
                 ConfigClass.class.getDeclaredConstructor(Class.class, String.class),
                 configClass -> Stream.of(configClass.getType(), configClass.getPrefix())
@@ -509,6 +485,9 @@ public class ConfigBuildStep {
                 configProperties.stream()
                         .map(p -> configClass(p.getConfigClass(), p.getPrefix()))
                         .collect(toSet()));
+
+        // Ensure that @ConfigProperties are registered before Startup events
+        serviceStart.produce(new ServiceStartBuildItem("microprofile-config-properties"));
     }
 
     private static String getPropertyName(String name, ClassInfo declaringClass) {
@@ -563,14 +542,20 @@ public class ConfigBuildStep {
         if (configProperty.getPropertyType().kind() == Kind.PARAMETERIZED_TYPE) {
             List<Type> argumentTypes = configProperty.getPropertyType().asParameterizedType().arguments();
             typeArgumentNames = new ArrayList<>(argumentTypes.size());
+            final List<String> forReflection = new ArrayList<>(argumentTypes.size());
+            final var reason = ConfigBuildStep.class.getSimpleName() + " Configuration property's " + typeName
+                    + " parameter";
             for (Type argumentType : argumentTypes) {
-                typeArgumentNames.add(argumentType.name().toString());
+                final var argTypeClassName = argumentType.name().toString();
+                typeArgumentNames.add(argTypeClassName);
                 if (argumentType.kind() != Kind.PRIMITIVE) {
-                    reflectiveClass.produce(ReflectiveClassBuildItem.builder(argumentType.name().toString())
-                            .reason(ConfigBuildStep.class.getSimpleName() + " Configuration property's " + typeName
-                                    + " parameter")
-                            .build());
+                    forReflection.add(argTypeClassName);
                 }
+            }
+            if (!forReflection.isEmpty()) {
+                reflectiveClass.produce(ReflectiveClassBuildItem.builder(forReflection)
+                        .reason(reason)
+                        .build());
             }
         }
 

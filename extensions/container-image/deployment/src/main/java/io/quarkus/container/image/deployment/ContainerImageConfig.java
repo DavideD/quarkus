@@ -30,8 +30,8 @@ public interface ContainerImageConfig {
     /**
      * The tag of the container image. If not set defaults to the application version
      */
-    @WithDefault("${quarkus.application.version:latest}")
-    String tag(); //used only by ContainerImageProcessor, use ContainerImageInfoBuildItem instead
+    // keep it Optional as we need the ability to nullify it
+    Optional<String> tag(); //used only by ContainerImageProcessor, use ContainerImageInfoBuildItem instead
 
     /**
      * Additional tags of the container image.
@@ -87,6 +87,18 @@ public interface ContainerImageConfig {
      * The option will be used in case multiple extensions are present.
      */
     Optional<String> builder();
+
+    /**
+     * The suffix to be used to create a new container image when an AOT file has been created.
+     * When this value is empty, Quarkus will interpret this as a request to not create a separate
+     * container image, but instead will just re-create the original one with the AOT file included
+     */
+    @WithDefault("-aot")
+    Optional<String> aotImageSuffix();
+
+    default String effectiveAotImageSuffix() {
+        return aotImageSuffix().orElse("").strip();
+    }
 
     default boolean isBuildExplicitlyEnabled() {
         return build().isPresent() && build().get();

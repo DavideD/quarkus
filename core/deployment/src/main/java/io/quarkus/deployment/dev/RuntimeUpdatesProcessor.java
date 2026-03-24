@@ -2,7 +2,6 @@ package io.quarkus.deployment.dev;
 
 import static java.util.Arrays.asList;
 import static java.util.Collections.singletonList;
-import static java.util.stream.Collectors.groupingBy;
 
 import java.io.ByteArrayInputStream;
 import java.io.Closeable;
@@ -21,9 +20,11 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -52,6 +53,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.jboss.jandex.ClassInfo;
+import org.jboss.jandex.DotName;
 import org.jboss.jandex.Index;
 import org.jboss.jandex.IndexView;
 import org.jboss.jandex.Indexer;
@@ -104,8 +106,10 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
     private final TimestampSet main = new TimestampSet();
     private final TimestampSet test = new TimestampSet();
     final Map<Path, Long> sourceFileTimestamps = new ConcurrentHashMap<>();
+    private Map<DotName, Set<DotName>> classToRecompilationTargets = new HashMap<>();
 
     private final List<Runnable> preScanSteps = new CopyOnWriteArrayList<>();
+    private final List<Runnable> preRestartSteps = new CopyOnWriteArrayList<>();
     private final List<Runnable> postRestartSteps = new CopyOnWriteArrayList<>();
     private final List<Consumer<Set<String>>> noRestartChangesConsumers = new CopyOnWriteArrayList<>();
     private final List<HotReplacementSetup> hotReplacementSetup = new ArrayList<>();
@@ -551,10 +555,16 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
                 } else if (forceRestart && userInitiated) {
                     log.info("Restarting as requested by the user.");
                 }
-
+                for (Runnable step : preRestartSteps) {
+                    try {
+                        step.run();
+                    } catch (Throwable t) {
+                        log.error("Pre Restart step failed", t);
+                    }
+                }
                 restartCallback.accept(filesChanged, changedClassResults);
                 long timeNanoSeconds = System.nanoTime() - startNanoseconds;
-                log.infof("Live reload total time: %ss ", Timing.convertToBigDecimalSeconds(timeNanoSeconds));
+                log.infof("Live reload total time: %ss ", Timing.convertToSecondsString(timeNanoSeconds));
                 for (Runnable step : postRestartSteps) {
                     try {
                         step.run();
@@ -582,10 +592,10 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
                 }
 
                 log.infof("Files changed but restart not needed - notified extensions in: %ss ",
-                        Timing.convertToBigDecimalSeconds(System.nanoTime() - startNanoseconds));
+                        Timing.convertToSecondsString(System.nanoTime() - startNanoseconds));
             } else if (instrumentationChange) {
                 log.infof("Live reload performed via instrumentation, no restart needed, total time: %ss ",
-                        Timing.convertToBigDecimalSeconds(System.nanoTime() - startNanoseconds));
+                        Timing.convertToSecondsString(System.nanoTime() - startNanoseconds));
             }
             return false;
 
@@ -642,6 +652,11 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
     }
 
     @Override
+    public void addPreRestartStep(Runnable runnable) {
+        preRestartSteps.add(runnable);
+    }
+
+    @Override
     public void addPostRestartStep(Runnable runnable) {
         postRestartSteps.add(runnable);
     }
@@ -673,14 +688,13 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
                     //we have some filters, for files that we don't want to delete
                     continue;
                 }
-                log.info("Scheduled for removal " + file);
                 if (removedFiles.isEmpty()) {
                     removedFiles = new ArrayList<>();
                 }
                 removedFiles.add(applicationRoot.resolve(file));
             }
             if (!removedFiles.isEmpty()) {
-                DevModeMediator.removedFiles.addLast(removedFiles);
+                DevModeMediator.scheduleDelete(removedFiles);
             }
             return ret;
         } catch (IOException e) {
@@ -710,6 +724,24 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
         return ret;
     }
 
+    private void collectRecompilationTargets(DotName changedDependency, Set<DotName> knownRecompilationTargets) {
+        Deque<DotName> toResolve = new ArrayDeque<>();
+        toResolve.add(changedDependency);
+        while (!toResolve.isEmpty()) {
+            DotName currentDependency = toResolve.poll();
+
+            Set<DotName> recompilationTargets = classToRecompilationTargets.get(currentDependency);
+
+            if (recompilationTargets != null) {
+                for (DotName className : recompilationTargets) {
+                    if (knownRecompilationTargets.add(className)) {
+                        toResolve.add(className);
+                    }
+                }
+            }
+        }
+    }
+
     /**
      * A first scan is considered done when we have visited all modules at least once.
      * This is useful in two ways.
@@ -721,34 +753,81 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
             Function<DevModeContext.ModuleInfo, DevModeContext.CompilationUnit> cuf, boolean firstScan,
             TimestampSet timestampSet, boolean compilingTests) {
         ClassScanResult classScanResult = new ClassScanResult();
-        boolean ignoreFirstScanChanges = firstScan;
+
+        record RecompilableLocationsBySourcePath(Path sourcePath, Set<File> changedFiles, Set<File> changedDependencies) {
+        }
+        record ChangeDetectionResult(DevModeContext.ModuleInfo moduleInfo,
+                List<RecompilableLocationsBySourcePath> changedLocations) {
+        }
+        List<ChangeDetectionResult> changeDetectionResults = new ArrayList<>();
+        Set<DotName> knownRecompilationTargets = new HashSet<>();
 
         for (DevModeContext.ModuleInfo module : context.getAllModules()) {
-            final List<Path> moduleChangedSourceFilePaths = new ArrayList<>();
+            ChangeDetectionResult changeDetectionResult = new ChangeDetectionResult(module, new ArrayList<>());
 
             for (Path sourcePath : cuf.apply(module).getSourcePaths()) {
-                final Set<File> changedSourceFiles;
-                Path start = sourcePath;
-                if (!Files.exists(start)) {
+                if (!Files.exists(sourcePath)) {
                     continue;
                 }
-                try (final Stream<Path> sourcesStream = Files.walk(start)) {
+
+                final Set<File> changedSourceFiles;
+                try (final Stream<Path> sourcesStream = Files.walk(sourcePath)) {
                     changedSourceFiles = sourcesStream
                             .parallel()
                             .filter(p -> matchingHandledExtension(p).isPresent()
-                                    && sourceFileWasRecentModified(p, ignoreFirstScanChanges, firstScan))
+                                    && sourceFileWasRecentModified(p, firstScan, firstScan))
                             .map(Path::toFile)
                             //Needing a concurrent Set, not many standard options:
                             .collect(Collectors.toCollection(ConcurrentSkipListSet::new));
                 } catch (IOException e) {
                     throw new RuntimeException(e);
                 }
+
                 if (!changedSourceFiles.isEmpty()) {
+                    RecompilableLocationsBySourcePath recompilableLocationsBySourcePath = new RecompilableLocationsBySourcePath(
+                            sourcePath, changedSourceFiles, new HashSet<>());
+                    changeDetectionResult.changedLocations().add(recompilableLocationsBySourcePath);
+
+                    for (File changedSourceFile : changedSourceFiles) {
+                        String changedDependency = convertFileToClassname(sourcePath, changedSourceFile);
+
+                        collectRecompilationTargets(DotName.createSimple(changedDependency), knownRecompilationTargets);
+                    }
+                }
+            }
+            changeDetectionResults.add(changeDetectionResult);
+        }
+
+        for (DotName recompilationTarget : knownRecompilationTargets) {
+            String partialRelativePath = recompilationTarget.toString('/');
+
+            OUT: for (ChangeDetectionResult changeDetectionResult : changeDetectionResults) {
+                for (RecompilableLocationsBySourcePath recompilableLocationsBySourcePath : changeDetectionResult
+                        .changedLocations()) {
+                    for (String extension : compiler.allHandledExtensions()) {
+                        Path resolved = recompilableLocationsBySourcePath.sourcePath().resolve(partialRelativePath + extension);
+
+                        if (Files.exists(resolved)) {
+                            recompilableLocationsBySourcePath.changedDependencies().add(resolved.toFile());
+                            break OUT;
+                        }
+                    }
+                }
+            }
+        }
+
+        for (ChangeDetectionResult changeDetectionResult : changeDetectionResults) {
+            final List<Path> moduleChangedSourceFilePaths = new ArrayList<>();
+            for (RecompilableLocationsBySourcePath recompilableLocationsBySourcePath : changeDetectionResult
+                    .changedLocations()) {
+                Path sourcePath = recompilableLocationsBySourcePath.sourcePath();
+                Set<File> changedSourceFiles = recompilableLocationsBySourcePath.changedFiles();
+                if (!changedSourceFiles.isEmpty() || !recompilableLocationsBySourcePath.changedDependencies().isEmpty()) {
                     classScanResult.compilationHappened = true;
                     //so this is pretty yuck, but on a lot of systems a write is actually a truncate + write
                     //its possible we see the truncated file timestamp, then the write updates the timestamp
                     //which will then re-trigger continuous testing/live reload
-                    //the empty fine does not normally cause issues as by the time we actually compile it the write
+                    //the empty file does not normally cause issues as by the time we actually compile it the write
                     //has completed (but the old timestamp is used)
                     for (File i : changedSourceFiles) {
                         if (i.length() == 0) {
@@ -763,6 +842,7 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
                             }
                         }
                     }
+
                     Map<File, Long> compileTimestamps = new HashMap<>();
 
                     //now we record the timestamps as they are before the compile phase
@@ -771,12 +851,18 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
                     }
                     for (;;) {
                         try {
-                            final Set<Path> changedPaths = changedSourceFiles.stream()
-                                    .map(File::toPath)
-                                    .collect(Collectors.toSet());
+                            Map<String, Set<File>> changedFilesByExtension = new HashMap<>();
+                            Set<Path> changedPaths = new HashSet<>();
+                            Stream.concat(changedSourceFiles.stream(),
+                                    recompilableLocationsBySourcePath.changedDependencies.stream()).forEach(file -> {
+                                        changedPaths.add(file.toPath());
+
+                                        Set<File> files = changedFilesByExtension.computeIfAbsent(this.getFileExtension(file),
+                                                k -> new HashSet<>());
+                                        files.add(file);
+                                    });
                             moduleChangedSourceFilePaths.addAll(changedPaths);
-                            compiler.compile(sourcePath.toString(), changedSourceFiles.stream()
-                                    .collect(groupingBy(this::getFileExtension, Collectors.toSet())));
+                            compiler.compile(sourcePath.toString(), changedFilesByExtension);
                             compileProblem = null;
                             if (compilingTests) {
                                 testCompileProblem = null;
@@ -814,12 +900,30 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
                         sourceFileTimestamps.put(entry.getKey().toPath(), entry.getValue());
                     }
                 }
+            }
+            checkForClassFilesChangesInModule(changeDetectionResult.moduleInfo(), moduleChangedSourceFilePaths,
+                    firstScan, classScanResult,
+                    cuf, timestampSet);
+        }
 
+        // Check if any of the changed classes have their source file in a generated sources directory
+        // these files are most likely automatically generated by the compiler
+        // and are not present in our initial changedSourceFiles
+        // i.e. we have not recorded their change timestamps
+        // and would recompile the generated files again during the next hot reload
+        for (Path changedClass : classScanResult.changedClasses) {
+            Path classSourcePath = timestampSet.classFilePathToSourceFilePath.get(changedClass);
+
+            if (classSourcePath == null) {
+                continue;
             }
 
-            checkForClassFilesChangesInModule(module, moduleChangedSourceFilePaths, ignoreFirstScanChanges, classScanResult,
-                    cuf, timestampSet);
-
+            for (DevModeContext.ModuleInfo module : context.getAllModules()) {
+                String generatedSourcesPath = cuf.apply(module).getGeneratedSourcesPath();
+                if (generatedSourcesPath != null && classSourcePath.startsWith(generatedSourcesPath)) {
+                    sourceFileTimestamps.put(classSourcePath, classSourcePath.toFile().lastModified());
+                }
+            }
         }
 
         return classScanResult;
@@ -922,6 +1026,19 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
             return ""; // empty extension
         }
         return name.substring(lastIndexOf);
+    }
+
+    // convert a filename to a class name with package
+    private String convertFileToClassname(Path sourcePath, File file) {
+        String className = sourcePath.relativize(file.toPath())
+                .toString();
+        className = className.replace(File.separatorChar, '.');
+
+        int lastIndexOf = className.lastIndexOf('.');
+        if (lastIndexOf > 0) {
+            className = className.substring(0, lastIndexOf);
+        }
+        return className;
     }
 
     Set<String> checkForFileChange() {
@@ -1154,6 +1271,11 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
     public RuntimeUpdatesProcessor setDisableInstrumentationForIndexPredicate(
             Predicate<Index> disableInstrumentationForIndexPredicate) {
         this.disableInstrumentationForIndexPredicate = disableInstrumentationForIndexPredicate;
+        return this;
+    }
+
+    public RuntimeUpdatesProcessor setClassToRecompilationTargets(Map<DotName, Set<DotName>> classToRecompilationTargets) {
+        this.classToRecompilationTargets = classToRecompilationTargets;
         return this;
     }
 

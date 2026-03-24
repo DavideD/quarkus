@@ -36,11 +36,11 @@
         <!-- Not sure exactly why but the Maven plugins need to be compiled with Java 11 -->
         <maven.compiler.target>11</maven.compiler.target>
         <maven.compiler.release>11</maven.compiler.release>
-        <maven-core.version>3.9.9</maven-core.version>
-        <jackson-bom.version>2.19.0</jackson-bom.version>
-        <smallrye-beanbag.version>1.5.3</smallrye-beanbag.version>
-        <junit5.version>5.12.2</junit5.version>
-        <mockito.version>5.18.0</mockito.version>
+        <maven-core.version>3.9.12</maven-core.version>
+        <jackson-bom.version>2.21.2</jackson-bom.version>
+        <smallrye-beanbag.version>1.6.1</smallrye-beanbag.version>
+        <junit.version>6.0.3</junit.version>
+        <mockito.version>5.21.0</mockito.version>
     </properties>
     <build>
         <testResources>
@@ -168,6 +168,34 @@
                     </execution>
                 </executions>
             </plugin>
+            <!-- copy the Maven wrapper to make sure we don't inherit the configuration from the root .mvn in the nested projects -->
+            <plugin>
+                <artifactId>maven-resources-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>copy-maven-wrapper</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <propertiesEncoding>UTF-8</propertiesEncoding>
+                            <outputDirectory>${project.build.directory}/</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${maven.multiModuleProjectDirectory}/</directory>
+                                    <includes>
+                                        <include>.mvn/wrapper/**</include>
+                                        <include>mvnw</include>
+                                        <include>mvnw.cmd</include>
+                                    </includes>
+                                    <filtering>false</filtering>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 
@@ -203,11 +231,11 @@
                 <scope>import</scope>
                 <type>pom</type>
             </dependency>
-            <!-- JUnit 5 dependencies, imported as a BOM -->
+            <!-- JUnit dependencies, imported as a BOM -->
             <dependency>
                 <groupId>org.junit</groupId>
                 <artifactId>junit-bom</artifactId>
-                <version>${junit5.version}</version>
+                <version>${junit.version}</version>
                 <scope>import</scope>
                 <type>pom</type>
             </dependency>

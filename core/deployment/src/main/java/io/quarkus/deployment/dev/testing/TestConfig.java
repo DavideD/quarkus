@@ -15,12 +15,7 @@ import io.smallrye.config.WithDefault;
 import io.smallrye.config.WithParentName;
 
 /**
- * Testing
- * <p>
- * This is used currently only to suppress warnings about unknown properties
- * when the user supplies something like: -Dquarkus.test.profile=someProfile or -Dquarkus.test.native-image-profile=someProfile
- * <p>
- * TODO refactor code to actually use these values
+ * Testing configuration.
  */
 @ConfigMapping(prefix = "quarkus.test")
 @ConfigRoot(phase = ConfigPhase.BUILD_TIME)
@@ -51,16 +46,15 @@ public interface TestConfig {
      * The FQCN of the JUnit <code>ClassOrderer</code> to use. If the class cannot be found, it fallbacks to JUnit
      * default behaviour which does not set a <code>ClassOrderer</code> at all.
      *
-     * @see <a href=https://junit.org/junit5/docs/current/user-guide/#writing-tests-test-execution-order-classes>JUnit Class
+     * @see <a href=https://docs.junit.org/current/user-guide/#writing-tests-test-execution-order-classes>JUnit Class
      *      Order<a/>
      */
-    @WithDefault("io.quarkus.test.junit.util.QuarkusTestProfileAwareClassOrderer")
     Optional<String> classOrderer();
 
     /**
      * Tags that should be included for continuous testing. This supports JUnit Tag Expressions.
      *
-     * @see <a href="https://junit.org/junit5/docs/current/user-guide/#running-tests-tag-expressions">JUnit Tag Expressions</a>
+     * @see <a href="https://docs.junit.org/current/user-guide/#running-tests-tag-expressions">JUnit Tag Expressions</a>
      */
     Optional<List<String>> includeTags();
 
@@ -73,7 +67,7 @@ public interface TestConfig {
      * <p>
      * This supports JUnit Tag Expressions.
      *
-     * @see <a href="https://junit.org/junit5/docs/current/user-guide/#running-tests-tag-expressions">JUnit Tag Expressions</a>
+     * @see <a href="https://docs.junit.org/current/user-guide/#running-tests-tag-expressions">JUnit Tag Expressions</a>
      */
     @WithDefault("slow")
     Optional<List<String>> excludeTags();
@@ -106,45 +100,6 @@ public interface TestConfig {
     Optional<List<String>> excludeEngines();
 
     /**
-     * Disable the testing status/prompt message at the bottom of the console
-     * and log these messages to STDOUT instead.
-     * <p>
-     * Use this option if your terminal does not support ANSI escape sequences.
-     * <p>
-     * This is deprecated, {@literal quarkus.console.basic} should be used instead.
-     */
-    @Deprecated
-    Optional<Boolean> basicConsole();
-
-    /**
-     * Disable color in the testing status and prompt messages.
-     * <p>
-     * Use this option if your terminal does not support color.
-     * <p>
-     * This is deprecated, {@literal quarkus.console.disable-color} should be used instead.
-     */
-    @Deprecated
-    Optional<Boolean> disableColor();
-
-    /**
-     * If test results and status should be displayed in the console.
-     * <p>
-     * If this is false results can still be viewed in the dev console.
-     * <p>
-     * This is deprecated, {@literal quarkus.console.enabled} should be used instead.
-     */
-    @Deprecated
-    Optional<Boolean> console();
-
-    /**
-     * Disables the ability to enter input on the console.
-     * <p>
-     * This is deprecated, {@literal quarkus.console.disable-input} should be used instead.
-     */
-    @Deprecated
-    Optional<Boolean> disableConsoleInput();
-
-    /**
      * Changes tests to use the 'flat' ClassPath used in Quarkus 1.x versions.
      * <p>
      * This means all Quarkus and test classes are loaded in the same ClassLoader,
@@ -174,6 +129,11 @@ public interface TestConfig {
     Container container();
 
     /**
+     * RestAssured related test settings
+     */
+    RestAssured restAssured();
+
+    /**
      * Additional launch parameters to be used when Quarkus launches the produced artifact for {@code @QuarkusIntegrationTest}
      * When the artifact is a {@code jar}, this string is passed right after the {@code java} command.
      * When the artifact is a {@code container}, this string is passed right after the {@code docker run} command.
@@ -191,7 +151,7 @@ public interface TestConfig {
      * Used in {@code @QuarkusIntegrationTest} to determine how long the test will wait for the
      * application to launch
      */
-    @WithDefault("PT1M")
+    @WithDefault("1M")
     Duration waitTime();
 
     /**
@@ -296,6 +256,14 @@ public interface TestConfig {
          */
         @ConfigDocMapKey("host-path")
         Map<String, String> volumeMounts();
+    }
+
+    interface RestAssured {
+        /**
+         * Enable logging of both the request and the response if REST Assureds test validation fails
+         */
+        @WithDefault("true")
+        boolean enableLoggingOnFailure();
     }
 
     enum Mode {

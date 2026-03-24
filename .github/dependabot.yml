@@ -2,15 +2,15 @@ version: 2
 updates:
   - package-ecosystem: maven
     directory: "/"
+    target-branch: "main"
     schedule:
       interval: daily
-      time: "23:00"
+      time: "16:00"
       timezone: Europe/Paris
     open-pull-requests-limit: 20
     labels:
       - area/dependencies
     allow:
-      - dependency-name: org.jboss:jboss-parent
       - dependency-name: org.jboss.resteasy:*
       - dependency-name: org.jboss.resteasy.microprofile:*
       - dependency-name: org.jboss.resteasy.spring:*
@@ -26,7 +26,6 @@ updates:
       - dependency-name: org.eclipse:yasson
       - dependency-name: org.yaml:snakeyaml
       - dependency-name: com.google.guava:guava
-      - dependency-name: com.vackosar.gitflowincrementalbuilder:gitflow-incremental-builder
       - dependency-name: org.jboss.logging:*
       - dependency-name: org.jboss.logmanager:*
       - dependency-name: org.apache.logging.log4j:*
@@ -40,6 +39,8 @@ updates:
       # Quarkus
       - dependency-name: io.quarkus.*:*
       - dependency-name: io.quarkus:*
+      # Keycloak
+      - dependency-name: org.keycloak:*
       # Elytron
       - dependency-name: org.wildfly.security:*
       - dependency-name: org.wildfly.openssl:*
@@ -47,7 +48,6 @@ updates:
       - dependency-name: org.postgresql:postgresql
       - dependency-name: org.mariadb.jdbc:mariadb-java-client
       - dependency-name: com.mysql:mysql-connector-j
-      - dependency-name: org.apache.derby:*
       - dependency-name: com.ibm.db2:jcc
       # Kafka
       - dependency-name: org.apache.kafka:*
@@ -75,18 +75,21 @@ updates:
       - dependency-name: org.hamcrest:hamcrest
       - dependency-name: org.junit:junit-bom
       - dependency-name: org.junit.jupiter:*
+      - dependency-name: org.junit.platform:*
       - dependency-name: org.assertj:assertj-core
       - dependency-name: org.testcontainers:*
       - dependency-name: org.mockito:*
       - dependency-name: org.awaitility:awaitility
       - dependency-name: com.thoughtworks.xstream:xstream
       - dependency-name: org.jacoco:*
-      # Maven plugins
+      # Maven plugins and extensions
       - dependency-name: org.apache.maven.plugins:*
       - dependency-name: org.codehaus.mojo:*
       - dependency-name: io.fabric8:docker-maven-plugin
       - dependency-name: net.revelc.code.formatter:formatter-maven-plugin
       - dependency-name: net.revelc.code:impsort-maven-plugin
+      - dependency-name: eu.maveniverse.maven.njord:*
+      - dependency-name: io.github.gitflow-incremental-builder:*
       # Narayana
       - dependency-name: org.jboss.narayana.jta:*
       - dependency-name: org.jboss.narayana.jts:*
@@ -133,7 +136,7 @@ updates:
       # jaeger
       - dependency-name: io.jaegertracing:*
       # Kotlin
-      - dependency-name: org.jetbrains.kotlin:*
+      - dependency-name: org.jetbrains.kotlin:kotlin-bom
       - dependency-name: org.jetbrains.kotlinx:*
       - dependency-name: org.jetbrains.dokka:*
       - dependency-name: org.jetbrains:*
@@ -144,7 +147,6 @@ updates:
       - dependency-name: org.eclipse.microprofile.graphql:microprofile-graphql-tck
       - dependency-name: org.eclipse.microprofile.health:microprofile-health-tck
       - dependency-name: org.eclipse.microprofile.jwt:microprofile-jwt-auth-tck
-      - dependency-name: org.eclipse.microprofile.metrics:microprofile-metrics-*-tck
       - dependency-name: org.eclipse.microprofile.reactive.messaging:microprofile-reactive-messaging-tck
       - dependency-name: org.eclipse.microprofile.openapi:microprofile-openapi-tck
       - dependency-name: org.eclipse.microprofile.rest.client:microprofile-rest-client-tck
@@ -164,8 +166,6 @@ updates:
       - dependency-name: com.google.errorprone:*
       - dependency-name: com.google.http-client:*
       - dependency-name: io.dekorate:servicebinding-annotations
-      - dependency-name: io.opentelemetry:*
-      - dependency-name: io.opentelemetry.*:*
       - dependency-name: org.aesh:readline
       - dependency-name: org.checkerframework:checker-qual
       - dependency-name: org.jboss.metadata:jboss-metadata-web
@@ -176,7 +176,7 @@ updates:
       - dependency-name: org.jboss.jdeparser:jdeparser
       - dependency-name: com.github.javaparser:javaparser-core
       - dependency-name: com.h2database:h2
-      - dependency-name: io.github.crac:org-crac
+      - dependency-name: org.crac:crac
       - dependency-name: com.dajudge.kindcontainer:kindcontainer
       - dependency-name: jakarta.*:*
       - dependency-name: org.eclipse.*:*
@@ -187,6 +187,15 @@ updates:
       - dependency-name: org.bitbucket.b_c:jose4j
       - dependency-name: io.fabric8:maven-model-helper
       - dependency-name: org.codejive:java-properties
+      - dependency-name: org.json:json
+    groups:
+      # Only group Hibernate ORM/Search/Reactive as Hibernate Validator is much more independent.
+      Hibernate:
+        patterns:
+          - "org.hibernate.orm*"
+          - "org.hibernate.reactive*"
+          - "org.hibernate.search*"
+          - "org.hibernate.tool*"
     ignore:
       - dependency-name: org.eclipse.microprofile.config:microprofile-config-tck
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
@@ -199,8 +208,6 @@ updates:
       - dependency-name: org.eclipse.microprofile.health:microprofile-health-tck
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: org.eclipse.microprofile.jwt:microprofile-jwt-auth-tck
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
-      - dependency-name: org.eclipse.microprofile.metrics:microprofile-metrics-*-tck
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: org.eclipse.microprofile.reactive.messaging:microprofile-reactive-messaging-tck
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
@@ -216,6 +223,9 @@ updates:
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: org.apache.kafka:*
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # Should be aligned on the version of the dependency from Hibernate artifacts.
+      - dependency-name: org.hibernate.common:*
+      - dependency-name: org.hibernate.models:*
       # Elasticsearch - major updates usually require more work and synchronization, we do them manually.
       - dependency-name: org.elasticsearch.client:elasticsearch-rest-client
         update-types: ["version-update:semver-major"]
@@ -227,6 +237,66 @@ updates:
       # Hence we update major/minor Expressly versions manually.
       - dependency-name: org.glassfish.expressly:expressly
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
+    rebase-strategy: disabled
+  - package-ecosystem: maven
+    directory: "/"
+    target-branch: "3.20"
+    schedule:
+      interval: daily
+      time: "23:00"
+      timezone: Europe/Paris
+    open-pull-requests-limit: 10
+    labels:
+      - area/dependencies
+    allow:
+      # Hibernate
+      - dependency-name: org.hibernate.orm:*
+      - dependency-name: org.hibernate.reactive:*
+      - dependency-name: org.hibernate.validator:*
+      - dependency-name: org.hibernate.search:*
+    groups:
+      # Only group Hibernate ORM/Search/Reactive as Hibernate Validator is much more independent.
+      Hibernate:
+        patterns:
+          - "org.hibernate.orm*"
+          - "org.hibernate.reactive*"
+          - "org.hibernate.search*"
+          - "org.hibernate.validator*"
+    ignore:
+      # Major/minor upgrades require more work and synchronization, we do them manually.
+      # Only use dependabot for micros (patch versions).
+      - dependency-name: org.hibernate.*:*
+        update-types: [ "version-update:semver-major", "version-update:semver-minor" ]
+    rebase-strategy: disabled
+  - package-ecosystem: maven
+    directory: "/"
+    target-branch: "3.27"
+    schedule:
+      interval: daily
+      time: "23:00"
+      timezone: Europe/Paris
+    open-pull-requests-limit: 10
+    labels:
+      - area/dependencies
+    allow:
+      # Hibernate
+      - dependency-name: org.hibernate.orm:*
+      - dependency-name: org.hibernate.reactive:*
+      - dependency-name: org.hibernate.validator:*
+      - dependency-name: org.hibernate.search:*
+    groups:
+      # Only group Hibernate ORM/Search/Reactive as Hibernate Validator is much more independent.
+      Hibernate:
+        patterns:
+          - "org.hibernate.orm*"
+          - "org.hibernate.reactive*"
+          - "org.hibernate.search*"
+          - "org.hibernate.validator*"
+    ignore:
+      # Major/minor upgrades require more work and synchronization, we do them manually.
+      # Only use dependabot for micros (patch versions).
+      - dependency-name: org.hibernate.*:*
+        update-types: [ "version-update:semver-major", "version-update:semver-minor" ]
     rebase-strategy: disabled
   - package-ecosystem: gradle
     directory: "/devtools/gradle"

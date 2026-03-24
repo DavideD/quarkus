@@ -3,6 +3,8 @@ package io.quarkus.spring.cloud.config.client.runtime;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertIterableEquals;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
@@ -10,7 +12,9 @@ import java.nio.charset.Charset;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.StreamSupport;
 
 import org.apache.commons.io.IOUtils;
 import org.eclipse.microprofile.config.spi.ConfigSource;
@@ -24,22 +28,28 @@ import com.github.tomakehurst.wiremock.client.WireMock;
 
 import io.quarkus.runtime.ApplicationLifecycleManager;
 import io.smallrye.config.ConfigSourceContext;
+import io.smallrye.config.SmallRyeConfig;
+import io.smallrye.config.SmallRyeConfigBuilder;
 
 class SpringCloudConfigClientConfigSourceFactoryTest {
 
     private static final int MOCK_SERVER_PORT = 9300;
+    private static final int MOCK_EUREKA_SERVER_PORT = 8761;
     private static final WireMockServer wireMockServer = new WireMockServer(MOCK_SERVER_PORT);
+    private static final WireMockServer wireMockEurekaServer = new WireMockServer(MOCK_EUREKA_SERVER_PORT);
 
     @BeforeAll
     static void start() {
 
         wireMockServer.start();
+        wireMockEurekaServer.start();
     }
 
     @AfterAll
     static void stop() {
 
         wireMockServer.stop();
+        wireMockEurekaServer.stop();
     }
 
     @Test
@@ -47,7 +57,7 @@ class SpringCloudConfigClientConfigSourceFactoryTest {
 
         // Arrange
         final ConfigSourceContext context = Mockito.mock(ConfigSourceContext.class);
-        final SpringCloudConfigClientConfig config = configForTesting(false, "foo", MOCK_SERVER_PORT, true, 450);
+        final SpringCloudConfigClientConfig config = configForTesting(false, "foo", MOCK_SERVER_PORT, true, 450, false);
         final SpringCloudConfigClientConfigSourceFactory factory = new SpringCloudConfigClientConfigSourceFactory();
 
         // Act
@@ -62,7 +72,7 @@ class SpringCloudConfigClientConfigSourceFactoryTest {
 
         // Arrange
         final ConfigSourceContext context = Mockito.mock(ConfigSourceContext.class);
-        final SpringCloudConfigClientConfig config = configForTesting(true, null, MOCK_SERVER_PORT, true, 450);
+        final SpringCloudConfigClientConfig config = configForTesting(true, null, MOCK_SERVER_PORT, true, 450, false);
         final SpringCloudConfigClientConfigSourceFactory factory = new SpringCloudConfigClientConfigSourceFactory();
 
         // Act
@@ -77,7 +87,7 @@ class SpringCloudConfigClientConfigSourceFactoryTest {
 
         // Arrange
         final ConfigSourceContext context = Mockito.mock(ConfigSourceContext.class);
-        final SpringCloudConfigClientConfig config = configForTesting(true, "foo", MOCK_SERVER_PORT, true, 450);
+        final SpringCloudConfigClientConfig config = configForTesting(true, "foo", MOCK_SERVER_PORT, true, 450, false);
         final SpringCloudConfigClientConfigSourceFactory factory = new SpringCloudConfigClientConfigSourceFactory();
 
         System.setProperty(ApplicationLifecycleManager.QUARKUS_APPCDS_GENERATE_PROP, "true");
@@ -97,7 +107,7 @@ class SpringCloudConfigClientConfigSourceFactoryTest {
 
         // Arrange
         final ConfigSourceContext context = Mockito.mock(ConfigSourceContext.class);
-        final SpringCloudConfigClientConfig config = configForTesting(true, "unknown-application", 1234, false, 450);
+        final SpringCloudConfigClientConfig config = configForTesting(true, "unknown-application", 1234, false, 450, false);
         final SpringCloudConfigClientConfigSourceFactory factory = new SpringCloudConfigClientConfigSourceFactory();
 
         Mockito.when(context.getProfiles()).thenReturn(List.of("dev"));
@@ -114,7 +124,7 @@ class SpringCloudConfigClientConfigSourceFactoryTest {
 
         // Arrange
         final ConfigSourceContext context = Mockito.mock(ConfigSourceContext.class);
-        final SpringCloudConfigClientConfig config = configForTesting(true, "unknown-application", 1234, true, 450);
+        final SpringCloudConfigClientConfig config = configForTesting(true, "unknown-application", 1234, true, 450, false);
         final SpringCloudConfigClientConfigSourceFactory factory = new SpringCloudConfigClientConfigSourceFactory();
 
         Mockito.when(context.getProfiles()).thenReturn(List.of("dev"));
@@ -130,7 +140,7 @@ class SpringCloudConfigClientConfigSourceFactoryTest {
         // Arrange
         final String profile = "dev";
         final ConfigSourceContext context = Mockito.mock(ConfigSourceContext.class);
-        final SpringCloudConfigClientConfig config = configForTesting(true, "foo", MOCK_SERVER_PORT, true, 450);
+        final SpringCloudConfigClientConfig config = configForTesting(true, "foo", MOCK_SERVER_PORT, true, 450, false);
         final SpringCloudConfigClientConfigSourceFactory factory = new SpringCloudConfigClientConfigSourceFactory();
 
         Mockito.when(context.getProfiles()).thenReturn(List.of(profile));
@@ -148,35 +158,148 @@ class SpringCloudConfigClientConfigSourceFactoryTest {
         assertThat(configSourceList.get(0)).satisfies(cs -> {
             assertThat(cs.getName()).isEqualTo("https://github.com/spring-cloud-samples/config-repo/application.yml");
             assertThat(cs.getOrdinal()).isEqualTo(450);
-            assertThat(cs.getProperties()).contains(entry("%dev.info.description", "Spring Cloud Samples"),
-                    entry("%dev.foo", "baz"), entry("%dev.info.url", "https://github.com/spring-cloud-samples"),
-                    entry("%dev.eureka.client.serviceUrl.defaultZone", "http://localhost:8761/eureka/"));
+            assertThat(cs.getProperties()).contains(entry("info.description", "Spring Cloud Samples"),
+                    entry("foo", "baz"), entry("info.url", "https://github.com/spring-cloud-samples"),
+                    entry("eureka.client.serviceUrl.defaultZone", "http://localhost:8761/eureka/"));
         });
 
         assertThat(configSourceList.get(1)).satisfies(cs -> {
             assertThat(cs.getName()).isEqualTo("https://github.com/spring-cloud-samples/config-repo/foo.properties");
             assertThat(cs.getOrdinal()).isEqualTo(451);
-            assertThat(cs.getProperties()).contains(entry("%dev.foo", "from foo props"),
-                    entry("%dev.democonfigclient.message", "hello spring io"));
+            assertThat(cs.getProperties()).contains(entry("foo", "from foo props"),
+                    entry("democonfigclient.message", "hello spring io"));
         });
 
         assertThat(configSourceList.get(2)).satisfies(cs -> {
             assertThat(cs.getName())
                     .isEqualTo("https://github.com/spring-cloud-samples/config-repo/application-dev.yml");
             assertThat(cs.getOrdinal()).isEqualTo(452);
-            assertThat(cs.getProperties()).contains(entry("%dev.my.prop", "from application-dev.yml"));
+            assertThat(cs.getProperties()).contains(entry("my.prop", "from application-dev.yml"));
         });
 
         assertThat(configSourceList.get(3)).satisfies(cs -> {
             assertThat(cs.getName()).isEqualTo("https://github.com/spring-cloud-samples/config-repo/foo-dev.yml");
             assertThat(cs.getOrdinal()).isEqualTo(453);
-            assertThat(cs.getProperties()).contains(entry("%dev.foo", "from foo development"),
-                    entry("%dev.democonfigclient.message", "hello from dev profile"), entry("%dev.bar", "spam"));
+            assertThat(cs.getProperties()).contains(entry("foo", "from foo development"),
+                    entry("democonfigclient.message", "hello from dev profile"), entry("bar", "spam"));
         });
     }
 
-    private SpringCloudConfigClientConfig configForTesting(final boolean isEnabled, final String appName,
-            final int serverPort, final boolean isFailFastEnabled, final int ordinal) {
+    @Test
+    void testDiscovery() throws IOException {
+
+        // Arrange
+        final String profile = "dev";
+        final ConfigSourceContext context = Mockito.mock(ConfigSourceContext.class);
+
+        final SpringCloudConfigClientConfig config = Mockito.mock(SpringCloudConfigClientConfig.class);
+        when(config.enabled()).thenReturn(true);
+        when(config.name()).thenReturn("foo");
+        when(config.url()).thenReturn("http://localhost:" + MOCK_SERVER_PORT);
+        when(config.label()).thenReturn(Optional.of("master"));
+        when(config.failFast()).thenReturn(true);
+        when(config.connectionTimeout()).thenReturn(Duration.ZERO);
+        when(config.readTimeout()).thenReturn(Duration.ZERO);
+        when(config.username()).thenReturn(Optional.empty());
+        when(config.password()).thenReturn(Optional.empty());
+        when(config.trustStore()).thenReturn(Optional.empty());
+        when(config.keyStore()).thenReturn(Optional.empty());
+        when(config.trustCerts()).thenReturn(false);
+        when(config.headers()).thenReturn(new HashMap<>());
+        when(config.ordinal()).thenReturn(450);
+        SpringCloudConfigClientConfig.DiscoveryConfig discoveryConfig = Mockito
+                .mock(SpringCloudConfigClientConfig.DiscoveryConfig.class);
+
+        SpringCloudConfigClientConfig.DiscoveryConfig.EurekaConfig eurekaConfig = Mockito
+                .mock(SpringCloudConfigClientConfig.DiscoveryConfig.EurekaConfig.class);
+
+        when(config.discovery()).thenReturn(Optional.of(discoveryConfig));
+        when(discoveryConfig.enabled()).thenReturn(true);
+        when(discoveryConfig.serviceId()).thenReturn(Optional.of("config-server-id"));
+        when(discoveryConfig.eurekaConfig()).thenReturn(Optional.of(eurekaConfig));
+        when(eurekaConfig.serviceUrl())
+                .thenReturn(Map.of("defaultZone", "http://localhost:" + MOCK_EUREKA_SERVER_PORT + "/eureka/"));
+        when(eurekaConfig.registryFetchIntervalSeconds()).thenReturn(Duration.ofSeconds(30));
+
+        final SpringCloudConfigClientConfigSourceFactory factory = new SpringCloudConfigClientConfigSourceFactory();
+
+        Mockito.when(context.getProfiles()).thenReturn(List.of(profile));
+        wireMockServer.stubFor(WireMock.get(String.format("/%s/%s/%s", config.name(), profile, config.label().get()))
+                .willReturn(WireMock.okJson(getJsonStringForApplicationAndProfile(config.name(), profile))));
+
+        wireMockEurekaServer.stubFor(WireMock.get("/eureka/apps/config-server-id").willReturn(
+                WireMock.okJson(IOUtils.toString(
+                        this.getClass().getResourceAsStream("/eureka-response.json"),
+                        Charset.defaultCharset()))));
+
+        // Act
+        final Iterable<ConfigSource> configSourceIterable = factory.getConfigSources(context, config);
+
+        // Assert
+        assertThat(configSourceIterable).hasSize(4);
+        assertThat(configSourceIterable).isInstanceOf(List.class);
+
+        final List<ConfigSource> configSourceList = (List<ConfigSource>) configSourceIterable;
+        assertThat(configSourceList.get(0)).satisfies(cs -> {
+            assertThat(cs.getName()).isEqualTo("https://github.com/spring-cloud-samples/config-repo/application.yml");
+            assertThat(cs.getOrdinal()).isEqualTo(450);
+            assertThat(cs.getProperties()).contains(entry("info.description", "Spring Cloud Samples"),
+                    entry("foo", "baz"), entry("info.url", "https://github.com/spring-cloud-samples"));
+        });
+
+        assertThat(configSourceList.get(1)).satisfies(cs -> {
+            assertThat(cs.getName()).isEqualTo("https://github.com/spring-cloud-samples/config-repo/foo.properties");
+            assertThat(cs.getOrdinal()).isEqualTo(451);
+            assertThat(cs.getProperties()).contains(entry("foo", "from foo props"),
+                    entry("democonfigclient.message", "hello spring io"));
+        });
+
+        assertThat(configSourceList.get(2)).satisfies(cs -> {
+            assertThat(cs.getName())
+                    .isEqualTo("https://github.com/spring-cloud-samples/config-repo/application-dev.yml");
+            assertThat(cs.getOrdinal()).isEqualTo(452);
+            assertThat(cs.getProperties()).contains(entry("my.prop", "from application-dev.yml"));
+        });
+
+        assertThat(configSourceList.get(3)).satisfies(cs -> {
+            assertThat(cs.getName()).isEqualTo("https://github.com/spring-cloud-samples/config-repo/foo-dev.yml");
+            assertThat(cs.getOrdinal()).isEqualTo(453);
+            assertThat(cs.getProperties()).contains(entry("foo", "from foo development"),
+                    entry("democonfigclient.message", "hello from dev profile"), entry("bar", "spam"));
+        });
+    }
+
+    @Test
+    void multipleProfiles() throws Exception {
+        String profile = "one,two,three";
+        ConfigSourceContext context = Mockito.mock(ConfigSourceContext.class);
+        SpringCloudConfigClientConfig clientConfig = configForTesting(true, "app", MOCK_SERVER_PORT, true, 450, false);
+        SpringCloudConfigClientConfigSourceFactory factory = new SpringCloudConfigClientConfigSourceFactory();
+
+        Mockito.when(context.getProfiles()).thenReturn(List.of("three", "two", "one"));
+        wireMockServer
+                .stubFor(WireMock.get(String.format("/%s/%s/%s", clientConfig.name(), profile, clientConfig.label().get()))
+                        .willReturn(WireMock.okJson(getJsonStringForApplicationAndProfile(clientConfig.name(), "multiple"))));
+
+        SmallRyeConfig config = new SmallRyeConfigBuilder()
+                .withSources(provider -> factory.getConfigSources(context, clientConfig))
+                .build();
+
+        assertEquals("one", config.getConfigValue("one").getValue());
+        assertEquals("two", config.getConfigValue("two").getValue());
+        assertEquals("three", config.getConfigValue("three").getValue());
+        assertEquals("none", config.getConfigValue("none").getValue());
+
+        List<String> expectedSources = List.of("app-three.yml", "app-two.yml", "app-one.yml", "app.yml",
+                "DefaultValuesConfigSource");
+        List<String> actualSources = StreamSupport.stream(config.getConfigSources().spliterator(), false)
+                .map(ConfigSource::getName)
+                .toList();
+        assertIterableEquals(expectedSources, actualSources);
+    }
+
+    private SpringCloudConfigClientConfig configForTesting(final boolean isEnabled, final String appName, final int serverPort,
+            final boolean isFailFastEnabled, final int ordinal, final boolean isDiscoveryEnabled) {
 
         final SpringCloudConfigClientConfig config = Mockito.mock(SpringCloudConfigClientConfig.class);
         when(config.enabled()).thenReturn(isEnabled);
@@ -193,6 +316,17 @@ class SpringCloudConfigClientConfigSourceFactoryTest {
         when(config.trustCerts()).thenReturn(false);
         when(config.headers()).thenReturn(new HashMap<>());
         when(config.ordinal()).thenReturn(ordinal);
+        SpringCloudConfigClientConfig.DiscoveryConfig discoveryConfig = Mockito
+                .mock(SpringCloudConfigClientConfig.DiscoveryConfig.class);
+
+        SpringCloudConfigClientConfig.DiscoveryConfig.EurekaConfig eurekaConfig = Mockito
+                .mock(SpringCloudConfigClientConfig.DiscoveryConfig.EurekaConfig.class);
+
+        when(config.discovery()).thenReturn(Optional.of(discoveryConfig));
+        when(discoveryConfig.enabled()).thenReturn(isDiscoveryEnabled);
+        when(discoveryConfig.serviceId()).thenReturn(Optional.of("config-server-id"));
+        when(discoveryConfig.eurekaConfig()).thenReturn(Optional.of(eurekaConfig));
+        when(eurekaConfig.serviceUrl()).thenReturn(Map.of("defaultZone", "http://localhost:8761/eureka/"));
 
         return config;
     }

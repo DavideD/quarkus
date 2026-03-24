@@ -1,23 +1,27 @@
 package io.quarkus.it.opentelemetry;
 
+import static io.opentelemetry.sdk.metrics.data.MetricDataType.*;
 import static io.restassured.RestAssured.get;
 import static io.restassured.RestAssured.given;
 import static java.net.HttpURLConnection.HTTP_OK;
 import static java.util.concurrent.TimeUnit.SECONDS;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.greaterThan;
-import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import io.opentelemetry.sdk.metrics.data.MetricDataType;
 import io.quarkus.test.junit.QuarkusTest;
+import io.quarkus.test.junit.common.JdkUtil;
 import io.restassured.common.mapper.TypeRef;
 
 @QuarkusTest
@@ -81,19 +85,51 @@ public class MetricsTest {
     }
 
     @Test
-    void testJvmMetrics() {
-        await().atMost(10, SECONDS).until(() -> getMetrics("jvm.thread.count").size() > 2);
+    void testAllJvmMetrics() {
+        // Force GC to run in order to generate metrics data
+        System.gc();
 
-        List<Map<String, Object>> metrics = getMetrics("jvm.thread.count");
+        // generate load
+        given()
+                .when()
+                .get("/nopath")
+                .then()
+                .statusCode(200);
 
-        Integer value = (Integer) ((Map) ((List) ((Map) (getMetrics("jvm.thread.count")
-                .get(metrics.size() - 1)
-                .get("longSumData")))
-                .get("points"))
-                .get(0))
-                .get("value");
+        Set<MetricToAssert> allMetrics = getJvmMetricsToAssert();
 
-        assertThat(value, greaterThan(0)); // at least one thread is running
+        await().atMost(10, SECONDS).untilAsserted(() -> {
+            Set<String> allMetricNames = getAllMetricNames("jvm.");
+            assertThat(allMetricNames)
+                    .containsAll(allMetrics.stream().map(MetricToAssert::name).toList());
+        });
+
+        Set<String> flakyMetrics = new HashSet<>();
+        flakyMetrics.add("jvm.memory.used_after_last_gc");
+        flakyMetrics.add("jvm.cpu.limit");
+        flakyMetrics.add("jvm.cpu.recent_utilization");
+        flakyMetrics.add("jvm.system.cpu.utilization");
+        if (JdkUtil.isSemeru()) {
+            // this one has been flaky on CI with Semeru
+            flakyMetrics.add("jvm.memory.used");
+        }
+
+        allMetrics.forEach(metricToAssert -> {
+
+            // metric is there and has at least 1 reading
+            await().atMost(10, SECONDS)
+                    .untilAsserted(() -> assertThat(getMetrics(metricToAssert.name()))
+                            .withFailMessage("The metric " + metricToAssert.name() + " is not defined")
+                            .hasSizeGreaterThan(0));
+
+            // skip assertions from flaky metrics
+            if (!flakyMetrics.contains(metricToAssert.name())) {
+                // Correct values might take some time to register
+                await().atMost(10, SECONDS).untilAsserted(() -> assertThat(getLastReading(metricToAssert))
+                        .withFailMessage("Metric must be greater than 0: " + metricToAssert.name)
+                        .isGreaterThan(0d));
+            }
+        });
     }
 
     @Test
@@ -115,6 +151,79 @@ public class MetricsTest {
                 .get(0))
                 .get("count");
 
-        assertThat(value, greaterThanOrEqualTo(1)); // at least one endpoint was called once
+        assertThat(value).isGreaterThanOrEqualTo(1); // at least one endpoint was called once
+    }
+
+    private static Set<String> getAllMetricNames(String prefix) {
+        List<Map<String, Object>> foundMetrics = given()
+                .when()
+                .get("/export/metrics")
+                .body().as(new TypeRef<>() {
+                });
+
+        return foundMetrics.stream()
+                .filter(m -> ((String) m.get("name")).startsWith(prefix))
+                .map(m -> ((String) m.get("name")))
+                .collect(Collectors.toSet());
+    }
+
+    record MetricToAssert(String name, String description, String metricUnit, MetricDataType metricType) {
+    }
+
+    protected Set<MetricToAssert> getJvmMetricsToAssert() {
+        Set<MetricToAssert> jvmMetrics = new HashSet<>();
+
+        // metrics.add(new MetricToAssert("http.server.request.duration", "Duration of HTTP server requests.", "s", HISTOGRAM)); // just because we generate load with HTTP
+        jvmMetrics.add(new MetricToAssert("jvm.memory.committed", "Measure of memory committed.", "By", LONG_SUM));
+        jvmMetrics.add(new MetricToAssert("jvm.memory.used", "Measure of memory used.", "By", LONG_SUM));
+        // Not on native
+        jvmMetrics.add(new MetricToAssert("jvm.memory.limit", "Measure of max obtainable memory.", "By", LONG_SUM));
+        jvmMetrics.add(new MetricToAssert("jvm.memory.used_after_last_gc",
+                "Measure of memory used, as measured after the most recent garbage collection event on this pool.",
+                "By", LONG_SUM));
+        // not on native
+        jvmMetrics.add(new MetricToAssert("jvm.gc.duration", "Duration of JVM garbage collection actions.", "s", HISTOGRAM));
+        jvmMetrics.add(new MetricToAssert("jvm.class.count", "Number of classes currently loaded.", "{class}", LONG_SUM));
+        jvmMetrics
+                .add(new MetricToAssert("jvm.class.loaded", "Number of classes loaded since JVM start.", "{class}", LONG_SUM));
+        jvmMetrics.add(
+                new MetricToAssert("jvm.class.unloaded", "Number of classes unloaded since JVM start.", "{class}", LONG_SUM));
+        jvmMetrics.add(new MetricToAssert("jvm.cpu.count", "Number of processors available to the Java virtual machine.",
+                "{cpu}", LONG_SUM));
+        // jvm.system.cpu.utilization instead, on native
+        jvmMetrics.add(
+                new MetricToAssert("jvm.cpu.time", "CPU time used by the process as reported by the JVM.", "s", DOUBLE_SUM));
+        jvmMetrics.add(new MetricToAssert("jvm.cpu.recent_utilization",
+                "Recent CPU utilization for the process as reported by the JVM.", "1", DOUBLE_GAUGE));
+        jvmMetrics.add(new MetricToAssert("jvm.thread.count", "Number of executing platform threads.", "{thread}", LONG_SUM));
+
+        // not supported on Semeru
+        if (!JdkUtil.isSemeru()) {
+            jvmMetrics.add(new MetricToAssert("jvm.cpu.limit", "", "1", LONG_SUM));
+            jvmMetrics.add(new MetricToAssert("jvm.cpu.longlock", "Long lock times", "s", HISTOGRAM));
+            jvmMetrics.add(new MetricToAssert("jvm.cpu.context_switch", "", "Hz", DOUBLE_SUM));
+
+            // not on native
+            jvmMetrics.add(new MetricToAssert("jvm.network.io", "Network read/write bytes.", "By", HISTOGRAM));
+            jvmMetrics.add(new MetricToAssert("jvm.network.time", "Network read/write duration.", "s", HISTOGRAM));
+        }
+
+        return jvmMetrics;
+    }
+
+    private Double getLastReading(MetricToAssert metricToAssert) {
+
+        List<Map<String, Object>> metrics = getMetrics(metricToAssert.name());
+
+        // assumes metric is there. The test asserts that already.
+        Map<String, Object> lastReading = metrics.size() > 0 ? metrics.get(metrics.size() - 1) : null;
+
+        List pointsList = (List) ((Map) (lastReading.get("data"))).get("points");
+
+        // get last data point from the last reading
+        return ((Number) ((Map) pointsList
+                .get(pointsList.size() > 0 ? pointsList.size() - 1 : null))
+                .get(metricToAssert.metricType().equals(HISTOGRAM) ? "sum" : "value"))
+                .doubleValue();
     }
 }

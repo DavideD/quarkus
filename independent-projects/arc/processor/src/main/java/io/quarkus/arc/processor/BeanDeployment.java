@@ -52,8 +52,10 @@ import io.quarkus.arc.processor.BuildExtension.BuildContext;
 import io.quarkus.arc.processor.BuildExtension.Key;
 import io.quarkus.arc.processor.Types.TypeClosure;
 import io.quarkus.arc.processor.bcextensions.ExtensionsEntryPoint;
-import io.quarkus.gizmo.MethodCreator;
-import io.quarkus.gizmo.ResultHandle;
+import io.quarkus.gizmo.ClassTransformer;
+import io.quarkus.gizmo.FieldDescriptor;
+import io.quarkus.gizmo.MethodDescriptor;
+import io.quarkus.gizmo2.Expr;
 
 public class BeanDeployment {
 
@@ -89,6 +91,7 @@ public class BeanDeployment {
     private final List<DecoratorInfo> decorators;
 
     private final List<ObserverInfo> observers;
+    private Set<MethodInfo> observerAndProducerMethods;
 
     private final Set<InvokerInfo> invokers;
 
@@ -117,7 +120,7 @@ public class BeanDeployment {
     private final Set<BeanInfo> beansWithRuntimeDeferredUnproxyableError;
 
     // scope -> list of funs that accept the method creator for ComponentsProvider#getComponents()
-    private final Map<ScopeInfo, List<Function<MethodCreator, ResultHandle>>> customContexts;
+    private final Map<ScopeInfo, List<Function<ContextConfigurator.CreateGeneration, Expr>>> customContexts;
 
     private final Map<DotName, BeanDefiningAnnotation> beanDefiningAnnotations;
 
@@ -179,7 +182,7 @@ public class BeanDeployment {
         qualifierNonbindingMembers = new HashMap<>();
         qualifiers = findQualifiers();
         for (QualifierRegistrar registrar : builder.qualifierRegistrars) {
-            for (Map.Entry<DotName, Set<String>> entry : registrar.getAdditionalQualifiers().entrySet()) {
+            for (Entry<DotName, Set<String>> entry : registrar.getAdditionalQualifiers().entrySet()) {
                 DotName dotName = entry.getKey();
                 ClassInfo classInfo = getClassByName(getBeanArchiveIndex(), dotName);
                 if (classInfo != null) {
@@ -187,6 +190,7 @@ public class BeanDeployment {
                     if (nonbindingMembers == null) {
                         nonbindingMembers = Collections.emptySet();
                     }
+                    validateQualifier(classInfo, nonbindingMembers);
                     qualifierNonbindingMembers.put(dotName, nonbindingMembers);
                     qualifiers.put(dotName, classInfo);
                 }
@@ -250,7 +254,7 @@ public class BeanDeployment {
     }
 
     ContextRegistrar.RegistrationContext registerCustomContexts(List<ContextRegistrar> contextRegistrars) {
-        io.quarkus.arc.processor.ContextRegistrar.RegistrationContext registrationContext = new io.quarkus.arc.processor.ContextRegistrar.RegistrationContext() {
+        ContextRegistrar.RegistrationContext registrationContext = new ContextRegistrar.RegistrationContext() {
             @Override
             public <V> V put(Key<V> key, V value) {
                 return buildContext.put(key, value);
@@ -286,7 +290,7 @@ public class BeanDeployment {
         }
     }
 
-    BeanRegistrar.RegistrationContext registerBeans(List<BeanRegistrar> beanRegistrars) {
+    RegistrationContext registerBeans(List<BeanRegistrar> beanRegistrars) {
         List<InjectionPointInfo> injectionPoints = new ArrayList<>();
         BeanDiscoveryResult beanDiscoveryResult = findBeans(
                 initBeanDefiningAnnotations(beanDefiningAnnotations.values(), stereotypes.keySet()), observers,
@@ -316,6 +320,8 @@ public class BeanDeployment {
     void init(Consumer<BytecodeTransformer> bytecodeTransformerConsumer,
             List<Predicate<BeanInfo>> additionalUnusedBeanExclusions) {
         long start = System.nanoTime();
+
+        initObserverAndProducerMethods(observers, beans);
 
         // Collect dependency resolution errors
         List<Throwable> errors = new ArrayList<>();
@@ -356,10 +362,10 @@ public class BeanDeployment {
                     TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - removalStart));
             //we need to re-initialize it, so it does not contain removed beans
             initBeanByTypeMap();
-            buildContext.putInternal(BuildExtension.Key.REMOVED_INTERCEPTORS, Collections.unmodifiableSet(removedInterceptors));
-            buildContext.putInternal(BuildExtension.Key.REMOVED_DECORATORS, Collections.unmodifiableSet(removedDecorators));
+            buildContext.putInternal(Key.REMOVED_INTERCEPTORS, Collections.unmodifiableSet(removedInterceptors));
+            buildContext.putInternal(Key.REMOVED_DECORATORS, Collections.unmodifiableSet(removedDecorators));
         }
-        buildContext.putInternal(BuildExtension.Key.REMOVED_BEANS, Collections.unmodifiableSet(removedBeans));
+        buildContext.putInternal(Key.REMOVED_BEANS, Collections.unmodifiableSet(removedBeans));
         LOGGER.debugf("Bean deployment initialized in %s ms", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start));
     }
 
@@ -516,6 +522,7 @@ public class BeanDeployment {
         // First, validate all beans internally
         validateBeans(errors, bytecodeTransformerConsumer);
         validateInterceptorsAndDecorators(errors, bytecodeTransformerConsumer);
+        validateNonAppBeansWithAppDecorators(errors, bytecodeTransformerConsumer);
         ValidationContextImpl validationContext = new ValidationContextImpl(buildContext);
         for (Throwable error : errors) {
             validationContext.addDeploymentProblem(error);
@@ -720,17 +727,17 @@ public class BeanDeployment {
     private static Collection<AnnotationInstance> extractAnnotations(AnnotationInstance annotation,
             Map<DotName, ClassInfo> singulars, Map<DotName, ClassInfo> repeatables) {
         if (!annotation.runtimeVisible()) {
-            return Collections.emptyList();
+            return List.of();
         }
         DotName annotationName = annotation.name();
         if (singulars.get(annotationName) != null) {
-            return Collections.singleton(annotation);
+            return Set.of(annotation);
         } else if (repeatables.get(annotationName) != null) {
             // repeatable, we need to extract actual annotations
             return Annotations.onlyRuntimeVisible(Arrays.asList(annotation.value().asNestedArray()));
         } else {
             // neither singular nor repeatable, return empty collection
-            return Collections.emptyList();
+            return List.of();
         }
     }
 
@@ -770,7 +777,7 @@ public class BeanDeployment {
         return annotationStore.hasAnnotation(target, name);
     }
 
-    Map<ScopeInfo, List<Function<MethodCreator, ResultHandle>>> getCustomContexts() {
+    Map<ScopeInfo, List<Function<ContextConfigurator.CreateGeneration, Expr>>> getCustomContexts() {
         return customContexts;
     }
 
@@ -789,6 +796,15 @@ public class BeanDeployment {
     }
 
     Set<MethodInfo> getObserverAndProducerMethods() {
+        if (observerAndProducerMethods == null) {
+            throw new IllegalStateException(
+                    "getObserverAndProducerMethods() has been called but observerAndProducerMethods has not been initialized yet");
+        }
+
+        return observerAndProducerMethods;
+    }
+
+    private void initObserverAndProducerMethods(List<ObserverInfo> observers, List<BeanInfo> beans) {
         Set<MethodInfo> ret = new HashSet<>();
         for (ObserverInfo observer : observers) {
             if (!observer.isSynthetic()) {
@@ -800,7 +816,8 @@ public class BeanDeployment {
                 ret.add(bean.getTarget().get().asMethod());
             }
         }
-        return ret;
+
+        observerAndProducerMethods = Collections.unmodifiableSet(ret);
     }
 
     private boolean isRuntimeAnnotationType(ClassInfo annotationType) {
@@ -841,9 +858,42 @@ public class BeanDeployment {
             if (isExcluded(qualifierClass)) {
                 continue;
             }
+            // check that all array typed methods are @Nonbinding
+            validateQualifier(qualifierClass, null);
             qualifiers.put(qualifierClass.name(), qualifierClass);
         }
         return qualifiers;
+    }
+
+    /**
+     * Validates the qualifier for binding members which are either array or annotation-valued and throws an exception
+     * if any is found.
+     *
+     * @param qualifierClass class info of the qualifier
+     * @param nonbindingMembers collection of members we consider {@code @Nonbinding} for synthetic qualifier, null otherwise
+     */
+    private void validateQualifier(ClassInfo qualifierClass, Set<String> nonbindingMembers) {
+        for (MethodInfo mi : qualifierClass.methods()) {
+            Type returnType = mi.returnType();
+            if ((nonbindingMembers != null && !nonbindingMembers.contains(mi.name()))
+                    || (nonbindingMembers == null && mi.annotation(DotNames.NONBINDING) == null)) {
+                String problem = null;
+                if (returnType.kind().equals(Type.Kind.ARRAY)) {
+                    problem = "array";
+                } else if (returnType.kind().equals(Type.Kind.CLASS)) {
+                    ClassInfo typeClassInfo = beanArchiveImmutableIndex.getClassByName(returnType.asClassType().name());
+                    if (typeClassInfo != null && typeClassInfo.isAnnotation()) {
+                        problem = "annotation";
+                    }
+                }
+                if (problem != null) {
+                    throw new DefinitionException("Qualifier annotation '" + qualifierClass + "' contains a member '"
+                            + mi.name()
+                            + "' with " + problem
+                            + "-valued return type. All such members have to be annotated with @jakarta.enterprise.util.Nonbinding");
+                }
+            }
+        }
     }
 
     private Map<DotName, ClassInfo> findContainerAnnotations(Map<DotName, ClassInfo> annotations) {
@@ -1028,7 +1078,7 @@ public class BeanDeployment {
         NO_BEAN_CONSTRUCTOR
     }
 
-    private BeanDiscoveryResult findBeans(Collection<DotName> beanDefiningAnnotations, List<ObserverInfo> observers,
+    private BeanDiscoveryResult findBeans(Set<DotName> beanDefiningAnnotations, List<ObserverInfo> observers,
             List<InjectionPointInfo> injectionPoints, boolean jtaCapabilities) {
 
         Set<ClassInfo> beanClasses = new HashSet<>();
@@ -1363,12 +1413,12 @@ public class BeanDeployment {
             }
         }
 
-        for (Map.Entry<MethodInfo, Set<ClassInfo>> entry : syncObserverMethods.entrySet()) {
+        for (Entry<MethodInfo, Set<ClassInfo>> entry : syncObserverMethods.entrySet()) {
             registerObserverMethods(entry.getValue(), observers, injectionPoints,
                     beanClassToBean, entry.getKey(), false, observerTransformers, jtaCapabilities);
         }
 
-        for (Map.Entry<MethodInfo, Set<ClassInfo>> entry : asyncObserverMethods.entrySet()) {
+        for (Entry<MethodInfo, Set<ClassInfo>> entry : asyncObserverMethods.entrySet()) {
             registerObserverMethods(entry.getValue(), observers, injectionPoints,
                     beanClassToBean, entry.getKey(), true, observerTransformers, jtaCapabilities);
         }
@@ -1401,7 +1451,7 @@ public class BeanDeployment {
         // the whole package is indexed (otherwise we'd get a lot of warnings that
         // package-info.class couldn't be loaded during on-demand indexing)
         String packageName = beanClass.name().packagePrefix();
-        org.jboss.jandex.ClassInfo packageClass = beanArchiveImmutableIndex.getClassByName(
+        ClassInfo packageClass = beanArchiveImmutableIndex.getClassByName(
                 DotName.createSimple(packageName + ".package-info"));
         return packageClass != null && annotationStore.hasAnnotation(packageClass, DotNames.VETOED);
     }
@@ -1445,12 +1495,18 @@ public class BeanDeployment {
             List<DisposerInfo> disposers) {
         // we don't have a `BeanInfo` for the producer yet (the outcome of this method is used to build it),
         // so we need to construct its set of qualifiers manually
-        Set<AnnotationInstance> qualifiers = new HashSet<>();
-        // ignore annotations on producer method parameters -- they may be injection point qualifiers
-        for (AnnotationInstance annotation : Annotations.getAnnotations(producer.kind(), getAnnotations(producer))) {
-            qualifiers.addAll(extractQualifiers(annotation));
+        Set<AnnotationInstance> annotations = Annotations.getAnnotations(producer.kind(), getAnnotations(producer));
+        Set<AnnotationInstance> qualifiers;
+        if (!annotations.isEmpty()) {
+            qualifiers = new HashSet<>();
+            // ignore annotations on producer method parameters -- they may be injection point qualifiers
+            for (AnnotationInstance annotation : annotations) {
+                qualifiers.addAll(extractQualifiers(annotation));
+            }
+        } else {
+            qualifiers = Set.of();
         }
-        Beans.addImplicitQualifiers(qualifiers); // need to consider `@Any` (and possibly `@Default`) too
+        qualifiers = Beans.addImplicitQualifiers(qualifiers); // need to consider `@Any` (and possibly `@Default`) too
 
         List<DisposerInfo> found = new ArrayList<>();
         for (DisposerInfo disposer : disposers) {
@@ -1519,7 +1575,7 @@ public class BeanDeployment {
         }
     }
 
-    io.quarkus.arc.processor.ObserverRegistrar.RegistrationContext registerSyntheticObservers(
+    ObserverRegistrar.RegistrationContext registerSyntheticObservers(
             List<ObserverRegistrar> observerRegistrars) {
         ObserverRegistrationContextImpl context = new ObserverRegistrationContextImpl(buildContext, this);
         for (ObserverRegistrar registrar : observerRegistrars) {
@@ -1714,7 +1770,7 @@ public class BeanDeployment {
             }
         }
 
-        List<Map.Entry<String, List<BeanInfo>>> duplicateBeanIds = beans.stream()
+        List<Entry<String, List<BeanInfo>>> duplicateBeanIds = beans.stream()
                 .collect(Collectors.groupingBy(BeanInfo::getIdentifier))
                 .entrySet()
                 .stream()
@@ -1727,7 +1783,7 @@ public class BeanDeployment {
                     .append("Multiple beans with the same identifier found!\n")
                     .append("----------------------------------------------\n")
                     .append("This is an internal error. Please report a bug and attach the following listing.\n\n");
-            for (Map.Entry<String, List<BeanInfo>> entry : duplicateBeanIds) {
+            for (Entry<String, List<BeanInfo>> entry : duplicateBeanIds) {
                 error.append(entry.getKey()).append(" -> ").append(entry.getValue().size()).append(" beans:\n");
                 for (BeanInfo bean : entry.getValue()) {
                     error.append("- ").append(bean).append("\n");
@@ -1735,6 +1791,97 @@ public class BeanDeployment {
             }
             error.append(separator).append(separator).append(separator).append(separator).append("\n");
             errors.add(new DeploymentException(error.toString()));
+        }
+    }
+
+    private void validateNonAppBeansWithAppDecorators(List<Throwable> errors,
+            Consumer<BytecodeTransformer> bytecodeTransformer) {
+        for (BeanInfo bean : beans) {
+            boolean isNonAppBeanWithAppDecorators = bean.isClassBean() // only class-based beans can be decorated
+                    && !applicationClassPredicate.test(bean.getBeanClass())
+                    && bean.hasBoundDecoratorMatching(applicationClassPredicate);
+
+            if (!isNonAppBeanWithAppDecorators) {
+                continue;
+            }
+
+            // in case of a non-app bean with app decorators, we only turn the generated `_Bean` and `_Subclass`
+            // classes into app classes, so the only thing we need to transform here are injection points
+            //
+            // we specifically do _not_ turn the generated `_ClientProxy` class into app class,
+            // so method invocations on normal scoped beans work even if the methods are not `public`
+            //
+            // producers, disposers and observers in non-app beans have their own generated classes
+            // which are _non-app_, so there's no cross-classloader access
+
+            Set<AnnotationTarget> nonPublicInjectionPoints = new HashSet<>();
+            for (InjectionPointInfo ip : bean.getAllInjectionPoints()) {
+                AnnotationTarget target = ip.getAnnotationTarget();
+                if (target == null) {
+                    continue;
+                }
+
+                if (target.kind() == AnnotationTarget.Kind.FIELD
+                        && !Modifier.isPublic(target.asField().flags())) {
+                    nonPublicInjectionPoints.add(target);
+                } else if (target.kind() == AnnotationTarget.Kind.METHOD_PARAMETER
+                        && !Modifier.isPublic(target.asMethodParameter().method().flags())) {
+                    nonPublicInjectionPoints.add(target.asMethodParameter().method());
+                }
+            }
+
+            if (nonPublicInjectionPoints.isEmpty()) {
+                continue;
+            }
+
+            Collection<ClassInfo> beanSubclasses = getBeanArchiveIndex().getAllKnownSubclasses(bean.getBeanClass());
+            if (!beanSubclasses.isEmpty()) {
+                StringBuilder error = new StringBuilder();
+                error.append("Non-application bean ")
+                        .append(bean.getBeanClass())
+                        .append(" has bound application decorator(s):");
+                for (DecoratorInfo decorator : bean.getBoundDecorators()) {
+                    DotName decoratorName = decorator.getImplClazz().name();
+                    if (applicationClassPredicate.test(decoratorName)) {
+                        error.append("\n\t- ").append(decoratorName);
+                    }
+                }
+                error.append("\nThis bean has non-public injection point(s):");
+                for (AnnotationTarget ip : nonPublicInjectionPoints) {
+                    if (ip.kind() == AnnotationTarget.Kind.FIELD) {
+                        error.append("\n\t- field `").append(ip.asField().name()).append("`");
+                    } else if (ip.kind() == AnnotationTarget.Kind.METHOD) {
+                        error.append("\n\t- method `").append(ip.asMethod().name()).append("()`");
+                    }
+                }
+                error.append("\nBytecode transformation would be required to make these injection points public,")
+                        .append(" but the bean also has subclasses that could be broken:");
+                for (ClassInfo beanSubclass : beanSubclasses) {
+                    error.append("\n\t- ").append(beanSubclass.name());
+                }
+                error.append("\nThe only possible fix on the application side is removing the decorator(s).");
+                errors.add(new DeploymentException(error.toString()));
+            } else {
+                bytecodeTransformer.accept(new BytecodeTransformer(bean.getBeanClass().toString(), (name, visitor) -> {
+                    ClassTransformer transformer = new ClassTransformer(name);
+
+                    // turn non-`public` injection points into `public`
+                    for (AnnotationTarget ip : nonPublicInjectionPoints) {
+                        if (ip.kind() == AnnotationTarget.Kind.FIELD) {
+                            transformer.modifyField(FieldDescriptor.of(ip.asField()))
+                                    .removeModifiers(Modifier.PRIVATE | Modifier.PROTECTED)
+                                    .addModifiers(Modifier.PUBLIC);
+                        } else if (ip.kind() == AnnotationTarget.Kind.METHOD) {
+                            MethodDescriptor desc = MethodDescriptor.of(ip.asMethod());
+                            transformer.modifyMethod(desc)
+                                    .removeModifiers(Modifier.PRIVATE | Modifier.PROTECTED)
+                                    .addModifiers(Modifier.PUBLIC);
+                        }
+                    }
+
+                    return transformer.applyTo(visitor);
+                }));
+            }
         }
     }
 
@@ -1852,12 +1999,12 @@ public class BeanDeployment {
 
         @Override
         public BeanStream beans() {
-            return new BeanStream(get(BuildExtension.Key.BEANS));
+            return new BeanStream(get(Key.BEANS));
         }
 
         @Override
         public BeanStream removedBeans() {
-            return new BeanStream(get(BuildExtension.Key.REMOVED_BEANS));
+            return new BeanStream(get(Key.REMOVED_BEANS));
         }
 
     }
@@ -1900,7 +2047,7 @@ public class BeanDeployment {
     }
 
     private static class ObserverRegistrationContextImpl extends RegistrationContextImpl
-            implements io.quarkus.arc.processor.ObserverRegistrar.RegistrationContext {
+            implements ObserverRegistrar.RegistrationContext {
 
         ObserverRegistrationContextImpl(BuildContext buildContext, BeanDeployment beanDeployment) {
             super(buildContext, beanDeployment);
@@ -1918,7 +2065,7 @@ public class BeanDeployment {
 
         @Override
         public BeanStream beans() {
-            return new BeanStream(get(BuildExtension.Key.BEANS));
+            return new BeanStream(get(Key.BEANS));
         }
 
     }
@@ -1945,7 +2092,7 @@ public class BeanDeployment {
         }
 
         public BeanStream beans() {
-            return new BeanStream(get(BuildExtension.Key.BEANS));
+            return new BeanStream(get(Key.BEANS));
         }
 
     }

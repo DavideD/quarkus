@@ -22,7 +22,6 @@ import io.fabric8.kubernetes.api.model.KubernetesResource;
 import io.fabric8.kubernetes.api.model.KubernetesResourceList;
 import io.fabric8.kubernetes.client.Config;
 import io.fabric8.kubernetes.client.CustomResource;
-import io.fabric8.kubernetes.client.DefaultKubernetesClient;
 import io.fabric8.kubernetes.client.VersionInfo;
 import io.fabric8.kubernetes.client.Watcher;
 import io.fabric8.kubernetes.client.extension.ExtensionAdapter;
@@ -43,7 +42,7 @@ import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.RemovedResourceBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveHierarchyBuildItem;
-import io.quarkus.deployment.builditem.nativeimage.RuntimeReinitializedClassBuildItem;
+import io.quarkus.deployment.builditem.nativeimage.RuntimeInitializedClassBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ServiceProviderBuildItem;
 import io.quarkus.deployment.util.JandexUtil;
 import io.quarkus.jackson.deployment.IgnoreJsonDeserializeClassBuildItem;
@@ -85,9 +84,9 @@ public class KubernetesClientProcessor {
     }
 
     @BuildStep
-    public void nativeImageSupport(BuildProducer<RuntimeReinitializedClassBuildItem> runtimeInitializedClassProducer) {
+    public void nativeImageSupport(BuildProducer<RuntimeInitializedClassBuildItem> runtimeInitializedClassProducer) {
         runtimeInitializedClassProducer
-                .produce(new RuntimeReinitializedClassBuildItem(io.fabric8.kubernetes.client.utils.Utils.class.getName()));
+                .produce(new RuntimeInitializedClassBuildItem(io.fabric8.kubernetes.client.utils.Utils.class.getName()));
     }
 
     @BuildStep
@@ -143,9 +142,9 @@ public class KubernetesClientProcessor {
             }
         }
 
-        Collection<ClassInfo> kubernetesResourceImpls = fullIndex.getAllKnownImplementors(KUBERNETES_RESOURCE);
-        Collection<ClassInfo> kubernetesResourceListImpls = fullIndex.getAllKnownImplementors(KUBERNETES_RESOURCE_LIST);
-        Collection<ClassInfo> visitableBuilderImpls = fullIndex.getAllKnownImplementors(VISITABLE_BUILDER);
+        Collection<ClassInfo> kubernetesResourceImpls = fullIndex.getAllKnownImplementations(KUBERNETES_RESOURCE);
+        Collection<ClassInfo> kubernetesResourceListImpls = fullIndex.getAllKnownImplementations(KUBERNETES_RESOURCE_LIST);
+        Collection<ClassInfo> visitableBuilderImpls = fullIndex.getAllKnownImplementations(VISITABLE_BUILDER);
 
         // default sizes determined experimentally - these are only set in order to prevent continuous expansion of the array list
         int defSize = kubernetesResourceImpls.size() + kubernetesResourceListImpls.size() + visitableBuilderImpls.size();
@@ -194,7 +193,7 @@ public class KubernetesClientProcessor {
                 .methods().build());
 
         reflectiveClasses.produce(
-                ReflectiveClassBuildItem.builder(KubernetesClientImpl.class, DefaultKubernetesClient.class, VersionInfo.class)
+                ReflectiveClassBuildItem.builder(KubernetesClientImpl.class, VersionInfo.class)
                         .reason(getClass().getName())
                         .methods().fields().build());
         reflectiveClasses.produce(ReflectiveClassBuildItem
@@ -258,7 +257,7 @@ public class KubernetesClientProcessor {
             IndexView targetIndex,
             IndexView fullIndex) {
 
-        final var implementors = isTargetClassAnInterface ? targetIndex.getAllKnownImplementors(implementedOrExtendedClass)
+        final var implementors = isTargetClassAnInterface ? targetIndex.getAllKnownImplementations(implementedOrExtendedClass)
                 : targetIndex.getAllKnownSubclasses(implementedOrExtendedClass);
         implementors.forEach(c -> {
             try {

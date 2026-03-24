@@ -1,6 +1,5 @@
 package io.quarkus.vertx.http.runtime;
 
-import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -70,12 +69,6 @@ public interface VertxHttpBuildTimeConfig {
     String nonApplicationRootPath();
 
     /**
-     * The REST Assured client timeout for testing.
-     */
-    @WithDefault("30s")
-    Duration testTimeout();
-
-    /**
      * If enabled then the response body is compressed if the {@code Content-Type} header is set and the value is a compressed
      * media type as configured via {@link #compressMediaTypes}.
      * <p>
@@ -122,4 +115,11 @@ public interface VertxHttpBuildTimeConfig {
      * The compression level used when compression support is enabled.
      */
     OptionalInt compressionLevel();
+
+    /**
+     * Configure Quarkus to serve static files from a local filesystem directory (outside of Java resources)
+     *
+     */
+    @WithName("static-dir")
+    Optional<HttpStaticDirConfig> httpStaticDirConfig();
 }

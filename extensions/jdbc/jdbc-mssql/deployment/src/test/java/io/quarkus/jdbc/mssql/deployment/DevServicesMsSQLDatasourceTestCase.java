@@ -22,8 +22,7 @@ public class DevServicesMsSQLDatasourceTestCase {
 
     @RegisterExtension
     static QuarkusUnitTest test = new QuarkusUnitTest()
-            .withApplicationRoot((jar) -> jar
-                    .addAsResource("container-license-acceptance.txt"))
+            .withConfigurationResource("application.properties")
             // Expect no warnings (in particular from Agroal)
             .setLogRecordPredicate(record -> record.getLevel().intValue() >= Level.WARNING.intValue()
                     // There are other warnings: JDK8, TestContainers, drivers, ...
@@ -42,7 +41,7 @@ public class DevServicesMsSQLDatasourceTestCase {
         AgroalConnectionPoolConfiguration configuration = dataSource.getConfiguration().connectionPoolConfiguration();
         assertTrue(configuration.connectionFactoryConfiguration().jdbcUrl().contains("jdbc:sqlserver:"));
         assertEquals("sa", configuration.connectionFactoryConfiguration().principal().getName());
-        assertEquals(20, configuration.maxSize());
+        assertEquals(50, configuration.maxSize());
         assertThat(configuration.exceptionSorter()).isInstanceOf(MSSQLExceptionSorter.class);
 
         try (Connection connection = dataSource.getConnection()) {

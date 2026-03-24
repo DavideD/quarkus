@@ -1,11 +1,11 @@
 package io.quarkus.datasource.deployment.spi;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
-import java.util.stream.Collectors;
 
 import io.quarkus.builder.item.MultiBuildItem;
 import io.quarkus.datasource.common.runtime.DataSourceUtil;
@@ -21,9 +21,12 @@ public final class DevServicesDatasourceConfigurationHandlerBuildItem extends Mu
      */
     private final String dbKind;
     /**
-     * The function that provides the runtime config given a running DevServices database
+     * The function that provides the runtime config given a running DevServices database, for old model and discovered services
      */
     private final BiFunction<String, DevServicesDatasourceProvider.RunningDevServicesDatasource, Map<String, String>> configProviderFunction;
+
+    // These two functions could possibly be consolidated
+    private final Function<String, Map<String, Function<DatasourceStartable, String>>> deferredConfigProviderFunction;
 
     /**
      * Function that checks if a given datasource has been configured. If it has been configured generally the
@@ -33,9 +36,11 @@ public final class DevServicesDatasourceConfigurationHandlerBuildItem extends Mu
 
     public DevServicesDatasourceConfigurationHandlerBuildItem(String dbKind,
             BiFunction<String, DevServicesDatasourceProvider.RunningDevServicesDatasource, Map<String, String>> configProviderFunction,
+            Function<String, Map<String, Function<DatasourceStartable, String>>> deferredConfigProviderFunction,
             Predicate<String> checkConfiguredFunction) {
         this.dbKind = dbKind;
         this.configProviderFunction = configProviderFunction;
+        this.deferredConfigProviderFunction = deferredConfigProviderFunction;
         this.checkConfiguredFunction = checkConfiguredFunction;
     }
 
@@ -51,23 +56,16 @@ public final class DevServicesDatasourceConfigurationHandlerBuildItem extends Mu
         return checkConfiguredFunction;
     }
 
+    public Function<String, Map<String, Function<DatasourceStartable, String>>> getDeferredConfigProviderFunction() {
+        return deferredConfigProviderFunction;
+    }
+
     public static DevServicesDatasourceConfigurationHandlerBuildItem jdbc(String dbKind) {
-        return new DevServicesDatasourceConfigurationHandlerBuildItem(dbKind,
-                new BiFunction<String, DevServicesDatasourceProvider.RunningDevServicesDatasource, Map<String, String>>() {
-
-                    @Override
-                    public Map<String, String> apply(String dsName,
-                            DevServicesDatasourceProvider.RunningDevServicesDatasource runningDevDb) {
-                        String jdbcUrl = runningDevDb.jdbcUrl();
-                        // we use datasourceURLPropNames to generate quoted and unquoted versions of the property key,
-                        // because depending on whether a user configured other JDBC properties
-                        // one of the URLs may be ignored
-                        // see https://github.com/quarkusio/quarkus/issues/21387
-                        return datasourceURLPropNames(dsName).stream()
-                                .collect(Collectors.toMap(Function.identity(), ignored -> jdbcUrl));
-                    }
-
-                }, new Predicate<String>() {
+        return new DevServicesDatasourceConfigurationHandlerBuildItem(dbKind, jdbcProviderFunction(), (dsName) -> {
+            Function<DatasourceStartable, String> function = s -> s.runningDevServicesDatasource().jdbcUrl();
+            return fromKeys(datasourceURLPropNames(dsName), function);
+        },
+                new Predicate<>() {
                     @Override
                     public boolean test(String dsName) {
                         return ConfigUtils.isAnyPropertyPresent(datasourceURLPropNames(dsName));
@@ -75,25 +73,45 @@ public final class DevServicesDatasourceConfigurationHandlerBuildItem extends Mu
                 });
     }
 
+    private static BiFunction<String, DevServicesDatasourceProvider.RunningDevServicesDatasource, Map<String, String>> jdbcProviderFunction() {
+        return new BiFunction<>() {
+
+            @Override
+            public Map<String, String> apply(String dsName,
+                    DevServicesDatasourceProvider.RunningDevServicesDatasource runningDevDb) {
+                String url = runningDevDb.jdbcUrl();
+                return fromKeys(datasourceURLPropNames(dsName), url);
+            }
+
+        };
+    }
+
+    private static BiFunction<String, DevServicesDatasourceProvider.RunningDevServicesDatasource, Map<String, String>> reactiveProviderFunction() {
+        return new BiFunction<>() {
+            @Override
+            public Map<String, String> apply(String dsName,
+                    DevServicesDatasourceProvider.RunningDevServicesDatasource runningDevDb) {
+                String url = runningDevDb.reactiveUrl();
+                return fromKeys(datasourceReactiveURLPropNames(dsName), url);
+            }
+        };
+    }
+
     private static List<String> datasourceURLPropNames(String dsName) {
+        // we use datasourceURLPropNames to generate quoted and unquoted versions of the property key,
+        // because depending on whether a user configured other JDBC properties
+        // one of the URLs may be ignored
+        // see https://github.com/quarkusio/quarkus/issues/21387
         return DataSourceUtil.dataSourcePropertyKeys(dsName, "jdbc.url");
     }
 
     public static DevServicesDatasourceConfigurationHandlerBuildItem reactive(String dbKind) {
-        return new DevServicesDatasourceConfigurationHandlerBuildItem(dbKind,
-                new BiFunction<String, DevServicesDatasourceProvider.RunningDevServicesDatasource, Map<String, String>>() {
-                    @Override
-                    public Map<String, String> apply(String dsName,
-                            DevServicesDatasourceProvider.RunningDevServicesDatasource runningDevDb) {
-                        String reactiveUrl = runningDevDb.reactiveUrl();
-                        // we use datasourceURLPropNames to generate quoted and unquoted versions of the property key,
-                        // because depending on whether a user configured other reactive properties
-                        // one of the URLs may be ignored
-                        // see https://github.com/quarkusio/quarkus/issues/21387
-                        return datasourceReactiveURLPropNames(dsName).stream()
-                                .collect(Collectors.toMap(Function.identity(), ignored -> reactiveUrl));
-                    }
-                }, new Predicate<String>() {
+        return new DevServicesDatasourceConfigurationHandlerBuildItem(dbKind, reactiveProviderFunction(),
+                (dsName) -> {
+                    Function<DatasourceStartable, String> reactiveUrl = s -> s.runningDevServicesDatasource().reactiveUrl();
+
+                    return fromKeys(datasourceReactiveURLPropNames(dsName), reactiveUrl);
+                }, new Predicate<>() {
                     @Override
                     public boolean test(String dsName) {
                         return ConfigUtils.isAnyPropertyPresent(datasourceReactiveURLPropNames(dsName));
@@ -103,5 +121,15 @@ public final class DevServicesDatasourceConfigurationHandlerBuildItem extends Mu
 
     private static List<String> datasourceReactiveURLPropNames(String dsName) {
         return DataSourceUtil.dataSourcePropertyKeys(dsName, "reactive.url");
+    }
+
+    private static <T> Map<String, T> fromKeys(
+            List<String> keys,
+            T value) {
+        Map<String, T> result = new HashMap<>(keys.size());
+        for (String propertyName : keys) {
+            result.put(propertyName, value);
+        }
+        return result;
     }
 }

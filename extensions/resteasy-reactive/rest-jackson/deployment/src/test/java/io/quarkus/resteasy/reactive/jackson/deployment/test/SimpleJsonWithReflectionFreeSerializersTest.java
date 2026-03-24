@@ -5,8 +5,6 @@ import java.util.function.Supplier;
 import org.jboss.shrinkwrap.api.ShrinkWrap;
 import org.jboss.shrinkwrap.api.asset.StringAsset;
 import org.jboss.shrinkwrap.api.spec.JavaArchive;
-import org.junit.jupiter.api.Disabled;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import io.quarkus.security.test.utils.TestIdentityController;
@@ -31,7 +29,7 @@ public class SimpleJsonWithReflectionFreeSerializersTest extends AbstractSimpleJ
                                     Fruit.class, Price.class, DogRecord.class, ItemExtended.class, Book.class, LombokBook.class,
                                     PrimitiveTypesBean.class, PrimitiveTypesRecord.class, TokenResponse.class,
                                     ItemJsonValuePublicMethod.class, ItemJsonValuePublicField.class,
-                                    ItemJsonValuePrivateMethod.class, ItemJsonValuePrivateField.class)
+                                    ItemJsonValuePrivateMethod.class, ItemJsonValuePrivateField.class, StringWrapper.class)
                             .addAsResource(new StringAsset("admin-expression=admin\n" +
                                     "user-expression=user\n" +
                                     "birth-date-roles=alice,bob\n" +
@@ -39,11 +37,4 @@ public class SimpleJsonWithReflectionFreeSerializersTest extends AbstractSimpleJ
                                     "application.properties");
                 }
             });
-
-    @Disabled("Doesn't work with the reflection free serializers")
-    @Test
-    @Override
-    public void testSecureFieldOnTypeVariable() {
-        super.testSecureFieldOnTypeVariable();
-    }
 }

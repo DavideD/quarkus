@@ -18,8 +18,8 @@ allOpen {
 }
 
 allprojects {
-    group 'org.acme'
-    version '1.0.0-SNAPSHOT'
+    group = 'org.acme'
+    version = '1.0.0-SNAPSHOT'
 
     apply {
         plugin 'org.jetbrains.kotlin.jvm'
@@ -39,7 +39,7 @@ allprojects {
         implementation enforcedPlatform("${quarkusPlatformGroupId}:${quarkusPlatformArtifactId}:${quarkusPlatformVersion}")
         implementation 'org.jetbrains.kotlin:kotlin-stdlib-jdk8'
         implementation 'io.quarkus:quarkus-kotlin'
-        testImplementation 'io.quarkus:quarkus-junit5'
+        testImplementation 'io.quarkus:quarkus-junit'
         testImplementation 'io.rest-assured:kotlin-extensions'
     }
 

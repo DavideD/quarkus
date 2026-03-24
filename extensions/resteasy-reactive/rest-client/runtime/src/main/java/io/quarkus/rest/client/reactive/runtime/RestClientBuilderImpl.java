@@ -7,15 +7,19 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.security.KeyStore;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SSLContext;
@@ -38,6 +42,7 @@ import org.jboss.resteasy.reactive.client.api.QuarkusRestClientProperties;
 import org.jboss.resteasy.reactive.client.handlers.RedirectHandler;
 import org.jboss.resteasy.reactive.client.impl.ClientBuilderImpl;
 import org.jboss.resteasy.reactive.client.impl.ClientImpl;
+import org.jboss.resteasy.reactive.client.impl.VertxRequestCustomizingClientBuilder;
 import org.jboss.resteasy.reactive.client.impl.WebTargetImpl;
 import org.jboss.resteasy.reactive.client.impl.multipart.PausableHttpPostRequestEncoder;
 import org.jboss.resteasy.reactive.common.jaxrs.ConfigurationImpl;
@@ -47,18 +52,24 @@ import org.jboss.resteasy.reactive.common.util.CaseInsensitiveMap;
 import io.quarkus.arc.Arc;
 import io.quarkus.arc.ArcContainer;
 import io.quarkus.arc.InstanceHandle;
+import io.quarkus.proxy.ProxyConfiguration;
+import io.quarkus.proxy.ProxyConfigurationRegistry;
 import io.quarkus.rest.client.reactive.runtime.ProxyAddressUtil.HostAndPort;
+import io.quarkus.rest.client.reactive.runtime.context.HttpClientOptionsContextResolver;
 import io.quarkus.restclient.config.RestClientsConfig;
 import io.quarkus.tls.TlsConfiguration;
 import io.smallrye.config.SmallRyeConfig;
+import io.vertx.core.http.HttpClientOptions;
+import io.vertx.core.http.HttpClientRequest;
 import io.vertx.core.net.KeyCertOptions;
+import io.vertx.core.net.ProxyType;
 import io.vertx.core.net.SSLOptions;
 import io.vertx.core.net.TrustOptions;
 
 /**
  * Builder implementation for MicroProfile Rest Client
  */
-public class RestClientBuilderImpl implements RestClientBuilder {
+public class RestClientBuilderImpl implements RestClientBuilder, VertxRequestCustomizingClientBuilder<RestClientBuilderImpl> {
 
     private static final String DEFAULT_MAPPER_DISABLED = "microprofile.rest.client.disable.default.mapper";
     private static final String TLS_TRUST_ALL = "quarkus.tls.trust-all";
@@ -81,15 +92,19 @@ public class RestClientBuilderImpl implements RestClientBuilder {
     private String proxyUser;
     private String proxyPassword;
     private String nonProxyHosts;
+    private Duration proxyConnectTimeout;
+    private ProxyType proxyType;
 
     private ClientLogger clientLogger;
     private LoggingScope loggingScope;
     private Integer loggingBodyLimit;
+    private Set<String> maskedHeaders;
 
     private Boolean trustAll;
     private String userAgent;
     private Boolean disableDefaultMapper;
     private Boolean enableCompression;
+    private Consumer<HttpClientOptions> clientOptionsCustomizer;
 
     @Override
     public RestClientBuilderImpl baseUrl(URL url) {
@@ -237,6 +252,24 @@ public class RestClientBuilderImpl implements RestClientBuilder {
         return this;
     }
 
+    public RestClientBuilderImpl proxyConnectTimeout(Duration proxyConnectTimeout) {
+        this.proxyConnectTimeout = proxyConnectTimeout;
+        return this;
+    }
+
+    public RestClientBuilderImpl proxyType(io.quarkus.proxy.ProxyType proxyType) {
+        this.proxyType = toVertxProxyType(proxyType);
+        return this;
+    }
+
+    static ProxyType toVertxProxyType(io.quarkus.proxy.ProxyType type) {
+        return switch (type) {
+            case HTTP -> ProxyType.HTTP;
+            case SOCKS4 -> ProxyType.SOCKS4;
+            case SOCKS5 -> ProxyType.SOCKS5;
+        };
+    }
+
     public RestClientBuilderImpl multipartPostEncoderMode(String mode) {
         this.multipartPostEncoderMode = mode;
         return this;
@@ -254,6 +287,11 @@ public class RestClientBuilderImpl implements RestClientBuilder {
 
     public RestClientBuilderImpl loggingBodyLimit(Integer limit) {
         this.loggingBodyLimit = limit;
+        return this;
+    }
+
+    public RestClientBuilderImpl loggingMaskedHeaders(Set<String> maskedHeaders) {
+        this.maskedHeaders = maskedHeaders;
         return this;
     }
 
@@ -275,6 +313,43 @@ public class RestClientBuilderImpl implements RestClientBuilder {
     public RestClientBuilderImpl enableCompression(boolean enableCompression) {
         this.enableCompression = enableCompression;
         return this;
+    }
+
+    @Override
+    public RestClientBuilderImpl httpClientOptions(Class<? extends HttpClientOptions> httpClientOptionsClass) {
+        HttpClientOptions bean = BeanGrabber.getBeanIfDefined(httpClientOptionsClass);
+        if (bean == null) {
+            throw new IllegalArgumentException("Failed to instantiate the HTTP client options " + httpClientOptionsClass
+                    + ". Make sure the bean is properly configured for CDI injection.");
+        }
+
+        return httpClientOptions(bean);
+    }
+
+    @Override
+    public RestClientBuilderImpl httpClientOptions(HttpClientOptions httpClientOptions) {
+        register(new HttpClientOptionsContextResolver(httpClientOptions));
+        return this;
+    }
+
+    public RestClientBuilderImpl clientOptionsCustomizer(Consumer<HttpClientOptions> clientOptionsCustomizer) {
+        clientBuilder.clientOptionsCustomizer(clientOptionsCustomizer);
+        return this;
+    }
+
+    @Override
+    public RestClientBuilderImpl httpClientOptionsCustomizer(Consumer<HttpClientOptions> httpClientOptionsCustomizer) {
+        return clientOptionsCustomizer(httpClientOptionsCustomizer);
+    }
+
+    public RestClientBuilderImpl clientRequestCustomizer(Consumer<HttpClientRequest> clientRequestCustomizer) {
+        clientBuilder.clientRequestCustomizer(clientRequestCustomizer);
+        return this;
+    }
+
+    @Override
+    public RestClientBuilderImpl httpClientRequestCustomizer(Consumer<HttpClientRequest> httpClientOptionsCustomizer) {
+        return clientRequestCustomizer(httpClientOptionsCustomizer);
     }
 
     @Override
@@ -453,9 +528,7 @@ public class RestClientBuilderImpl implements RestClientBuilder {
 
         RestClientsConfig.RestClientLoggingConfig configRootLogging = restClients.logging();
 
-        Integer defaultLoggingBodyLimit = 100;
         LoggingScope effectiveLoggingScope = LoggingScope.NONE;
-        Integer effectiveLoggingBodyLimit = defaultLoggingBodyLimit;
         if (getConfiguration().hasProperty(QuarkusRestClientProperties.LOGGING_SCOPE)) {
             effectiveLoggingScope = (LoggingScope) getConfiguration().getProperty(QuarkusRestClientProperties.LOGGING_SCOPE);
         } else if (loggingScope != null) { //scope, specified programmatically, takes precedence over global configuration
@@ -463,6 +536,9 @@ public class RestClientBuilderImpl implements RestClientBuilder {
         } else if (configRootLogging != null) {
             effectiveLoggingScope = configRootLogging.scope().map(LoggingScope::forName).orElse(LoggingScope.NONE);
         }
+        clientBuilder.loggingScope(effectiveLoggingScope);
+
+        Integer effectiveLoggingBodyLimit = 100;
         if (getConfiguration().hasProperty(QuarkusRestClientProperties.LOGGING_BODY_LIMIT)) {
             effectiveLoggingBodyLimit = (Integer) getConfiguration()
                     .getProperty(QuarkusRestClientProperties.LOGGING_BODY_LIMIT);
@@ -471,8 +547,20 @@ public class RestClientBuilderImpl implements RestClientBuilder {
         } else if (configRootLogging != null) {
             effectiveLoggingBodyLimit = configRootLogging.bodyLimit();
         }
-        clientBuilder.loggingScope(effectiveLoggingScope);
         clientBuilder.loggingBodySize(effectiveLoggingBodyLimit);
+
+        Set<String> effectiveMaskedHeaders = Collections.emptySet();
+        if (getConfiguration().hasProperty(QuarkusRestClientProperties.LOGGING_MASKED_HEADERS)) {
+            //noinspection unchecked
+            effectiveMaskedHeaders = (Set<String>) getConfiguration()
+                    .getProperty(QuarkusRestClientProperties.LOGGING_MASKED_HEADERS);
+        } else if (maskedHeaders != null) { //maskedHeaders, specified programmatically, takes precedence over global configuration
+            effectiveMaskedHeaders = maskedHeaders;
+        } else if (configRootLogging != null) {
+            effectiveMaskedHeaders = configRootLogging.maskedHeaders().orElse(Collections.emptySet());
+        }
+        clientBuilder.maskedHeaders(effectiveMaskedHeaders);
+
         if (clientLogger != null) {
             clientBuilder.clientLogger(clientLogger);
         } else {
@@ -538,6 +626,13 @@ public class RestClientBuilderImpl implements RestClientBuilder {
             clientBuilder.http2(true);
         }
 
+        if (getConfiguration().hasProperty(QuarkusRestClientProperties.HTTP2_UPGRADE_MAX_CONTENT_LENGTH)) {
+            clientBuilder.http2UpgradeMaxContentLength(
+                    (int) getConfiguration().getProperty(QuarkusRestClientProperties.HTTP2_UPGRADE_MAX_CONTENT_LENGTH));
+        } else if (restClients.http2UpgradeMaxContentLength().isPresent()) {
+            clientBuilder.http2UpgradeMaxContentLength((int) restClients.http2UpgradeMaxContentLength().get().asLongValue());
+        }
+
         if (getConfiguration().hasProperty(QuarkusRestClientProperties.ALPN)) {
             clientBuilder.alpn((Boolean) getConfiguration().getProperty(QuarkusRestClientProperties.ALPN));
         } else if (restClients.alpn().isPresent()) {
@@ -561,11 +656,32 @@ public class RestClientBuilderImpl implements RestClientBuilder {
         }
 
         if (proxyHost != null) {
-            configureProxy(proxyHost, proxyPort, proxyUser, proxyPassword, nonProxyHosts);
+            configureProxy(proxyHost, proxyPort, proxyUser, proxyPassword, nonProxyHosts, proxyConnectTimeout, proxyType);
         } else if (restClients.proxyAddress().isPresent()) {
             HostAndPort globalProxy = ProxyAddressUtil.parseAddress(restClients.proxyAddress().get());
-            configureProxy(globalProxy.host, globalProxy.port, restClients.proxyUser().orElse(null),
-                    restClients.proxyPassword().orElse(null), restClients.nonProxyHosts().orElse(null));
+            configureProxy(
+                    globalProxy.host,
+                    globalProxy.port,
+                    restClients.proxyUser().orElse(null),
+                    restClients.proxyPassword().orElse(null),
+                    restClients.nonProxyHosts().orElse(null),
+                    restClients.proxyConnectTimeout().orElse(null),
+                    null);
+        } else {
+            /* Check the named proxy configuration on the rest-client extension level or fallback to global proxy settings */
+            final ProxyConfigurationRegistry registry = Arc.container().select(ProxyConfigurationRegistry.class).get();
+            registry.get(restClients.proxyConfigurationName())
+                    .map(ProxyConfiguration::assertHttpType)
+                    .ifPresent(proxyConfig -> {
+                        configureProxy(
+                                proxyConfig.host(),
+                                proxyConfig.port(),
+                                proxyConfig.username().orElse(null),
+                                proxyConfig.password().orElse(null),
+                                proxyConfig.nonProxyHosts().map(nph -> String.join(",", nph)).orElse(null),
+                                proxyConfig.proxyConnectTimeout().orElse(null),
+                                toVertxProxyType(proxyConfig.type()));
+                    });
         }
 
         if (!clientBuilder.getConfiguration().hasProperty(QuarkusRestClientProperties.MULTIPART_ENCODER_MODE)) {
@@ -597,7 +713,7 @@ public class RestClientBuilderImpl implements RestClientBuilder {
     }
 
     private void configureProxy(String proxyHost, Integer proxyPort, String proxyUser, String proxyPassword,
-            String nonProxyHosts) {
+            String nonProxyHosts, Duration proxyConnectTimeout, io.vertx.core.net.ProxyType proxyType) {
         if (proxyHost != null) {
             clientBuilder.proxy(proxyHost, proxyPort);
             if (proxyUser != null && proxyPassword != null) {
@@ -607,6 +723,13 @@ public class RestClientBuilderImpl implements RestClientBuilder {
 
             if (nonProxyHosts != null) {
                 clientBuilder.nonProxyHosts(nonProxyHosts);
+            }
+
+            if (proxyConnectTimeout != null) {
+                clientBuilder.proxyConnectTimeout(proxyConnectTimeout);
+            }
+            if (proxyType != null) {
+                clientBuilder.proxyType(proxyType);
             }
         }
     }

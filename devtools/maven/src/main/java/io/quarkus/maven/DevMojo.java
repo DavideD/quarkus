@@ -1,8 +1,6 @@
 package io.quarkus.maven;
 
 import static io.quarkus.analytics.dto.segment.TrackEventType.DEV_MODE;
-import static io.quarkus.maven.QuarkusBootstrapMojo.CLOSE_BOOTSTRAPPED_APP_PARAM;
-import static io.quarkus.maven.QuarkusBootstrapMojo.MODE_PARAM;
 import static io.smallrye.common.expression.Expression.Flag.LENIENT_SYNTAX;
 import static io.smallrye.common.expression.Expression.Flag.NO_TRIM;
 import static java.util.Collections.emptyMap;
@@ -25,7 +23,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -94,6 +91,7 @@ import org.eclipse.aether.util.artifact.JavaScopes;
 import org.fusesource.jansi.internal.Kernel32;
 
 import io.quarkus.bootstrap.BootstrapConstants;
+import io.quarkus.bootstrap.app.ApplicationModelSerializer;
 import io.quarkus.bootstrap.app.ConfiguredClassLoading;
 import io.quarkus.bootstrap.app.QuarkusBootstrap;
 import io.quarkus.bootstrap.devmode.DependenciesFilter;
@@ -329,6 +327,14 @@ public class DevMojo extends AbstractMojo {
     private boolean noDeps = false;
 
     /**
+     * Optional list of files to watch for changes that trigger a hot reload in dev mode.
+     * This is useful for extensions developers that can set this property to their extension's
+     * artifacts in their local repository.
+     */
+    @Parameter(property = "watchedFiles", required = false)
+    private List<String> watchedFiles = List.of();
+
+    /**
      * Additional parameters to pass to javac when recompiling changed
      * source files.
      */
@@ -543,6 +549,7 @@ public class DevMojo extends AbstractMojo {
         try {
             DevModeRunner runner = new DevModeRunner(bootstrapId);
             Map<Path, Long> pomFiles = readPomFileTimestamps(runner);
+            Map<Path, Long> additionalWatchedFiles = readAdditionaWatchedFilesTimestampts(watchedFiles);
             runner.run();
             long nextCheck = System.currentTimeMillis() + 100;
             for (;;) {
@@ -559,20 +566,12 @@ public class DevMojo extends AbstractMojo {
                         }
                         return;
                     }
-                    List<String> changedPoms = List.of();
-                    for (Map.Entry<Path, Long> e : pomFiles.entrySet()) {
-                        long t = Files.getLastModifiedTime(e.getKey()).toMillis();
-                        if (t > e.getValue()) {
-                            if (changedPoms.isEmpty()) {
-                                // unless it's a git or some other command, there won't be many POMs modified in 100 milliseconds
-                                changedPoms = new ArrayList<>(1);
-                            }
-                            changedPoms.add(e.getKey().toString());
-                            pomFiles.put(e.getKey(), t);
-                        }
-                    }
-                    if (!changedPoms.isEmpty()) {
-                        logPomChanges(changedPoms);
+                    // we need to keep POM files changes separated for reactor distinctions
+                    List<String> changedPoms = collectChangeFilesFrom(pomFiles);
+                    List<String> changedFiles = collectChangeFilesFrom(additionalWatchedFiles);
+                    changedFiles.addAll(changedPoms);
+                    if (!changedFiles.isEmpty()) {
+                        logChanges(changedFiles);
 
                         // stop the runner before we build the new one as the debug port being free
                         // is tested when building the runner
@@ -581,7 +580,7 @@ public class DevMojo extends AbstractMojo {
                         final DevModeRunner newRunner;
                         try {
                             bootstrapId = handleAutoCompile(changedPoms);
-                            newRunner = new DevModeRunner(runner.commandLine.getDebugPort(), bootstrapId);
+                            newRunner = new DevModeRunner(runner.commandLine.getDebugPort(), bootstrapId, pomFiles.keySet());
                         } catch (Exception e) {
                             getLog().info("Could not load changedPoms pom.xml file, changes not applied", e);
                             continue;
@@ -596,11 +595,24 @@ public class DevMojo extends AbstractMojo {
         }
     }
 
-    private void logPomChanges(List<String> changedPoms) {
+    private List<String> collectChangeFilesFrom(Map<Path, Long> paths) throws IOException {
+        // unless it's a git or some other command, there won't be many files modified in 100 milliseconds
+        List<String> changedFiles = new ArrayList<>(1);
+        for (Map.Entry<Path, Long> e : paths.entrySet()) {
+            long t = Files.getLastModifiedTime(e.getKey()).toMillis();
+            if (t > e.getValue()) {
+                changedFiles.add(e.getKey().toString());
+                paths.put(e.getKey(), t);
+            }
+        }
+        return changedFiles;
+    }
+
+    private void logChanges(List<String> changedFiles) {
         final StringBuilder sb = new StringBuilder().append("Restarting dev mode following changes in ");
-        sb.append(changedPoms.get(0));
-        for (int i = 1; i < changedPoms.size(); ++i) {
-            sb.append(", ").append(changedPoms.get(i));
+        sb.append(changedFiles.get(0));
+        for (int i = 1; i < changedFiles.size(); ++i) {
+            sb.append(", ").append(changedFiles.get(i));
         }
         getLog().info(sb.toString());
     }
@@ -779,9 +791,7 @@ public class DevMojo extends AbstractMojo {
             var colon = goal.lastIndexOf(':');
             if (colon >= 0) {
                 var plugin = pluginPrefixes.get(goal.substring(0, colon));
-                if (plugin == null) {
-                    getLog().warn("Failed to locate plugin for " + goal);
-                } else {
+                if (plugin != null) {
                     executedPluginGoals.computeIfAbsent(plugin.getId(), k -> new ArrayList<>()).add(goal.substring(colon + 1));
                 }
             }
@@ -826,9 +836,9 @@ public class DevMojo extends AbstractMojo {
      * @param reloadPoms POM files to be reloaded from disk instead of taken from the reactor
      * @return map of parameters for the Quarkus plugin goals
      */
-    private static Map<String, String> getQuarkusGoalParams(String bootstrapId, List<String> reloadPoms) {
+    private Map<String, String> getQuarkusGoalParams(String bootstrapId, List<String> reloadPoms) {
         final Map<String, String> result = new HashMap<>(4);
-        result.put(QuarkusBootstrapMojo.MODE_PARAM, LaunchMode.DEVELOPMENT.name());
+        result.put(QuarkusBootstrapMojo.MODE_PARAM, getLaunchModeClasspath().name());
         result.put(QuarkusBootstrapMojo.CLOSE_BOOTSTRAPPED_APP_PARAM, "false");
         result.put(QuarkusBootstrapMojo.BOOTSTRAP_ID_PARAM, bootstrapId);
         if (reloadPoms != null && !reloadPoms.isEmpty()) {
@@ -1139,6 +1149,15 @@ public class DevMojo extends AbstractMojo {
         return ret;
     }
 
+    private Map<Path, Long> readAdditionaWatchedFilesTimestampts(List<String> watchedFiles) throws IOException {
+        Map<Path, Long> ret = new HashMap<>();
+        for (String file : watchedFiles) {
+            Path p = Path.of(file);
+            ret.put(p, Files.getLastModifiedTime(p).toMillis());
+        }
+        return ret;
+    }
+
     private String getSourceEncoding() {
         Object sourceEncodingProperty = project.getProperties().get("project.build.sourceEncoding");
         if (sourceEncodingProperty != null) {
@@ -1316,11 +1335,11 @@ public class DevMojo extends AbstractMojo {
         private Process process;
 
         private DevModeRunner(String bootstrapId) throws Exception {
-            commandLine = newLauncher(null, bootstrapId);
+            commandLine = newLauncher(null, bootstrapId, Set.of());
         }
 
-        private DevModeRunner(String actualDebugPort, String bootstrapId) throws Exception {
-            commandLine = newLauncher(actualDebugPort, bootstrapId);
+        private DevModeRunner(String actualDebugPort, String bootstrapId, Set<Path> reloadPoms) throws Exception {
+            commandLine = newLauncher(actualDebugPort, bootstrapId, reloadPoms);
         }
 
         Collection<Path> pomFiles() {
@@ -1372,7 +1391,7 @@ public class DevMojo extends AbstractMojo {
         }
     }
 
-    private DevModeCommandLine newLauncher(String actualDebugPort, String bootstrapId) throws Exception {
+    private DevModeCommandLine newLauncher(String actualDebugPort, String bootstrapId, Set<Path> reloadPoms) throws Exception {
         String java = null;
         // See if a toolchain is configured
         if (toolchainManager != null) {
@@ -1401,7 +1420,7 @@ public class DevMojo extends AbstractMojo {
             builder.jvmArgs("-Dquarkus-internal.test.specific-selection=maven:" + test);
         }
 
-        if (openJavaLang) {
+        if (openJavaLang || Runtime.version().feature() >= 24) {
             builder.addOpens("java.base/java.lang=ALL-UNNAMED");
         }
 
@@ -1513,11 +1532,11 @@ public class DevMojo extends AbstractMojo {
                     .setRemoteRepositories(repos)
                     .setWorkspaceDiscovery(true)
                     .setPreferPomsFromWorkspace(true)
-                    // it's important to set the base directory instead of the POM
-                    // which maybe manipulated by a plugin and stored outside the base directory
-                    .setCurrentProject(project.getBasedir().toString())
+                    .setCurrentProject(project.getFile().toString())
                     .setEffectiveModelBuilder(BootstrapMavenContextConfig.getEffectiveModelBuilderProperty(projectProperties))
                     .setRootProjectDir(rootProjectDir);
+            // to support Maven plugins and extensions manipulating POM files
+            QuarkusBootstrapProvider.setProvidedModules(mvnConfig, session, toFiles(reloadPoms));
 
             // There are a couple of reasons we don't want to use the original Maven session:
             // 1) a reload could be triggered by a change in a pom.xml, in which case the Maven session might not be in sync anymore with the effective POM;
@@ -1525,7 +1544,7 @@ public class DevMojo extends AbstractMojo {
             // the Maven resolver will be checking for newer snapshots in the remote repository and might end up resolving the artifact from there.
             final BootstrapMavenContext mvnCtx = workspaceProvider.createMavenContext(mvnConfig);
             appModel = new BootstrapAppModelResolver(new MavenArtifactResolver(mvnCtx))
-                    .setDevMode(true)
+                    .setDevMode(getLaunchModeClasspath().isDevOrTest())
                     .setTest(LaunchMode.TEST.equals(getLaunchModeClasspath()))
                     .setCollectReloadableDependencies(!noDeps)
                     .setLegacyModelResolver(BootstrapAppModelResolver.isLegacyModelResolver(project.getProperties()))
@@ -1536,7 +1555,7 @@ public class DevMojo extends AbstractMojo {
                 .extensionDevModeJvmOptionFilter(extensionJvmOptions);
 
         // serialize the app model to avoid re-resolving it in the dev process
-        BootstrapUtils.serializeAppModel(appModel, appModelLocation);
+        ApplicationModelSerializer.serialize(appModel, appModelLocation);
         builder.jvmArgs("-D" + BootstrapConstants.SERIALIZED_APP_MODEL + "=" + appModelLocation);
 
         if (noDeps) {
@@ -1610,9 +1629,13 @@ public class DevMojo extends AbstractMojo {
             jvmArgs = buf.toString();
         }
         if (jvmArgs != null) {
-            builder.jvmArgs(Arrays.asList(CommandLineUtils.translateCommandline(jvmArgs)));
+            final String[] arr = CommandLineUtils.translateCommandline(jvmArgs);
+            final List<String> list = new ArrayList<>(arr.length);
+            for (var s : arr) {
+                list.add(s.trim());
+            }
+            builder.jvmArgs(list);
         }
-
     }
 
     private void copySurefireVariables() {
@@ -1861,5 +1884,19 @@ public class DevMojo extends AbstractMojo {
         String getExecutionId() {
             return execution == null ? null : execution.getId();
         }
+    }
+
+    private static Set<File> toFiles(Set<Path> paths) {
+        if (paths == null) {
+            return null;
+        }
+        if (paths.isEmpty()) {
+            return Set.of();
+        }
+        Set<File> files = new HashSet<>(paths.size());
+        for (Path path : paths) {
+            files.add(path.toFile());
+        }
+        return files;
     }
 }

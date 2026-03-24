@@ -14,9 +14,15 @@ import org.testcontainers.DockerClientFactory;
 import com.github.dockerjava.api.model.Container;
 import com.github.dockerjava.api.model.ContainerPort;
 
+import io.quarkus.devservices.crossclassloader.runtime.RunningDevServicesRegistry;
 import io.quarkus.runtime.LaunchMode;
 
 public class ContainerLocator {
+
+    // Read the UUID off the RunningDevServicesRegistry, because it's guaranteed to be parent-first, unlike this class
+    public static final BiPredicate<Container, String> IS_NOT_CREATED_BY_US_SELECTOR = (container,
+            expectedLabel) -> !RunningDevServicesRegistry.APPLICATION_UUID
+                    .equals(container.getLabels().get(Labels.QUARKUS_PROCESS_UUID));
 
     private static final Logger log = Logger.getLogger(ContainerLocator.class);
 
@@ -37,12 +43,12 @@ public class ContainerLocator {
     private final int port;
 
     public ContainerLocator(String devServiceLabel, int port) {
-        this.filter = (container, expectedLabel) -> expectedLabel.equals(container.getLabels().get(devServiceLabel));
-        this.port = port;
+        this((container, expectedLabel) -> expectedLabel.equals(container.getLabels().get(devServiceLabel)), port);
     }
 
     public ContainerLocator(BiPredicate<Container, String> filter, int port) {
-        this.filter = filter;
+        // Always tack on an extra filter to rule out containers which were clearly created by this process
+        this.filter = filter.and(IS_NOT_CREATED_BY_US_SELECTOR);
         this.port = port;
     }
 
@@ -58,6 +64,10 @@ public class ContainerLocator {
     }
 
     private Optional<ContainerPort> getMappedPort(Container container, int port) {
+        if (container.getPorts() == null) {
+            return Optional.empty();
+        }
+
         return Arrays.stream(container.getPorts())
                 .filter(containerPort -> hasMatchingPort(containerPort, port))
                 .findAny();
@@ -93,6 +103,10 @@ public class ContainerLocator {
         if (shared && launchMode == LaunchMode.DEVELOPMENT) {
             return lookup(serviceName).findAny()
                     .map(container -> {
+                        if (container.getPorts() == null) {
+                            return container.getId();
+                        }
+
                         Arrays.stream(container.getPorts())
                                 .filter(cp -> Objects.nonNull(cp.getPublicPort()) && Objects.nonNull(cp.getPrivatePort()))
                                 .forEach(cp -> {

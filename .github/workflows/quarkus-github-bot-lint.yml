@@ -1,5 +1,8 @@
 name: quarkus-github-bot.yml lint
 
+permissions:
+  contents: read
+
 on:
   push:
     paths:
@@ -13,7 +16,7 @@ jobs:
     name: "quarkus-github-bot.yml validation"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: install yamllint
         shell: bash
         run: sudo apt-get install -y yamllint

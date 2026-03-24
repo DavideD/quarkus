@@ -9,6 +9,8 @@ import io.quarkus.deployment.util.ContainerRuntimeUtil;
 public class TestNativeConfig implements NativeConfig {
 
     private final NativeConfig.BuilderImageConfig builderImage;
+    private List<String> additionalBuildArgs;
+    private List<String> additionalBuildArgsAppend;
 
     public TestNativeConfig(String builderImage) {
         this(builderImage, ImagePullStrategy.ALWAYS);
@@ -22,8 +24,19 @@ public class TestNativeConfig implements NativeConfig {
         this.builderImage = new TestBuildImageConfig(builderImage, builderImagePull);
     }
 
+    public TestNativeConfig(List<String> additionalBuildArgs, List<String> additionalBuildArgsAppend) {
+        this("dummy", ImagePullStrategy.NEVER);
+        this.additionalBuildArgs = additionalBuildArgs;
+        this.additionalBuildArgsAppend = additionalBuildArgsAppend;
+    }
+
     public boolean enabled() {
         return true;
+    }
+
+    @Override
+    public Bundle bundle() {
+        return null;
     }
 
     public boolean sourcesOnly() {
@@ -32,12 +45,18 @@ public class TestNativeConfig implements NativeConfig {
 
     @Override
     public Optional<List<String>> additionalBuildArgs() {
-        return Optional.empty();
+        if (additionalBuildArgs == null) {
+            return Optional.empty();
+        }
+        return Optional.of(additionalBuildArgs);
     }
 
     @Override
     public Optional<List<String>> additionalBuildArgsAppend() {
-        return Optional.empty();
+        if (additionalBuildArgsAppend == null) {
+            return Optional.empty();
+        }
+        return Optional.of(additionalBuildArgsAppend);
     }
 
     @Override
@@ -51,33 +70,8 @@ public class TestNativeConfig implements NativeConfig {
     }
 
     @Override
-    public boolean enableAllSecurityServices() {
-        return false;
-    }
-
-    @Override
-    public boolean inlineBeforeAnalysis() {
-        return false;
-    }
-
-    @Override
-    public boolean enableJni() {
-        return false;
-    }
-
-    @Override
     public boolean headless() {
         return false;
-    }
-
-    @Override
-    public Optional<String> userLanguage() {
-        return Optional.empty();
-    }
-
-    @Override
-    public Optional<String> userCountry() {
-        return Optional.empty();
     }
 
     @Override
@@ -116,22 +110,12 @@ public class TestNativeConfig implements NativeConfig {
     }
 
     @Override
-    public boolean cleanupServer() {
-        return false;
-    }
-
-    @Override
     public boolean enableIsolates() {
         return false;
     }
 
     @Override
     public boolean enableFallbackImages() {
-        return false;
-    }
-
-    @Override
-    public boolean enableServer() {
         return false;
     }
 
@@ -188,11 +172,6 @@ public class TestNativeConfig implements NativeConfig {
     @Override
     public Optional<List<MonitoringOption>> monitoring() {
         return Optional.empty();
-    }
-
-    @Override
-    public boolean fullStackTraces() {
-        return false;
     }
 
     @Override

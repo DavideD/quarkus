@@ -8,11 +8,20 @@ import static io.quarkus.vertx.core.runtime.SSLConfigHelper.configurePfxTrustOpt
 import static io.vertx.core.file.impl.FileResolverImpl.CACHE_DIR_BASE_PROP_NAME;
 
 import java.io.File;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -29,6 +38,7 @@ import io.quarkus.arc.Arc;
 import io.quarkus.arc.InstanceHandle;
 import io.quarkus.runtime.*;
 import io.quarkus.runtime.annotations.Recorder;
+import io.quarkus.runtime.shutdown.ShutdownConfig;
 import io.quarkus.vertx.core.runtime.config.AddressResolverConfiguration;
 import io.quarkus.vertx.core.runtime.config.ClusterConfiguration;
 import io.quarkus.vertx.core.runtime.config.EventBusConfiguration;
@@ -38,6 +48,7 @@ import io.quarkus.vertx.mdc.provider.LateBoundMDCProvider;
 import io.quarkus.vertx.runtime.VertxCurrentContextFactory;
 import io.quarkus.vertx.runtime.jackson.QuarkusJacksonFactory;
 import io.smallrye.common.cpu.ProcessorInfo;
+import io.smallrye.mutiny.infrastructure.Infrastructure;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Context;
 import io.vertx.core.Handler;
@@ -51,6 +62,8 @@ import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.impl.VertxBuilder;
 import io.vertx.core.impl.VertxImpl;
 import io.vertx.core.impl.VertxThread;
+import io.vertx.core.spi.VerticleFactory;
+import io.vertx.core.spi.VertxServiceProvider;
 import io.vertx.core.spi.VertxThreadFactory;
 import io.vertx.core.spi.resolver.ResolverProvider;
 
@@ -89,13 +102,25 @@ public class VertxCoreRecorder {
      */
     private static volatile ClassLoader currentDevModeNewThreadCreationClassLoader;
 
-    public Supplier<Vertx> configureVertx(VertxConfiguration config, ThreadPoolConfig threadPoolConfig,
-            LaunchMode launchMode, ShutdownContext shutdown, List<Consumer<VertxOptions>> customizers,
-            ExecutorService executorProxy) {
+    private final RuntimeValue<VertxConfiguration> vertxConfig;
+    private final RuntimeValue<ThreadPoolConfig> threadPoolConfig;
+    private final RuntimeValue<ShutdownConfig> shutdownConfig;
+
+    public VertxCoreRecorder(RuntimeValue<VertxConfiguration> vertxConfig, RuntimeValue<ThreadPoolConfig> threadPoolConfig,
+            RuntimeValue<ShutdownConfig> shutdownConfig) {
+        this.vertxConfig = vertxConfig;
+        this.threadPoolConfig = threadPoolConfig;
+        this.shutdownConfig = shutdownConfig;
+    }
+
+    public Supplier<Vertx> configureVertx(LaunchMode launchMode, ShutdownContext shutdown,
+            List<Consumer<VertxOptions>> customizers, List<VertxServiceProvider> vertxServiceProviders,
+            List<VerticleFactory> verticleFactories, ExecutorService executorProxy) {
         // The wrapper previously here to prevent the executor to be shutdown prematurely is moved to higher level to the io.quarkus.runtime.ExecutorRecorder
         QuarkusExecutorFactory.sharedExecutor = executorProxy;
         if (launchMode != LaunchMode.DEVELOPMENT) {
-            vertx = new VertxSupplier(launchMode, config, customizers, threadPoolConfig, shutdown);
+            vertx = new VertxSupplier(launchMode, vertxConfig.getValue(), customizers, threadPoolConfig.getValue(), shutdown,
+                    vertxServiceProviders, verticleFactories);
             // we need this to be part of the last shutdown tasks because closing it early (basically before Arc)
             // could cause problem to beans that rely on Vert.x and contain shutdown tasks
             shutdown.addLastShutdownTask(new Runnable() {
@@ -108,7 +133,8 @@ public class VertxCoreRecorder {
             });
         } else {
             if (vertx == null) {
-                vertx = new VertxSupplier(launchMode, config, customizers, threadPoolConfig, shutdown);
+                vertx = new VertxSupplier(launchMode, vertxConfig.getValue(), customizers, threadPoolConfig.getValue(),
+                        shutdown, vertxServiceProviders, verticleFactories);
             } else if (vertx.v != null) {
                 tryCleanTccl();
             }
@@ -199,7 +225,8 @@ public class VertxCoreRecorder {
 
     public static Vertx initialize(VertxConfiguration conf, VertxOptionsCustomizer customizer,
             ThreadPoolConfig threadPoolConfig, ShutdownContext shutdown,
-            LaunchMode launchMode) {
+            LaunchMode launchMode, List<VertxServiceProvider> vertxServiceProviders,
+            List<VerticleFactory> verticleFactories) {
 
         VertxOptions options = new VertxOptions();
 
@@ -225,6 +252,8 @@ public class VertxCoreRecorder {
         if (conf != null && conf.cluster() != null && conf.cluster().clustered()) {
             CompletableFuture<Vertx> latch = new CompletableFuture<>();
             new VertxBuilder(options)
+                    .serviceProviders(vertxServiceProviders)
+                    .verticleFactories(verticleFactories)
                     .threadFactory(vertxThreadFactory)
                     .executorServiceFactory(new QuarkusExecutorFactory(conf, launchMode))
                     .init().clusteredVertx(new Handler<AsyncResult<Vertx>>() {
@@ -240,6 +269,8 @@ public class VertxCoreRecorder {
             vertx = latch.join();
         } else {
             vertx = new VertxBuilder(options)
+                    .serviceProviders(vertxServiceProviders)
+                    .verticleFactories(verticleFactories)
                     .threadFactory(vertxThreadFactory)
                     .executorServiceFactory(new QuarkusExecutorFactory(conf, launchMode))
                     .init().vertx();
@@ -343,6 +374,7 @@ public class VertxCoreRecorder {
                 File cache = getRandomDirectory(tmp);
                 LOGGER.debugf("Vert.x Cache configured to: %s", cache.getAbsolutePath());
                 fileSystemOptions.setFileCacheDir(cache.getAbsolutePath());
+                fileSystemOptions.setFileCacheDirAsExactPath(true);
                 if (shutdown != null) {
                     shutdown.addLastShutdownTask(new Runnable() {
                         @Override
@@ -357,6 +389,7 @@ public class VertxCoreRecorder {
             }
         } else {
             fileSystemOptions.setFileCacheDir(fileCacheDir);
+            fileSystemOptions.setFileCacheDirAsExactPath(true);
         }
 
         options.setFileSystemOptions(fileSystemOptions);
@@ -425,7 +458,14 @@ public class VertxCoreRecorder {
                 }
             });
             try {
-                latch.await();
+                // Use configured shutdown timeout or default to 10 seconds
+                long timeoutMillis = shutdownConfig.getValue().timeout()
+                        .map(duration -> duration.toMillis())
+                        .orElse(10000L);
+                boolean completed = latch.await(timeoutMillis, TimeUnit.MILLISECONDS);
+                if (!completed) {
+                    LOGGER.warn("Vert.x shutdown timed out after " + timeoutMillis + "ms");
+                }
                 if (problem.get() != null) {
                     throw new IllegalStateException("Error when closing Vert.x instance", problem.get());
                 }
@@ -544,10 +584,10 @@ public class VertxCoreRecorder {
         };
     }
 
-    public Supplier<Integer> calculateEventLoopThreads(VertxConfiguration conf) {
+    public Supplier<Integer> calculateEventLoopThreads() {
         int threads;
-        if (conf.eventLoopsPoolSize().isPresent()) {
-            threads = conf.eventLoopsPoolSize().getAsInt();
+        if (vertxConfig.getValue().eventLoopsPoolSize().isPresent()) {
+            threads = vertxConfig.getValue().eventLoopsPoolSize().getAsInt();
         } else {
             threads = calculateDefaultIOThreads();
         }
@@ -663,7 +703,8 @@ public class VertxCoreRecorder {
     }
 
     public static Supplier<Vertx> recoverFailedStart(VertxConfiguration config, ThreadPoolConfig threadPoolConfig) {
-        return vertx = new VertxSupplier(LaunchMode.DEVELOPMENT, config, Collections.emptyList(), threadPoolConfig, null);
+        return vertx = new VertxSupplier(LaunchMode.DEVELOPMENT, config, Collections.emptyList(), threadPoolConfig, null,
+                List.of(), List.of());
 
     }
 
@@ -680,22 +721,28 @@ public class VertxCoreRecorder {
         final VertxOptionsCustomizer customizer;
         final ThreadPoolConfig threadPoolConfig;
         final ShutdownContext shutdown;
+        final List<VertxServiceProvider> vertxServiceProviders;
+        final List<VerticleFactory> verticleFactories;
         Vertx v;
 
         VertxSupplier(LaunchMode launchMode, VertxConfiguration config, List<Consumer<VertxOptions>> customizers,
                 ThreadPoolConfig threadPoolConfig,
-                ShutdownContext shutdown) {
+                ShutdownContext shutdown,
+                List<VertxServiceProvider> vertxServiceProviders, List<VerticleFactory> verticleFactories) {
             this.launchMode = launchMode;
             this.config = config;
             this.customizer = new VertxOptionsCustomizer(customizers);
             this.threadPoolConfig = threadPoolConfig;
             this.shutdown = shutdown;
+            this.vertxServiceProviders = vertxServiceProviders;
+            this.verticleFactories = verticleFactories;
         }
 
         @Override
         public synchronized Vertx get() {
             if (v == null) {
-                v = initialize(config, customizer, threadPoolConfig, shutdown, launchMode);
+                v = initialize(config, customizer, threadPoolConfig, shutdown, launchMode, vertxServiceProviders,
+                        verticleFactories);
             }
             return v;
         }
@@ -735,5 +782,10 @@ public class VertxCoreRecorder {
             }
         }
         directory.delete();
+    }
+
+    public void wrapMainExecutorForMutiny(ScheduledExecutorService service) {
+        VertxTimerAwareScheduledExecutorService wrapper = new VertxTimerAwareScheduledExecutorService(service);
+        Infrastructure.setDefaultExecutor(wrapper, false);
     }
 }

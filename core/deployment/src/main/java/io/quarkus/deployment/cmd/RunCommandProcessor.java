@@ -1,7 +1,7 @@
 package io.quarkus.deployment.cmd;
 
-import static io.quarkus.deployment.pkg.steps.JarResultBuildStep.DEFAULT_FAST_JAR_DIRECTORY_NAME;
-import static io.quarkus.deployment.pkg.steps.JarResultBuildStep.QUARKUS_RUN_JAR;
+import static io.quarkus.deployment.pkg.jar.FastJarFormat.DEFAULT_FAST_JAR_DIRECTORY_NAME;
+import static io.quarkus.deployment.pkg.jar.FastJarFormat.QUARKUS_RUN_JAR;
 
 import java.io.File;
 import java.nio.file.Path;
@@ -37,7 +37,7 @@ public class RunCommandProcessor {
             // todo: legacy JAR should be using runnerSuffix()
             case LEGACY_JAR -> jar.getOutputDirectory()
                     .resolve(jar.getBaseName() + packageConfig.computedRunnerSuffix() + ".jar");
-            case FAST_JAR, MUTABLE_JAR -> jar.getOutputDirectory()
+            case FAST_JAR, MUTABLE_JAR, AOT_JAR -> jar.getOutputDirectory()
                     .resolve(DEFAULT_FAST_JAR_DIRECTORY_NAME).resolve(QUARKUS_RUN_JAR);
         };
 

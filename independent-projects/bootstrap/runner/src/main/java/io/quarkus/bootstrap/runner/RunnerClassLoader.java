@@ -39,32 +39,46 @@ public final class RunnerClassLoader extends ClassLoader {
     private final Map<String, ClassLoadingResource[]> resourceDirectoryMap;
 
     private final Set<String> parentFirstPackages;
-    private final Set<String> nonExistentResources;
     // the following two fields go hand in hand - they need to both be populated from the same data
     // in order for the resource loading to work properly
     // normally this field would be a set, but it only contains 2 elements, so making it a list is actually better
     private final List<String> fullyIndexedDirectories;
-    private final Map<String, ClassLoadingResource[]> directlyIndexedResourcesIndexMap;
+    private final Map<String, ClassLoadingResource[]> fullyIndexedResourcesIndexMap;
+
+    private final ClassLoadingResource generatedBytecodeClassLoadingResource;
+    private final Set<String> generatedBytecode;
+    private final ClassLoadingResource transformedBytecodeClassLoadingResource;
+    private final Set<String> transformedBytecode;
 
     //Mutations protected by synchronization on the field value itself:
     private final ClassLoadingResource[] currentlyBufferedResources = new ClassLoadingResource[4];//Experimentally found to be a reasonable number
     //Protected by synchronization on the above field, as they are related.
     private boolean postBootPhase = false;
 
+    @SuppressWarnings("FieldCanBeLocal") // needs to be a field for CraC to work
     private final CracResource resource;
 
     RunnerClassLoader(ClassLoader parent, Map<String, ClassLoadingResource[]> resourceDirectoryMap,
-            Set<String> parentFirstPackages, Set<String> nonExistentResources,
-            List<String> fullyIndexedDirectories, Map<String, ClassLoadingResource[]> directlyIndexedResourcesIndexMap) {
+            Set<String> parentFirstPackages,
+            List<String> fullyIndexedDirectories, Map<String, ClassLoadingResource[]> fullyIndexedResourcesIndexMap,
+            ClassLoadingResource generatedBytecodeClassLoadingResource, Set<String> generatedBytecode,
+            ClassLoadingResource transformedBytecodeClassLoadingResource, Set<String> transformedBytecode) {
         super(parent);
         this.resourceDirectoryMap = resourceDirectoryMap;
         this.parentFirstPackages = parentFirstPackages;
-        this.nonExistentResources = nonExistentResources;
         this.fullyIndexedDirectories = fullyIndexedDirectories;
-        this.directlyIndexedResourcesIndexMap = directlyIndexedResourcesIndexMap;
+        this.fullyIndexedResourcesIndexMap = fullyIndexedResourcesIndexMap;
+        this.generatedBytecodeClassLoadingResource = generatedBytecodeClassLoadingResource;
+        this.generatedBytecode = generatedBytecode;
+        this.transformedBytecodeClassLoadingResource = transformedBytecodeClassLoadingResource;
+        this.transformedBytecode = transformedBytecode;
 
-        resource = new CracResource();
-        org.crac.Core.getGlobalContext().register(resource);
+        if (CracSupport.isEnabled()) {
+            resource = new CracResource();
+            org.crac.Core.getGlobalContext().register(resource);
+        } else {
+            resource = null;
+        }
     }
 
     @Override
@@ -102,6 +116,13 @@ public final class RunnerClassLoader extends ClassLoader {
         if (resources != null) {
             String classResource = fromClassNameToResourceName(name);
             for (ClassLoadingResource resource : resources) {
+                if (resource == generatedBytecodeClassLoadingResource && !generatedBytecode.contains(classResource)) {
+                    continue;
+                }
+                if (resource == transformedBytecodeClassLoadingResource && !transformedBytecode.contains(classResource)) {
+                    continue;
+                }
+
                 accessingResource(resource);
                 byte[] data = resource.getResourceData(classResource);
                 if (data == null) {
@@ -147,7 +168,10 @@ public final class RunnerClassLoader extends ClassLoader {
     }
 
     private Class<?> defineClass(String name, byte[] data, ClassLoadingResource resource) {
-        Class<?> loaded;
+        Class<?> loaded = findLoadedClass(name);
+        if (loaded != null) {
+            return loaded;
+        }
         try {
             return defineClass(name, data, 0, data.length, resource.getProtectionDomain());
         } catch (LinkageError e) {
@@ -203,12 +227,10 @@ public final class RunnerClassLoader extends ClassLoader {
     @Override
     protected URL findResource(String name) {
         name = sanitizeName(name);
-        if (nonExistentResources.contains(name)) {
+        ClassLoadingResource[] resources = getClassLoadingResources(name);
+        if (resources == null) {
             return null;
         }
-        ClassLoadingResource[] resources = getClassLoadingResources(name);
-        if (resources == null)
-            return null;
         for (ClassLoadingResource resource : resources) {
             accessingResource(resource);
             URL data = resource.getResourceURL(name);
@@ -227,18 +249,12 @@ public final class RunnerClassLoader extends ClassLoader {
     }
 
     private ClassLoadingResource[] getClassLoadingResources(final String name) {
-        ClassLoadingResource[] resources = directlyIndexedResourcesIndexMap.get(name);
+        ClassLoadingResource[] resources = fullyIndexedResourcesIndexMap.get(name);
         if (resources != null) {
             return resources;
         }
         String dirName = getDirNameFromResourceName(name);
-        if (dirName == null) {
-            dirName = "";
-        }
-        if (!dirName.equals(name) && fullyIndexedDirectories.contains(dirName)) {
-            if (dirName.isEmpty()) {
-                return resourceDirectoryMap.get(name);
-            }
+        if (fullyIndexedDirectories.contains(dirName)) {
             // If we arrive here, we know that resource being queried belongs to one of the fully indexed directories
             // Had that resource existed however, it would have been present in directlyIndexedResourcesIndexMap
             return null;
@@ -254,9 +270,6 @@ public final class RunnerClassLoader extends ClassLoader {
     @Override
     protected Enumeration<URL> findResources(String name) {
         name = sanitizeName(name);
-        if (nonExistentResources.contains(name)) {
-            return Collections.emptyEnumeration();
-        }
         ClassLoadingResource[] resources = getClassLoadingResources(name);
         if (resources == null)
             return Collections.emptyEnumeration();
@@ -285,23 +298,21 @@ public final class RunnerClassLoader extends ClassLoader {
     private String getDirNameFromResourceName(String resourceName) {
         final int index = resourceName.lastIndexOf('/');
         if (index == -1) {
-            // we return null here since in this case no package is defined
-            // this is same behavior as Package.getPackage(clazz) exhibits
-            // when the class is in the default package
-            return null;
+            // return the root directory as it was fully indexed
+            return "";
         }
         return resourceName.substring(0, index);
     }
 
     /**
-     * This method is needed to make packages work correctly on JDK9+, as it will be called
+     * This method is needed to make packages work correctly, as it will be called
      * to load the package-info class.
      *
      * @param moduleName
      * @param name
      * @return
      */
-    //@Override
+    @Override
     protected Class<?> findClass(String moduleName, String name) {
         try {
             return loadClass(name, false);

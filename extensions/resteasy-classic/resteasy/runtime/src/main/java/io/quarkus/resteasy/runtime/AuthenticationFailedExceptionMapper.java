@@ -42,10 +42,12 @@ public class AuthenticationFailedExceptionMapper implements ExceptionMapper<Auth
                         .await().indefinitely();
                 int statusCode = challengeData == null ? 401 : challengeData.status;
                 Response.ResponseBuilder responseBuilder = Response.status(statusCode);
-                if (challengeData != null && challengeData.headerName != null) {
-                    responseBuilder.header(challengeData.headerName.toString(), challengeData.headerContent);
+                if (challengeData != null) {
+                    for (var e : challengeData.getHeaders().entrySet()) {
+                        responseBuilder.header(e.getKey().toString(), e.getValue());
+                    }
                 }
-                if (LaunchMode.isDev() && exception.getMessage() != null && statusCode == 401) {
+                if (LaunchMode.current().isDev() && exception.getMessage() != null && statusCode == 401) {
                     responseBuilder.entity(exception.getMessage());
                 }
                 log.debugf("Returning an authentication challenge, status code: %d", statusCode);
@@ -56,7 +58,7 @@ public class AuthenticationFailedExceptionMapper implements ExceptionMapper<Auth
         } else {
             log.error("RoutingContext is not found, returning HTTP status 401");
         }
-        if (LaunchMode.isDev() && exception.getMessage() != null) {
+        if (LaunchMode.current().isDev() && exception.getMessage() != null) {
             return Response.status(401).entity(exception.getMessage()).build();
         }
         return Response.status(401).entity("Not Authenticated").build();

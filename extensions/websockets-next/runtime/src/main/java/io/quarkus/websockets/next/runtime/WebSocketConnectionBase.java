@@ -8,6 +8,7 @@ import javax.net.ssl.SSLSession;
 
 import org.jboss.logging.Logger;
 
+import io.netty.handler.codec.http.websocketx.WebSocketCloseStatus;
 import io.quarkus.vertx.utils.NoBoundChecksBuffer;
 import io.quarkus.websockets.next.CloseReason;
 import io.quarkus.websockets.next.Connection;
@@ -21,6 +22,7 @@ import io.vertx.core.buffer.impl.BufferImpl;
 import io.vertx.core.http.WebSocketBase;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
+import io.vertx.core.net.SocketAddress;
 
 public abstract class WebSocketConnectionBase implements Connection {
 
@@ -155,6 +157,11 @@ public abstract class WebSocketConnectionBase implements Connection {
     }
 
     @Override
+    public String subprotocol() {
+        return webSocket().subProtocol();
+    }
+
+    @Override
     public Instant creationTime() {
         return creationTime;
     }
@@ -168,9 +175,13 @@ public abstract class WebSocketConnectionBase implements Connection {
         WebSocketBase ws = webSocket();
         if (ws.isClosed()) {
             Short code = ws.closeStatusCode();
-            if (code == null) {
+            if (code == null || code == WebSocketCloseStatus.EMPTY.code()) {
                 // This could happen if the connection is terminated abruptly
-                return CloseReason.INTERNAL_SERVER_ERROR;
+                return CloseReason.EMPTY;
+            }
+            if (code == WebSocketCloseStatus.ABNORMAL_CLOSURE.code()) {
+                // This could happen if a close frame is never received
+                return CloseReason.ABNORMAL;
             }
             return new CloseReason(code, ws.closeReason());
         }
@@ -180,6 +191,25 @@ public abstract class WebSocketConnectionBase implements Connection {
     @Override
     public UserData userData() {
         return userData;
+    }
+
+    protected static class HandshakeRequestBase {
+
+        protected String formatSocketAddress(SocketAddress socketAddress) {
+            if (socketAddress == null) {
+                return null;
+            }
+            if (socketAddress.isInetSocket() && socketAddress.hostAddress() != null) {
+                return socketAddress.hostAddress() + ":" + socketAddress.port();
+            }
+            if (socketAddress.isInetSocket() && socketAddress.hostName() != null) {
+                return socketAddress.hostName() + ":" + socketAddress.port();
+            }
+            if (socketAddress.isDomainSocket()) {
+                return socketAddress.path();
+            }
+            return null;
+        }
     }
 
 }

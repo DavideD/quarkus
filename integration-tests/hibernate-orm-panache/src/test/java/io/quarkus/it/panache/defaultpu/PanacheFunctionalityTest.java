@@ -48,6 +48,9 @@ public class PanacheFunctionalityTest {
         RestAssured.when().get("/test/model2").then().body(is("OK"));
         RestAssured.when().get("/test/projection").then().body(is("OK"));
         RestAssured.when().get("/test/projection-nested").then().body(is("OK"));
+        RestAssured.when().get("/test/projection-constructor-annotation").then().body(is("OK"));
+        RestAssured.when().get("/test/projection-projected-field-name").then().body(is("OK"));
+        RestAssured.when().get("/test/projection-no-arguments-constructor").then().body(is("OK"));
         RestAssured.when().get("/test/model3").then().body(is("OK"));
     }
 
@@ -198,7 +201,7 @@ public class PanacheFunctionalityTest {
         RestAssured.when()
                 .get("/q/metrics")
                 .then()
-                .body(containsString("vendor_hibernate_cache_update_timestamps_requests_total{entityManagerFactory=\""
+                .body(containsString("hibernate_cache_update_timestamps_requests_total{entityManagerFactory=\""
                         + PersistenceUnitUtil.DEFAULT_PERSISTENCE_UNIT_NAME + "\",result=\"miss\"}"));
     }
 

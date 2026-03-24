@@ -39,6 +39,8 @@ triage:
   discussions:
     monitoredCategories: [33575230]
   guardedBranches:
+    - ref: '3.27'
+      notify: [jmartisk, gsmet, gastaldi, rsvoboda, aloubyansky]
     - ref: '3.20'
       notify: [jmartisk, gsmet, gastaldi, rsvoboda, aloubyansky]
     - ref: '3.15'
@@ -49,7 +51,7 @@ triage:
     - id: amazon-lambda
       labels: [area/amazon-lambda]
       title: "lambda"
-      notify: [patriot1burke, matejvasek]
+      notify: [patriot1burke]
       directories:
         - extensions/amazon-lambda
         - integration-tests/amazon-lambda
@@ -99,7 +101,7 @@ triage:
     - id: jbang
       labels: [area/jbang]
       titleBody: "jbang"
-      notify: [quarkusio/devtools, maxandersen]
+      notify: [quarkusio/devtools]
       directories:
         - "**/*JBang*"
         - "**/*jbang*"
@@ -114,21 +116,28 @@ triage:
         - devtools/platform-descriptor-json/src/main/resources/templates/
     - id: hibernate-reactive
       labels: [area/hibernate-reactive]
-      title: "hibernate.reactive"
       expression: |
+        // Fuzzy match; to avoid false positives we match on title and add exclusions on title+body
         matches("hibernate", title) && matches("reactive", title)
-        && !matches("hibernate.validator", title)
+        && !matches("hibernate.validator", titleBody)
         && !matches("hibernate.search", titleBody)
+        // Stricter match; lesser risk of false positive so we match on title+body and don't add exclusions
+        || matches("hibernate.reactive", titleBody)
       notify: [DavideD, gavinking]
       directories:
         - extensions/hibernate-reactive
     - id: hibernate-orm
       labels: [area/hibernate-orm]
       expression: |
-        matches("hibernate", title) && !matches("reactive", title)
-        && !matches("hibernate.validator", title)
+        // Fuzzy match; to avoid false positives we match on title and add exclusions on title+body
+        matches("hibernate", title)
+        && !matches("reactive", title)
+        && !matches("hibernate.validator", titleBody)
         && !matches("hibernate.search", titleBody)
         && !matches("hibernate.reactive", titleBody)
+        // Stricter match; lesser risk of false positive so we match on title+body and don't add exclusions
+        || matches("hibernate.orm", titleBody)
+        || matches("hibernate-core", titleBody)
       notify: [gsmet]
       notifyInPullRequest: true
       directories:
@@ -142,7 +151,11 @@ triage:
         - integration-tests/infinispan-cache-jpa
     - id: hibernate-search
       labels: [area/hibernate-search]
-      title: "hibernate.search"
+      expression: |
+        // Fuzzy match; to avoid false positives we match on title
+        matches("hibernate", title) && matches("search", title)
+        // Stricter match; lesser risk of false positive so we match on title+body and don't add exclusions
+        || matches("hibernate.search", titleBody)
       notify: [gsmet, marko-bekhta]
       notifyInPullRequest: true
       directories:
@@ -160,7 +173,13 @@ triage:
         - integration-tests/elasticsearch
     - id: hibernate-validator
       labels: [area/hibernate-validator]
-      title: "hibernate.validator"
+      expression: |
+        // Fuzzy match; to avoid false positives we match on title
+        (matches("hibernate", title) && matches("validator", title)
+        || matches("jakarta", title) && matches("validation", title))
+        // Stricter match; lesser risk of false positive so we match on title+body and don't add exclusions
+        || matches("hibernate.validator", titleBody)
+        || matches("jakarta.validation", titleBody)
       notify: [gsmet, marko-bekhta]
       directories:
         # No trailing slashes: we also match sibling directories starting with these names
@@ -235,14 +254,7 @@ triage:
     - id: bearer-token
       labels: [area/security, area/oidc]
       title: "bearer"
-      notify: [sberyozkin, pedroigor]
-    - id: metrics
-      labels: [area/metrics, area/smallrye]
-      title: "metrics"
-      notify: [jmartisk, ebullient]
-      notifyInPullRequest: true
-      directories:
-        - extensions/smallrye-metrics
+      notify: [sberyozkin]
     - id: micrometer
       labels: [area/metrics]
       title: "micrometer"
@@ -314,7 +326,7 @@ triage:
     - id: spring
       labels: [area/spring]
       title: "spring"
-      notify: [geoand, aureamunoz]
+      notify: [geoand, aureamunoz, edeandrea]
       directories:
         - extensions/spring-
         - integration-tests/spring-
@@ -328,7 +340,7 @@ triage:
     - id: kubernetes
       labels: [area/kubernetes]
       titleBody: "kubernetes"
-      notify: [geoand, iocanel]
+      notify: [geoand]
       directories:
         - extensions/kubernetes/
         - extensions/kubernetes-client/
@@ -341,15 +353,22 @@ triage:
     - id: openshift
       labels: [area/kubernetes]
       titleBody: "openshift"
-      notify: [geoand, iocanel]
+      notify: [geoand]
     - id: knative
       labels: [area/kubernetes]
       titleBody: "knative"
-      notify: [geoand, iocanel]
-    - id: jib
-      labels: [area/container-image]
-      titleBody: "jib"
       notify: [geoand]
+    - id: container-image
+      labels: [area/container-image]
+      expression: |
+        matches("jib", titleBody)
+        || matches("container-image", titleBody)
+        || matches("docker", titleBody)
+        || matches("podman", titleBody)
+        || matches("buildpack", titleBody)
+      notify: [geoand, edeandrea]
+      directories:
+        - extensions/container-image
     - id: kafka
       labels: [area/kafka]
       notify: [cescoffier, ozangunalp, alesj]
@@ -459,7 +478,7 @@ triage:
       title: "\\b(cli)\\b"
       directories:
         - devtools/cli/
-      notify: [maxandersen,ebullient]
+      notify: [ebullient]
     - id: picocli
       labels: [area/picocli]
       title: "picocli"
@@ -584,7 +603,7 @@ triage:
       directories:
         - extensions/narayana-lra/
         - integration-tests/narayana-lra/
-      notify: [xstefank, mmusgrov]
+      notify: [xstefank, mmusgrov, marcosgopen]
     - id: neo4j
       labels: [area/neo4j]
       title: "neo4j"
@@ -595,7 +614,7 @@ triage:
     - id: oidc
       labels: [area/oidc]
       title: "oidc"
-      notify: [sberyozkin, pedroigor]
+      notify: [sberyozkin]
       directories:
         - extensions/oidc
         - integration-tests/oidc/
@@ -603,7 +622,7 @@ triage:
     - id: keycloak
       labels: [area/keycloak]
       title: "keycloak"
-      notify: [sberyozkin, pedroigor]
+      notify: [sberyozkin]
       directories:
         - extensions/keycloak
         - integration-tests/keycloak
@@ -708,7 +727,7 @@ triage:
     - id: extension-proposal
       labels: [kind/extension-proposal,area/quarkiverse]
       title: "Extension Proposal"
-      notify: [gastaldi, gsmet, aloubyansky, maxandersen]
+      notify: [gastaldi, gsmet, aloubyansky]
     - id: mailer
       labels: [area/mailer]
       expression: |
@@ -731,7 +750,7 @@ triage:
     - id: devservices
       labels: [area/devservices]
       title: "dev.?services?"
-      notify: [geoand]
+      notify: [holly-cummins, ozangunalp, geoand]
     - id: jdbc
       labels: [area/jdbc]
       title: "jdbc"
@@ -779,9 +798,5 @@ triage:
       labels: [area/virtual-threads]
       title: "(virtual.thread|RunOnVirtualThread)"
       notify: [cescoffier, ozangunalp]
-    - id: podman
-      labels: [env/podman]
-      title: "podman"
-      notify: [maxandersen]
   qe:
     notify: [rsvoboda, mjurc]

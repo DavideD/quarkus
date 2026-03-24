@@ -18,6 +18,7 @@ public final class ConfigProperty extends AbstractConfigItem {
     private final boolean map;
     private final boolean list;
     private final boolean optional;
+    private final boolean secret;
     private final String mapKey;
     private final boolean unnamedMapKey;
     private final boolean withinMap;
@@ -26,15 +27,16 @@ public final class ConfigProperty extends AbstractConfigItem {
     private final EnumAcceptedValues enumAcceptedValues;
 
     private final String defaultValue;
+    private final boolean escapeDefaultValue;
 
     private final String javadocSiteLink;
 
     public ConfigProperty(ConfigPhase phase, String sourceType, String sourceElementName, SourceElementType sourceElementType,
             PropertyPath path, List<PropertyPath> additionalPaths, String type, String typeDescription, boolean map,
-            boolean list, boolean optional,
+            boolean list, boolean optional, boolean secret,
             String mapKey, boolean unnamedMapKey, boolean withinMap, boolean converted, @JsonProperty("enum") boolean isEnum,
             EnumAcceptedValues enumAcceptedValues,
-            String defaultValue, String javadocSiteLink,
+            String defaultValue, boolean escapeDefaultValue, String javadocSiteLink,
             Deprecation deprecation) {
         super(sourceType, sourceElementName, sourceElementType, path, type, deprecation);
         this.phase = phase;
@@ -43,6 +45,7 @@ public final class ConfigProperty extends AbstractConfigItem {
         this.map = map;
         this.list = list;
         this.optional = optional;
+        this.secret = secret;
         this.mapKey = mapKey;
         this.unnamedMapKey = unnamedMapKey;
         this.withinMap = withinMap;
@@ -50,6 +53,7 @@ public final class ConfigProperty extends AbstractConfigItem {
         this.isEnum = isEnum;
         this.enumAcceptedValues = enumAcceptedValues;
         this.defaultValue = defaultValue;
+        this.escapeDefaultValue = escapeDefaultValue;
         this.javadocSiteLink = javadocSiteLink;
     }
 
@@ -87,6 +91,10 @@ public final class ConfigProperty extends AbstractConfigItem {
         return optional;
     }
 
+    public boolean isSecret() {
+        return secret;
+    }
+
     public String getMapKey() {
         return mapKey;
     }
@@ -115,6 +123,10 @@ public final class ConfigProperty extends AbstractConfigItem {
         return defaultValue;
     }
 
+    public boolean isEscapeDefaultValue() {
+        return escapeDefaultValue;
+    }
+
     public String getJavadocSiteLink() {
         return javadocSiteLink;
     }
@@ -130,6 +142,13 @@ public final class ConfigProperty extends AbstractConfigItem {
         }
 
         ConfigProperty other = (ConfigProperty) o;
+
+        // let's put the deprecated properties last
+        if (isDeprecated() && !other.isDeprecated()) {
+            return 1;
+        } else if (!isDeprecated() && other.isDeprecated()) {
+            return -1;
+        }
 
         if (isWithinMap()) {
             if (other.isWithinMap()) {

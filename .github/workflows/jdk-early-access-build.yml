@@ -1,5 +1,10 @@
 name: Quarkus Early Access JDK Build
 
+permissions:
+  contents: read
+  issues: write
+  packages: read
+
 on:
   schedule:
     # midnight every weekday + saturday
@@ -21,10 +26,11 @@ env:
   # Workaround testsuite locale issue
   LANG: en_US.UTF-8
   MAVEN_OPTS: -Xmx2g -XX:MaxMetaspaceSize=1g
-  JVM_TEST_MAVEN_OPTS: "-e -B --settings .github/mvn-settings.xml -Dtest-containers -Dstart-containers -Dtest-resteasy-reactive-large-files -Dformat.skip"
+  JVM_TEST_MAVEN_OPTS: "-e -B --settings .github/mvn-settings.xml -Dtest-containers -Dstart-containers -Dtest-resteasy-reactive-large-files -Dquarkus.test.rest-assured.enable-logging-on-failure=false -Dformat.skip"
   DB_USER: hibernate_orm_test
   DB_PASSWORD: hibernate_orm_test
   DB_NAME: hibernate_orm_test
+  MVNW_REPOURL: https://maven-central.storage-download.googleapis.com/maven2
 jobs:
   linux-jvm-test:
     name: JVM Tests - Early Access JDK ${{ matrix.version }} Build - ${{ matrix.dist }}
@@ -43,10 +49,10 @@ jobs:
             github.event_name == 'workflow_dispatch'
             && format( '{{ "include": [{{ "version": "{0}", "dist": "{1}" }}] }}',
                 github.event.inputs.jdkVersion, github.event.inputs.jdkDistribution )
-            || '{ "include": [{ "version": 20, "dist": "jdk.java.net" }, { "version": 21, "dist": "jdk.java.net" }] }'
+            || '{ "include": [{ "version": 26, "dist": "jdk.java.net" }] }'
           )
         }}
-    if: "github.repository == 'quarkusio/quarkus' || github.event_name == 'workflow_dispatch'"
+    if: github.repository == 'quarkusio/quarkus' || github.event_name == 'workflow_dispatch'
     timeout-minutes: 360
     env:
       MAVEN_OPTS: -Xmx2048m -XX:MaxMetaspaceSize=1000m
@@ -59,7 +65,7 @@ jobs:
           release: ${{ matrix.version }}
       - name: Set up JDK from other provider than jdk.java.net
         if: matrix.dist != 'jdk.java.net'
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: ${{ matrix.dist }}
           java-version: ${{ matrix.version }}
@@ -72,9 +78,13 @@ jobs:
         run: |
           ss -ln
           sudo service mysql stop || true
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && github.event.ref || 'main' }}
+      - name: Get SHA
+        id: quarkus-sha
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
       - name: Reclaim Disk Space
         run: .github/ci-prerequisites.sh
       - name: Get Date
@@ -84,7 +94,7 @@ jobs:
         shell: bash
       - name: Cache Maven Repository
         id: cache-maven
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.m2/repository
           # refresh cache every month to avoid unlimited growth
@@ -117,7 +127,7 @@ jobs:
         shell: bash
         run: find . -name '*-reports' -type d -o -name '*.log' | tar -czf test-reports.tgz -T -
       - name: Upload failure Archive (if maven failed)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: test-reports-linux-jvm${{ matrix.version }}
@@ -134,3 +144,5 @@ jobs:
           status: ${{ job.status }}
           issue-repository: ${{ github.repository }}
           issue-number: 15867
+          quarkus-sha: ${{ steps.quarkus-sha.outputs.sha }}
+          project-sha: ${{ steps.quarkus-sha.outputs.sha }}

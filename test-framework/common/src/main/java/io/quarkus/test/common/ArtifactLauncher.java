@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import io.quarkus.bootstrap.app.CuratedApplication;
 
@@ -12,13 +13,11 @@ public interface ArtifactLauncher<T extends ArtifactLauncher.InitContext> extend
 
     void init(T t);
 
-    void start() throws IOException;
+    Optional<ListeningAddress> start() throws IOException;
 
     LaunchResult runToCompletion(String[] args);
 
     void includeAsSysProps(Map<String, String> systemProps);
-
-    boolean listensOnSsl();
 
     interface InitContext {
 
@@ -27,6 +26,8 @@ public interface ArtifactLauncher<T extends ArtifactLauncher.InitContext> extend
         int httpsPort();
 
         Duration waitTime();
+
+        Duration shutdownTimeout();
 
         String testProfile();
 
@@ -47,6 +48,7 @@ public interface ArtifactLauncher<T extends ArtifactLauncher.InitContext> extend
 
             String networkId();
 
+            @Deprecated
             boolean manageNetwork();
 
             CuratedApplication getCuratedApplication();

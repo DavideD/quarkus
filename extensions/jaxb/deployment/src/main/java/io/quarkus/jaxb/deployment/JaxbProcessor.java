@@ -73,12 +73,14 @@ import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageProxyDefinitionBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBundleBuildItem;
+import io.quarkus.deployment.builditem.nativeimage.NativeImageResourcePatternsBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageSystemPropertyBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveHierarchyBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveHierarchyIgnoreWarningBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.RuntimeInitializedClassBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ServiceProviderBuildItem;
+import io.quarkus.deployment.pkg.steps.NativeOrNativeSourcesBuild;
 import io.quarkus.jaxb.runtime.JaxbConfig;
 import io.quarkus.jaxb.runtime.JaxbContextConfigRecorder;
 import io.quarkus.jaxb.runtime.JaxbContextProducer;
@@ -200,7 +202,8 @@ public class JaxbProcessor {
             BuildProducer<NativeImageResourceBundleBuildItem> resourceBundle,
             BuildProducer<RuntimeInitializedClassBuildItem> runtimeClasses,
             BuildProducer<JaxbClassesToBeBoundBuildItem> classesToBeBoundProducer,
-            ApplicationArchivesBuildItem applicationArchivesBuildItem) throws ClassNotFoundException {
+            ApplicationArchivesBuildItem applicationArchivesBuildItem,
+            List<IgnoreJaxbAnnotatedClassesBuildItem> ignoreJaxbAnnotatedClasses) throws ClassNotFoundException {
 
         List<String> classesToBeBound = new ArrayList<>();
         IndexView index = combinedIndexBuildItem.getIndex();
@@ -214,19 +217,27 @@ public class JaxbProcessor {
                 if (jaxbRootAnnotationInstance.target().kind() == Kind.CLASS
                         && !JAXB_ANNOTATIONS.contains(jaxbRootAnnotationInstance.target().asClass().getClass())) {
                     ClassInfo targetClassInfo = jaxbRootAnnotationInstance.target().asClass();
-                    final var name = targetClassInfo.name();
+                    final DotName name = targetClassInfo.name();
+                    final String stringName = name.toString();
 
-                    reflectiveHierarchies.produce(ReflectiveHierarchyBuildItem
-                            .builder(name)
-                            .index(index)
-                            .ignoreTypePredicate(t -> ReflectiveHierarchyBuildItem.DefaultIgnoreTypePredicate.INSTANCE.test(t)
-                                    || IGNORE_TYPES.contains(t))
-                            .ignoreFieldPredicate(JaxbProcessor::isFieldIgnored)
-                            .ignoreMethodPredicate(JaxbProcessor::isMethodIgnored)
-                            .source(getClass().getSimpleName() + " annotated with @" + jaxbRootAnnotation + " > " + name)
-                            .build());
-                    classesToBeBound.add(targetClassInfo.name().toString());
-                    jaxbRootAnnotationsDetected = true;
+                    if (ignoreJaxbAnnotatedClasses.stream()
+                            .map(IgnoreJaxbAnnotatedClassesBuildItem::getPredicate)
+                            .noneMatch(p -> p.test(stringName))) {
+
+                        reflectiveHierarchies.produce(ReflectiveHierarchyBuildItem
+                                .builder(name)
+                                .index(index)
+                                .ignoreTypePredicate(
+                                        t -> ReflectiveHierarchyBuildItem.DefaultIgnoreTypePredicate.INSTANCE.test(t)
+                                                || IGNORE_TYPES.contains(t))
+                                .ignoreFieldPredicate(JaxbProcessor::isFieldIgnored)
+                                .ignoreMethodPredicate(JaxbProcessor::isMethodIgnored)
+                                .source(getClass().getSimpleName() + " annotated with @" + jaxbRootAnnotation + " > " + name)
+                                .build());
+                        classesToBeBound.add(targetClassInfo.name().toString());
+                        jaxbRootAnnotationsDetected = true;
+
+                    }
                 }
             }
         }
@@ -541,5 +552,11 @@ public class JaxbProcessor {
         }
 
         return XmlAccessType.valueOf(xmlAccessorTypeAi.value().asEnum());
+    }
+
+    @BuildStep(onlyIf = NativeOrNativeSourcesBuild.class)
+    void jaxbIndex(final BuildProducer<NativeImageResourcePatternsBuildItem> resource) {
+        LOG.debug("adding jaxb.index to native image resources");
+        resource.produce(NativeImageResourcePatternsBuildItem.builder().includeGlob("**/jaxb.index").build());
     }
 }

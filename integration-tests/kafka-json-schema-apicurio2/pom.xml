@@ -10,8 +10,14 @@
     <modelVersion>4.0.0</modelVersion>
 
     <artifactId>quarkus-integration-test-kafka-json-schema-apicurio2</artifactId>
-    <name>Quarkus - Integration Tests - Kafka Json Schema with Apicurio 2.x</name>
-    <description>The Apache Kafka Json Schema with Apicurio Registry 2.x integration tests module</description>
+    <name>Quarkus - Integration Tests - Kafka Json Schema with Apicurio Registry</name>
+    <description>Apache Kafka Json Schema with Apicurio Registry 3.x integration tests - tests both v2 compatibility mode (Legacy8ByteIdHandler) and v3 native mode (Default4ByteIdHandler)</description>
+
+    <!--
+      - This module tests Apicurio Registry 3.x libraries in multiple modes:
+      - 1. V2 compatibility mode: Uses Legacy8ByteIdHandler for backward compatibility with 8-byte schema IDs
+      - 2. V3 native mode: Uses Default4ByteIdHandler for new v3 4-byte schema IDs
+      -->
 
     <dependencyManagement>
         <dependencies>
@@ -23,12 +29,12 @@
             <dependency>
                 <groupId>org.jetbrains.kotlin</groupId>
                 <artifactId>kotlin-scripting-compiler-embeddable</artifactId>
-                <version>2.1.21</version>
+                <version>2.3.10</version>
             </dependency>
             <dependency>
                 <groupId>org.json</groupId>
                 <artifactId>json</artifactId>
-                <version>20230227</version>
+                <version>20251224</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -77,7 +83,7 @@
         <!-- test dependencies -->
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-junit5</artifactId>
+            <artifactId>quarkus-junit</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -190,6 +196,14 @@
     </dependencies>
 
     <repositories>
+        <repository>
+            <id>central</id>
+            <name>Maven Central</name>
+            <url>https://repo.maven.apache.org/maven2</url>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
         <repository>
             <id>confluent</id>
             <url>https://packages.confluent.io/maven/</url>

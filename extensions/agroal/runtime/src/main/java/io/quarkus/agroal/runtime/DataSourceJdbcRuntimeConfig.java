@@ -39,7 +39,7 @@ public interface DataSourceJdbcRuntimeConfig {
     /**
      * The datasource pool maximum size
      */
-    @WithDefault("20")
+    @WithDefault("50")
     int maxSize();
 
     /**
@@ -54,6 +54,14 @@ public interface DataSourceJdbcRuntimeConfig {
      * Perform foreground validation on connections that have been idle for longer than the specified interval.
      */
     Optional<Duration> foregroundValidationInterval();
+
+    /**
+     * Maximum time to wait while attempting to connect to a database.
+     * The actual implementation of login timeout could be different in various drivers.
+     * (e.g. driver could only cover the authentication and not the entire connection creation phase)
+     */
+    @ConfigDocDefault("By default, there is no login timeout set.")
+    Optional<Duration> loginTimeout();
 
     /**
      * The timeout before cancelling the acquisition of a new connection

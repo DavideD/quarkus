@@ -1,52 +1,44 @@
 package io.quarkus.redis.deployment.client;
 
+import static io.quarkus.devservices.common.ConfigureUtil.configureSharedServiceLabel;
+import static io.quarkus.devservices.common.ConfigureUtil.getDefaultImageNameFor;
 import static io.quarkus.devservices.common.ContainerLocator.locateContainerWithLabels;
-import static io.quarkus.devservices.common.Labels.QUARKUS_DEV_SERVICE;
-import static io.quarkus.runtime.LaunchMode.DEVELOPMENT;
+import static io.quarkus.redis.runtime.client.config.RedisConfig.HOSTS;
+import static io.quarkus.redis.runtime.client.config.RedisConfig.getPropertyName;
 
-import java.io.Closeable;
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
-import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.function.Supplier;
-import java.util.stream.Collectors;
+import java.util.Set;
 
 import org.jboss.logging.Logger;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.utility.DockerImageName;
 
 import io.quarkus.deployment.Feature;
-import io.quarkus.deployment.IsNormal;
+import io.quarkus.deployment.IsDevServicesSupportedByLaunchMode;
+import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.BuildSteps;
-import io.quarkus.deployment.builditem.CuratedApplicationShutdownBuildItem;
 import io.quarkus.deployment.builditem.DevServicesComposeProjectBuildItem;
 import io.quarkus.deployment.builditem.DevServicesResultBuildItem;
-import io.quarkus.deployment.builditem.DevServicesResultBuildItem.RunningDevService;
 import io.quarkus.deployment.builditem.DevServicesSharedNetworkBuildItem;
 import io.quarkus.deployment.builditem.DockerStatusBuildItem;
 import io.quarkus.deployment.builditem.LaunchModeBuildItem;
-import io.quarkus.deployment.console.ConsoleInstalledBuildItem;
-import io.quarkus.deployment.console.StartupLogCompressor;
+import io.quarkus.deployment.builditem.Startable;
 import io.quarkus.deployment.dev.devservices.DevServicesConfig;
-import io.quarkus.deployment.logging.LoggingSetupBuildItem;
 import io.quarkus.devservices.common.ComposeLocator;
 import io.quarkus.devservices.common.ConfigureUtil;
 import io.quarkus.devservices.common.ContainerLocator;
-import io.quarkus.redis.deployment.client.RedisBuildTimeConfig.DevServiceConfiguration;
 import io.quarkus.redis.runtime.client.config.RedisConfig;
 import io.quarkus.runtime.LaunchMode;
 import io.quarkus.runtime.configuration.ConfigUtils;
 
-@BuildSteps(onlyIfNot = IsNormal.class, onlyIf = { DevServicesConfig.Enabled.class })
+@BuildSteps(onlyIf = { IsDevServicesSupportedByLaunchMode.class, DevServicesConfig.Enabled.class })
 public class DevServicesRedisProcessor {
     private static final Logger log = Logger.getLogger(DevServicesRedisProcessor.class);
-    private static final String REDIS_IMAGE = "docker.io/redis:7";
+
     private static final int REDIS_EXPOSED_PORT = 6379;
     private static final String REDIS_SCHEME = "redis://";
 
@@ -59,182 +51,140 @@ public class DevServicesRedisProcessor {
     private static final ContainerLocator redisContainerLocator = locateContainerWithLabels(REDIS_EXPOSED_PORT,
             DEV_SERVICE_LABEL);
 
-    private static final String QUARKUS = "quarkus.";
-    private static final String DOT = ".";
-    private static volatile List<RunningDevService> devServices;
-    private static volatile Map<String, DevServiceConfiguration> capturedDevServicesConfiguration;
-    private static volatile boolean first = true;
-
     @BuildStep
-    public List<DevServicesResultBuildItem> startRedisContainers(LaunchModeBuildItem launchMode,
+    public void startRedisContainers(LaunchModeBuildItem launchMode,
             DockerStatusBuildItem dockerStatusBuildItem,
             DevServicesComposeProjectBuildItem composeProjectBuildItem,
             List<DevServicesSharedNetworkBuildItem> devServicesSharedNetworkBuildItem,
             RedisBuildTimeConfig config,
-            Optional<ConsoleInstalledBuildItem> consoleInstalledBuildItem,
-            CuratedApplicationShutdownBuildItem closeBuildItem,
-            LoggingSetupBuildItem loggingSetupBuildItem,
+            BuildProducer<DevServicesResultBuildItem> devServicesResult,
             DevServicesConfig devServicesConfig) {
 
-        Map<String, DevServiceConfiguration> currentDevServicesConfiguration = new HashMap<>(config.additionalDevServices());
-        currentDevServicesConfiguration.put(RedisConfig.DEFAULT_CLIENT_NAME, config.defaultDevService());
+        Set<String> names = new HashSet<>(config.clients().keySet());
+        names.add(RedisConfig.DEFAULT_CLIENT_NAME);
 
-        // figure out if we need to shut down and restart existing redis containers
-        // if not and the redis containers have already started we just return
-        if (devServices != null) {
-            boolean restartRequired = !currentDevServicesConfiguration.equals(capturedDevServicesConfiguration);
-            if (!restartRequired) {
-                return devServices.stream().map(RunningDevService::toBuildItem).collect(Collectors.toList());
-            }
-            for (Closeable closeable : devServices) {
-                try {
-                    closeable.close();
-                } catch (Throwable e) {
-                    log.error("Failed to stop redis container", e);
-                }
-            }
-            devServices = null;
-            capturedDevServicesConfiguration = null;
-        }
-
-        capturedDevServicesConfiguration = currentDevServicesConfiguration;
-        List<RunningDevService> newDevServices = new ArrayList<>();
-
-        StartupLogCompressor compressor = new StartupLogCompressor(
-                (launchMode.isTest() ? "(test) " : "") + "Redis Dev Services Starting:", consoleInstalledBuildItem,
-                loggingSetupBuildItem);
         try {
-            for (Entry<String, DevServiceConfiguration> entry : currentDevServicesConfiguration.entrySet()) {
-                String connectionName = entry.getKey();
+            for (String name : names) {
                 boolean useSharedNetwork = DevServicesSharedNetworkBuildItem.isSharedNetworkRequired(devServicesConfig,
                         devServicesSharedNetworkBuildItem);
-                RunningDevService devService = startContainer(dockerStatusBuildItem, composeProjectBuildItem,
-                        connectionName,
-                        entry.getValue().devservices(),
-                        launchMode.getLaunchMode(),
-                        useSharedNetwork, devServicesConfig.timeout());
-                if (devService == null) {
+
+                io.quarkus.redis.deployment.client.DevServicesConfig redisConfig = config.clients().get(name).devservices();
+                if (redisDevServicesEnabled(dockerStatusBuildItem, name, redisConfig)) {
+                    // If the dev services are disabled, we don't need to do anything
                     continue;
                 }
-                newDevServices.add(devService);
-                String configKey = getConfigPrefix(connectionName) + RedisConfig.HOSTS_CONFIG_NAME;
-                log.infof("The %s redis server is ready to accept connections on %s", connectionName,
-                        devService.getConfig().get(configKey));
-            }
-            if (newDevServices.isEmpty()) {
-                compressor.closeAndDumpCaptured();
-            } else {
-                compressor.close();
+
+                DevServicesResultBuildItem discovered = discoverRunningService(composeProjectBuildItem, name,
+                        redisConfig, launchMode.getLaunchMode(), useSharedNetwork);
+                if (discovered != null) {
+                    devServicesResult.produce(discovered);
+                } else {
+                    devServicesResult
+                            .produce(DevServicesResultBuildItem.owned().feature(Feature.REDIS_CLIENT)
+                                    .serviceName(name)
+                                    .serviceConfig(redisConfig)
+                                    .startable(() -> new QuarkusPortRedisContainer(
+                                            DockerImageName
+                                                    .parse(redisConfig.imageName()
+                                                            .orElseGet(() -> getDefaultImageNameFor("redis")))
+                                                    .asCompatibleSubstituteFor("redis"),
+                                            redisConfig.port(),
+                                            composeProjectBuildItem.getDefaultNetworkId(),
+                                            useSharedNetwork)
+                                            .withEnv(redisConfig.containerEnv())
+                                            // Dev Service discovery works using a global dev service label applied in DevServicesCustomizerBuildItem
+                                            // for backwards compatibility we still add the custom label
+                                            .withSharedServiceLabel(launchMode.getLaunchMode(), redisConfig.serviceName()))
+                                    .configProvider(
+                                            Map.of(getPropertyName(name, HOSTS), s -> REDIS_SCHEME + s.getConnectionInfo()))
+                                    .build());
+                }
             }
         } catch (Throwable t) {
-            compressor.closeAndDumpCaptured();
             throw new RuntimeException(t);
         }
-
-        devServices = newDevServices;
-
-        if (first) {
-            first = false;
-            Runnable closeTask = () -> {
-                if (devServices != null) {
-                    for (Closeable closeable : devServices) {
-                        try {
-                            closeable.close();
-                        } catch (Throwable t) {
-                            log.error("Failed to stop database", t);
-                        }
-                    }
-                }
-                first = true;
-                devServices = null;
-                capturedDevServicesConfiguration = null;
-            };
-            closeBuildItem.addCloseTask(closeTask, true);
-        }
-        return devServices.stream().map(RunningDevService::toBuildItem).collect(Collectors.toList());
     }
 
-    private RunningDevService startContainer(DockerStatusBuildItem dockerStatusBuildItem,
-            DevServicesComposeProjectBuildItem composeProjectBuildItem,
+    /**
+     * The ideal re-use precedence order is the following:
+     * 1. Re-use existing dev service/container if one with compatible config exists (only knowable post-augmentation, or on the
+     * second run of a continuous testing session)
+     * 2. Use the container locator to find an external service (where applicable) (knowable at augmentation)
+     * 3. Create a new container
+     * This swaps 1 and 2, but that's actually ok. If an external service exists and is valid for this configuration,
+     * any matching service would be using it, so option 1 (an existing internal container) can't happen.
+     * If there's no external service, then the order is 1 and then 3, which is what we want.
+     * Because of how the labelling works, dev services we create will not be detected by the locator.
+     * The check for running services happens in RunnableDevService.start(), because it has to happen at runtime, not during
+     * augmentation.
+     * We cannot assume the order of container creation in augmentation would be the same as the runtime order.
+     *
+     * The container locator might find services from other tests, which would not be ok because they'd have the wrong config
+     * We can be fairly confident this isn't happening because of the tests showing config is honoured, but if we wanted to be
+     * extra sure we'd put on a special 'not external' label and filter for that, too
+     */
+    private DevServicesResultBuildItem discoverRunningService(DevServicesComposeProjectBuildItem composeProjectBuildItem,
             String name,
-            io.quarkus.redis.deployment.client.DevServicesConfig devServicesConfig, LaunchMode launchMode,
-            boolean useSharedNetwork, Optional<Duration> timeout) {
+            io.quarkus.redis.deployment.client.DevServicesConfig devServicesConfig,
+            LaunchMode launchMode,
+            boolean useSharedNetwork) {
+        return redisContainerLocator.locateContainer(devServicesConfig.serviceName(), devServicesConfig.shared(), launchMode)
+                .or(() -> ComposeLocator.locateContainer(composeProjectBuildItem,
+                        List.of(devServicesConfig.imageName().orElseGet(() -> getDefaultImageNameFor("redis"))),
+                        REDIS_EXPOSED_PORT, launchMode, useSharedNetwork))
+                .map(containerAddress -> {
+                    String redisUrl = REDIS_SCHEME + containerAddress.getUrl();
+                    return DevServicesResultBuildItem.discovered()
+                            .feature(Feature.REDIS_CLIENT)
+                            .containerId(containerAddress.getId())
+                            .config(Map.of(RedisConfig.getPropertyName(name, HOSTS), redisUrl))
+                            .build();
+                }).orElse(null);
+    }
+
+    private static boolean redisDevServicesEnabled(DockerStatusBuildItem dockerStatusBuildItem, String name,
+            io.quarkus.redis.deployment.client.DevServicesConfig devServicesConfig) {
         if (!devServicesConfig.enabled()) {
             // explicitly disabled
             log.debug("Not starting devservices for " + (RedisConfig.isDefaultClient(name) ? "default redis client" : name)
                     + " as it has been disabled in the config");
-            return null;
+            return true;
         }
 
-        String configPrefix = getConfigPrefix(name);
-
-        boolean needToStart = !ConfigUtils.isPropertyNonEmpty(configPrefix + RedisConfig.HOSTS_CONFIG_NAME);
+        // TODO - We shouldn't query runtime config during deployment
+        boolean needToStart = !ConfigUtils.isPropertyNonEmpty(RedisConfig.getPropertyName(name, HOSTS));
         if (!needToStart) {
-            log.debug("Not starting devservices for " + (RedisConfig.isDefaultClient(name) ? "default redis client" : name)
+            log.debug("Not starting dev services for " + (RedisConfig.isDefaultClient(name) ? "default redis client" : name)
                     + " as hosts have been provided");
-            return null;
+            return true;
         }
 
         if (!dockerStatusBuildItem.isContainerRuntimeAvailable()) {
             log.warn("Please configure quarkus.redis.hosts for "
                     + (RedisConfig.isDefaultClient(name) ? "default redis client" : name)
                     + " or get a working docker instance");
-            return null;
+            return true;
         }
-
-        DockerImageName dockerImageName = DockerImageName.parse(devServicesConfig.imageName().orElse(REDIS_IMAGE))
-                .asCompatibleSubstituteFor(REDIS_IMAGE);
-
-        Supplier<RunningDevService> defaultRedisServerSupplier = () -> {
-            QuarkusPortRedisContainer redisContainer = new QuarkusPortRedisContainer(dockerImageName, devServicesConfig.port(),
-                    launchMode == DEVELOPMENT ? devServicesConfig.serviceName() : null,
-                    composeProjectBuildItem.getDefaultNetworkId(),
-                    useSharedNetwork);
-            timeout.ifPresent(redisContainer::withStartupTimeout);
-            redisContainer.withEnv(devServicesConfig.containerEnv());
-            redisContainer.start();
-            String redisHost = REDIS_SCHEME + redisContainer.getHost() + ":" + redisContainer.getPort();
-            return new RunningDevService(Feature.REDIS_CLIENT.getName(), redisContainer.getContainerId(),
-                    redisContainer::close, configPrefix + RedisConfig.HOSTS_CONFIG_NAME, redisHost);
-        };
-
-        return redisContainerLocator.locateContainer(devServicesConfig.serviceName(), devServicesConfig.shared(), launchMode)
-                .or(() -> ComposeLocator.locateContainer(composeProjectBuildItem,
-                        List.of(devServicesConfig.imageName().orElse("redis")),
-                        REDIS_EXPOSED_PORT, launchMode, useSharedNetwork))
-                .map(containerAddress -> {
-                    String redisUrl = REDIS_SCHEME + containerAddress.getUrl();
-                    return new RunningDevService(Feature.REDIS_CLIENT.getName(), containerAddress.getId(),
-                            null, configPrefix + RedisConfig.HOSTS_CONFIG_NAME, redisUrl);
-                })
-                .orElseGet(defaultRedisServerSupplier);
+        return false;
     }
 
-    private String getConfigPrefix(String name) {
-        String configPrefix = QUARKUS + RedisConfig.REDIS_CONFIG_ROOT_NAME + DOT;
-        if (!RedisConfig.isDefaultClient(name)) {
-            configPrefix = configPrefix + name + DOT;
-        }
-        return configPrefix;
-    }
-
-    private static class QuarkusPortRedisContainer extends GenericContainer<QuarkusPortRedisContainer> {
+    private static class QuarkusPortRedisContainer extends GenericContainer<QuarkusPortRedisContainer> implements Startable {
         private final OptionalInt fixedExposedPort;
         private final boolean useSharedNetwork;
 
         private final String hostName;
 
-        public QuarkusPortRedisContainer(DockerImageName dockerImageName, OptionalInt fixedExposedPort, String serviceName,
+        public QuarkusPortRedisContainer(DockerImageName dockerImageName, OptionalInt fixedExposedPort,
                 String defaultNetworkId, boolean useSharedNetwork) {
             super(dockerImageName);
             this.fixedExposedPort = fixedExposedPort;
             this.useSharedNetwork = useSharedNetwork;
 
-            if (serviceName != null) {
-                withLabel(DEV_SERVICE_LABEL, serviceName);
-                withLabel(QUARKUS_DEV_SERVICE, serviceName);
-            }
             this.hostName = ConfigureUtil.configureNetwork(this, defaultNetworkId, useSharedNetwork, "redis");
+        }
+
+        public QuarkusPortRedisContainer withSharedServiceLabel(LaunchMode launchMode, String serviceName) {
+            return configureSharedServiceLabel(this, launchMode, DEV_SERVICE_LABEL, serviceName);
         }
 
         @Override
@@ -265,6 +215,15 @@ public class DevServicesRedisProcessor {
         @Override
         public String getHost() {
             return useSharedNetwork ? hostName : super.getHost();
+        }
+
+        public void close() {
+            super.close();
+        }
+
+        @Override
+        public String getConnectionInfo() {
+            return getHost() + ":" + getPort();
         }
     }
 }

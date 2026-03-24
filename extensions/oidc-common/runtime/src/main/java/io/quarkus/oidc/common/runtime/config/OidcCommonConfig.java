@@ -13,20 +13,30 @@ import io.smallrye.config.WithDefault;
 @ConfigGroup
 public interface OidcCommonConfig {
     /**
-     * The base URL of the OpenID Connect (OIDC) server, for example, `https://host:port/auth`.
-     * Do not set this property if you use 'quarkus-oidc' and the public key verification ({@link #publicKey})
-     * or certificate chain verification only ({@link #certificateChain}) is required.
-     * The OIDC discovery endpoint is called by default by appending a `.well-known/openid-configuration` path to this URL.
+     * The base URL of an OpenID Connect (OIDC) server, for example, `https://host:port/auth`.
+     * Do not set this property if you use the public key verification ({@link #publicKey})
+     * or certificate chain verification only ({@link #certificateChain}).
+     * <p>
+     * By default, when an OIDC configuration metadata discovery is enabled with the {@link #discoveryEnabled()} property,
+     * it is retrieved from a well known provider endpoint with its URL calculated by appending a value
+     * of the {@link #discoveryPath()} path such as `.well-known/openid-configuration` to this URL.
+     * <p>
      * For Keycloak, use `https://host:port/realms/{realm}`, replacing `{realm}` with the Keycloak realm name.
      */
     Optional<String> authServerUrl();
 
     /**
-     * Discovery of the OIDC endpoints.
+     * Enable discovery of the OIDC endpoints.
      * If not enabled, you must configure the OIDC endpoint URLs individually.
      */
     @ConfigDocDefault("true")
     Optional<Boolean> discoveryEnabled();
+
+    /**
+     * The relative path of the OIDC discovery endpoint.
+     */
+    @WithDefault(".well-known/openid-configuration")
+    String discoveryPath();
 
     /**
      * The relative path or absolute URL of the OIDC dynamic client registration endpoint.
@@ -228,26 +238,49 @@ public interface OidcCommonConfig {
     interface Proxy {
 
         /**
+         * The name of the proxy configuration to use.
+         * <p>
+         * If a name is configured, it uses the configuration from {@code quarkus.proxy.<name>.*}.
+         * Please note that the 'non-proxy-hosts' option is currently not supported.
+         * If a name is configured, but no proxy configuration is found with that name then an error will be thrown.
+         * <p>
+         * The default proxy configuration is <strong>not</strong> used by default.
+         */
+        Optional<String> proxyConfigurationName();
+
+        /**
          * The host name or IP address of the Proxy.<br/>
          * Note: If the OIDC adapter requires a Proxy to talk with the OIDC server (Provider),
          * set this value to enable the usage of a Proxy.
+         *
+         * @deprecated Use the proxy registry instead.
          */
+        @Deprecated(since = "3.31", forRemoval = true)
         Optional<String> host();
 
         /**
          * The port number of the Proxy. The default value is `80`.
+         *
+         * @deprecated Use the proxy registry instead.
          */
+        @Deprecated(since = "3.31", forRemoval = true)
         @WithDefault("80")
         int port();
 
         /**
          * The username, if the Proxy needs authentication.
+         *
+         * @deprecated Use the proxy registry instead.
          */
+        @Deprecated(since = "3.31", forRemoval = true)
         Optional<String> username();
 
         /**
          * The password, if the Proxy needs authentication.
+         *
+         * @deprecated Use the proxy registry instead.
          */
+        @Deprecated(since = "3.31", forRemoval = true)
         Optional<String> password();
 
     }

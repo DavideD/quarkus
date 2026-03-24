@@ -50,7 +50,7 @@
         <!-- test dependencies -->
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-junit5-internal</artifactId>
+            <artifactId>quarkus-junit-internal</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -109,12 +109,12 @@
                             <annotationProcessorPaths>
                                 <annotationProcessorPath>
                                     <groupId>org.hibernate.orm</groupId>
-                                    <artifactId>hibernate-jpamodelgen</artifactId>
+                                    <artifactId>hibernate-processor</artifactId>
                                     <version>${hibernate-orm.version}</version>
                                 </annotationProcessorPath>
                             </annotationProcessorPaths>
                             <annotationProcessors>
-                                <annotationProcessor>org.hibernate.jpamodelgen.JPAMetaModelEntityProcessor</annotationProcessor>
+                                <annotationProcessor>org.hibernate.processor.HibernateProcessor</annotationProcessor>
                             </annotationProcessors>
                         </configuration>
                     </execution>

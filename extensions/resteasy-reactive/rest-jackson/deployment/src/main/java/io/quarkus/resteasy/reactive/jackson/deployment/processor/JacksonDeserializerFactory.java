@@ -296,7 +296,7 @@ public class JacksonDeserializerFactory extends JacksonCodeGenerator {
     private Map<String, Integer> parseTypeParameters(ClassInfo classInfo, ClassCreator classCreator) {
         List<TypeVariable> typeParameters = classInfo.typeParameters();
         if (typeParameters.isEmpty()) {
-            return null;
+            return Map.of();
         }
 
         createContextualMethod(classCreator);
@@ -304,7 +304,7 @@ public class JacksonDeserializerFactory extends JacksonCodeGenerator {
         Map<String, Integer> typeParametersIndex = new HashMap<>();
         int index = 0;
         for (TypeVariable typeParameter : typeParameters) {
-            typeParametersIndex.put(typeParameter.toString(), index++);
+            typeParametersIndex.put(typeParameter.name().toString(), index++);
         }
         return typeParametersIndex;
     }
@@ -402,7 +402,7 @@ public class JacksonDeserializerFactory extends JacksonCodeGenerator {
         FieldKind fieldKind = registerTypeToBeGenerated(fieldType, fieldTypeName);
         ResultHandle typeHandle = switch (fieldKind) {
             case TYPE_VARIABLE -> {
-                Integer parameterIndex = typeParametersIndex.get(fieldType.toString());
+                Integer parameterIndex = typeParametersIndex.get(fieldTypeName);
                 if (parameterIndex == null) {
                     yield null;
                 }
@@ -475,10 +475,16 @@ public class JacksonDeserializerFactory extends JacksonCodeGenerator {
         AssignableResultHandle result = bytecode.createVariable(DescriptorUtils.typeToString(fieldType));
 
         BranchResult isValueNull = bytecode.ifNull(valueNode);
+
         BytecodeCreator isValueNullTrue = isValueNull.trueBranch();
         isValueNullTrue.assign(result, JacksonSerializationUtils.getDefaultValue(isValueNullTrue, fieldType));
 
-        BytecodeCreator isValueNullFalse = isValueNull.falseBranch();
+        BranchResult isNullNode = isValueNull.falseBranch()
+                .ifTrue(isValueNull.falseBranch().invokeVirtualMethod(ofMethod(JsonNode.class, "isNull", boolean.class),
+                        valueNode));
+        isNullNode.trueBranch().assign(result, JacksonSerializationUtils.getDefaultValue(isNullNode.trueBranch(), fieldType));
+
+        BytecodeCreator isValueNullFalse = isNullNode.falseBranch();
 
         ResultHandle convertedValue = switch (fieldType.name().toString()) {
             case "java.lang.String" -> isValueNullFalse.invokeVirtualMethod(ofMethod(JsonNode.class, "asText", String.class),

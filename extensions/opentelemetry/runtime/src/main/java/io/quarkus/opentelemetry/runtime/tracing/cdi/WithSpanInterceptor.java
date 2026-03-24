@@ -1,7 +1,6 @@
 package io.quarkus.opentelemetry.runtime.tracing.cdi;
 
-import static io.opentelemetry.semconv.incubating.CodeIncubatingAttributes.CODE_FUNCTION;
-import static io.opentelemetry.semconv.incubating.CodeIncubatingAttributes.CODE_NAMESPACE;
+import static io.opentelemetry.semconv.incubating.CodeIncubatingAttributes.CODE_FUNCTION_NAME;
 import static io.quarkus.opentelemetry.runtime.config.build.OTelBuildConfig.INSTRUMENTATION_NAME;
 
 import java.lang.annotation.Annotation;
@@ -25,12 +24,12 @@ import io.opentelemetry.instrumentation.annotations.SpanAttribute;
 import io.opentelemetry.instrumentation.annotations.WithSpan;
 import io.opentelemetry.instrumentation.api.annotation.support.MethodSpanAttributesExtractor;
 import io.opentelemetry.instrumentation.api.annotation.support.ParameterAttributeNamesExtractor;
-import io.opentelemetry.instrumentation.api.incubator.semconv.util.SpanNames;
 import io.opentelemetry.instrumentation.api.instrumenter.AttributesExtractor;
 import io.opentelemetry.instrumentation.api.instrumenter.Instrumenter;
 import io.opentelemetry.instrumentation.api.instrumenter.InstrumenterBuilder;
 import io.opentelemetry.instrumentation.api.instrumenter.SpanKindExtractor;
 import io.opentelemetry.instrumentation.api.instrumenter.SpanNameExtractor;
+import io.opentelemetry.instrumentation.api.semconv.util.SpanNames;
 import io.quarkus.arc.ArcInvocationContext;
 import io.quarkus.opentelemetry.runtime.config.runtime.OTelRuntimeConfig;
 import io.smallrye.mutiny.Multi;
@@ -172,8 +171,9 @@ public class WithSpanInterceptor {
 
         @Override
         public void onStart(AttributesBuilder attributesBuilder, Context context, MethodRequest methodRequest) {
-            attributesBuilder.put(CODE_NAMESPACE, methodRequest.getMethod().getDeclaringClass().getName());
-            attributesBuilder.put(CODE_FUNCTION, methodRequest.getMethod().getName());
+            attributesBuilder.put(CODE_FUNCTION_NAME,
+                    methodRequest.getMethod().getDeclaringClass().getName() + "." +
+                            methodRequest.getMethod().getName());
         }
 
         @Override

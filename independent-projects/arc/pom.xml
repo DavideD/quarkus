@@ -44,18 +44,19 @@
         <version.jpa>3.1.0</version.jpa>
         <version.jta>2.0.1</version.jta>
         <!-- main versions -->
-        <version.gizmo>1.9.0</version.gizmo>
-        <version.jandex>3.3.1</version.jandex>
-        <version.jboss-logging>3.6.1.Final</version.jboss-logging>
-        <version.mutiny>2.9.0</version.mutiny>
+        <version.gizmo>1.10.1</version.gizmo>
+        <version.jandex>3.5.3</version.jandex>
+        <version.gizmo2>2.1.1</version.gizmo2>
+        <version.jboss-logging>3.6.3.Final</version.jboss-logging>
+        <version.mutiny>3.1.1</version.mutiny>
         <version.bridger>1.6.Final</version.bridger>
-        <version.smallrye-common>2.12.0</version.smallrye-common>
+        <version.smallrye-common>2.17.0</version.smallrye-common>
         <!-- test versions -->
-        <version.assertj>3.27.3</version.assertj>
-        <version.junit5>5.12.2</version.junit5>
-        <version.kotlin>2.1.21</version.kotlin>
+        <version.assertj>3.27.7</version.assertj>
+        <version.junit>6.0.3</version.junit>
+        <version.kotlin>2.3.10</version.kotlin>
         <version.kotlin-coroutines>1.10.2</version.kotlin-coroutines>
-        <version.mockito>5.18.0</version.mockito>
+        <version.mockito>5.21.0</version.mockito>
         <!-- TCK versions -->
         <version.arquillian>1.7.0.Final</version.arquillian>
         <version.atinject-tck>2.0.1</version.atinject-tck>
@@ -137,11 +138,21 @@
                 <artifactId>jandex</artifactId>
                 <version>${version.jandex}</version>
             </dependency>
+            <dependency>
+                <groupId>io.smallrye</groupId>
+                <artifactId>jandex-gizmo2</artifactId>
+                <version>${version.jandex}</version>
+            </dependency>
 
             <dependency>
                 <groupId>io.quarkus.gizmo</groupId>
                 <artifactId>gizmo</artifactId>
                 <version>${version.gizmo}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.quarkus.gizmo</groupId>
+                <artifactId>gizmo2</artifactId>
+                <version>${version.gizmo2}</version>
             </dependency>
 
             <dependency>
@@ -152,11 +163,11 @@
                 <scope>import</scope>
             </dependency>
 
-            <!-- JUnit 5 dependencies, imported as a BOM -->
+            <!-- JUnit dependencies, imported as a BOM -->
             <dependency>
                 <groupId>org.junit</groupId>
                 <artifactId>junit-bom</artifactId>
-                <version>${version.junit5}</version>
+                <version>${version.junit}</version>
                 <scope>import</scope>
                 <type>pom</type>
             </dependency>

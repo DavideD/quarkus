@@ -4,6 +4,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import io.quarkus.datasource.common.runtime.DataSourceUtil;
+import io.quarkus.runtime.annotations.ConfigDocIgnore;
 import io.quarkus.runtime.annotations.ConfigDocMapKey;
 import io.quarkus.runtime.annotations.ConfigPhase;
 import io.quarkus.runtime.annotations.ConfigRoot;
@@ -37,11 +38,12 @@ public interface DataSourcesBuildTimeConfig {
     boolean healthEnabled();
 
     /**
-     * Whether or not datasource metrics are published in case a metrics extension is present.
+     * Whether datasource metrics are published in case a metrics extension is present.
      * <p>
      * This is a global setting and is not specific to a datasource.
      * <p>
-     * NOTE: This is different from the "jdbc.enable-metrics" property that needs to be set on the JDBC datasource level to
+     * NOTE: This is different from the <code>quarkus.datasource."datasource name".jdbc.metrics.enabled</code> property that
+     * needs to be set on the JDBC datasource level to
      * enable collection of metrics for that datasource.
      */
     @WithName("metrics.enabled")
@@ -52,18 +54,14 @@ public interface DataSourcesBuildTimeConfig {
      * Only here to detect configuration errors.
      * <p>
      * This used to be runtime but we don't really care, we just want to catch invalid configurations.
-     *
-     * @deprecated
      */
-    @Deprecated
+    @ConfigDocIgnore
     Optional<String> url();
 
     /**
      * Only here to detect configuration errors.
-     *
-     * @deprecated
      */
-    @Deprecated
+    @ConfigDocIgnore
     Optional<String> driver();
 
     default boolean hasNamedDataSources() {

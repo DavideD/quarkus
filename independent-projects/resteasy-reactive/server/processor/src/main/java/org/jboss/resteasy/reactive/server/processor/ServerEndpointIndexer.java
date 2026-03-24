@@ -18,6 +18,7 @@ import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNa
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.MULTI_VALUED_MAP;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.OFFSET_DATE_TIME;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.OFFSET_TIME;
+import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.PERIOD;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.SET;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.SORTED_SET;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.YEAR;
@@ -81,6 +82,7 @@ import org.jboss.resteasy.reactive.server.core.parameters.converters.OffsetTimeP
 import org.jboss.resteasy.reactive.server.core.parameters.converters.OptionalConverter;
 import org.jboss.resteasy.reactive.server.core.parameters.converters.ParameterConverterSupplier;
 import org.jboss.resteasy.reactive.server.core.parameters.converters.PathSegmentParamConverter;
+import org.jboss.resteasy.reactive.server.core.parameters.converters.PeriodParamConverter;
 import org.jboss.resteasy.reactive.server.core.parameters.converters.RuntimeResolvedConverter;
 import org.jboss.resteasy.reactive.server.core.parameters.converters.SetConverter;
 import org.jboss.resteasy.reactive.server.core.parameters.converters.SortedSetConverter;
@@ -384,6 +386,10 @@ public class ServerEndpointIndexer
         // records do not have field injection, we use their constructor, so field rules do not apply
         boolean applyFieldRules = !currentClassInfo.isRecord();
         for (FieldInfo field : currentClassInfo.fields()) {
+            // We don't do any injection in static fields
+            if (Modifier.isStatic(field.flags())) {
+                continue;
+            }
             Map<DotName, AnnotationInstance> annotations = new HashMap<>();
             for (AnnotationInstance i : field.annotations()) {
                 annotations.put(i.name(), i);
@@ -393,6 +399,10 @@ public class ServerEndpointIndexer
                     annotations, field.type(), "%s", new Object[] { field }, applyFieldRules, hasRuntimeConverters,
                     // We don't support annotation-less path params in injectable beans: only annotations
                     Collections.emptySet(), field.name(), EMPTY_STRING_ARRAY, new HashMap<>());
+            if (currentClassInfo.isRecord() && result.getType() == ParameterType.BODY) {
+                throw new DeploymentException(
+                        "Body parameters (or non-annotated fields) are not allowed for records. Make sure to annotate your record components with @Rest* or @*Param or that they can be injected as context objects.");
+            }
             if ((result.getType() != null) && (result.getType() != ParameterType.BEAN)) {
                 //BODY means no annotation, so for fields not injectable
                 fieldExtractors.put(field, result);
@@ -636,6 +646,8 @@ public class ServerEndpointIndexer
             return new YearParamConverter.Supplier(format, dateTimeFormatterProviderClassName);
         } else if (YEAR_MONTH.equals(paramType)) {
             return new YearMonthParamConverter.Supplier(format, dateTimeFormatterProviderClassName);
+        } else if (PERIOD.equals(paramType)) {
+            return new PeriodParamConverter.Supplier();
         }
 
         throw new RuntimeException(

@@ -16,7 +16,7 @@ import io.quarkus.deployment.builditem.ExtensionSslNativeSupportBuildItem;
 import io.quarkus.oidc.client.registration.OidcClientRegistration;
 import io.quarkus.oidc.client.registration.OidcClientRegistrations;
 import io.quarkus.oidc.client.registration.runtime.OidcClientRegistrationRecorder;
-import io.quarkus.oidc.client.registration.runtime.OidcClientRegistrationsConfig;
+import io.quarkus.proxy.deployment.ProxyRegistryBuildItem;
 import io.quarkus.tls.deployment.spi.TlsRegistryBuildItem;
 import io.quarkus.vertx.core.deployment.CoreVertxBuildItem;
 
@@ -31,14 +31,14 @@ public class OidcClientRegistrationBuildStep {
     @Record(ExecutionTime.RUNTIME_INIT)
     @BuildStep
     public void setup(
-            OidcClientRegistrationsConfig oidcConfig,
             OidcClientRegistrationRecorder recorder,
             CoreVertxBuildItem vertxBuildItem,
             TlsRegistryBuildItem tlsRegistry,
+            ProxyRegistryBuildItem proxyRegistryBuildItem,
             BuildProducer<SyntheticBeanBuildItem> syntheticBean) {
 
-        OidcClientRegistrations oidcClientRegistrations = recorder.setup(oidcConfig, vertxBuildItem.getVertx(),
-                tlsRegistry.registry());
+        OidcClientRegistrations oidcClientRegistrations = recorder.setup(vertxBuildItem.getVertx(),
+                tlsRegistry.registry(), proxyRegistryBuildItem.registry());
 
         syntheticBean.produce(SyntheticBeanBuildItem.configure(OidcClientRegistration.class).unremovable()
                 .types(OidcClientRegistration.class)

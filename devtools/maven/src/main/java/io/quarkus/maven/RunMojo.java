@@ -1,7 +1,9 @@
 package io.quarkus.maven;
 
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -22,6 +24,7 @@ import io.quarkus.deployment.builditem.DevServicesLauncherConfigResultBuildItem;
 import io.quarkus.deployment.cmd.RunCommandActionResultBuildItem;
 import io.quarkus.deployment.cmd.StartDevServicesAndRunCommandHandler;
 import io.quarkus.runtime.LaunchMode;
+import io.smallrye.common.process.ProcessBuilder;
 
 @Mojo(name = "run")
 public class RunMojo extends QuarkusBootstrapMojo {
@@ -30,6 +33,27 @@ public class RunMojo extends QuarkusBootstrapMojo {
      */
     @Parameter
     Map<String, String> systemProperties = Collections.emptyMap();
+
+    /**
+     * Additional system properties meant to be passed on the command line in a formal like
+     * {@code -DsysProps=prop1=val1,prop2=val2}
+     */
+    @Parameter(defaultValue = "${sysProps}")
+    String additionalSystemProperties;
+
+    /**
+     * The list of environment variables with which the process will be launched. To be specified in a format like
+     * {@code -DenvVars=VAR1=val1,VAR2=val2}
+     */
+    @Parameter(defaultValue = "${envVars}")
+    String environmentVariables;
+
+    /**
+     * The list of program arguments with which the process will be launched. To be specified in a format like
+     * {@code -Dargs=1,2,k=v}
+     */
+    @Parameter(defaultValue = "${args}")
+    String programArguments;
 
     @Override
     protected boolean beforeExecute() throws MojoExecutionException, MojoFailureException {
@@ -54,12 +78,12 @@ public class RunMojo extends QuarkusBootstrapMojo {
             }
         }
 
-        try (CuratedApplication curatedApplication = bootstrapApplication(LaunchMode.NORMAL,
+        try (CuratedApplication curatedApplication = bootstrapApplication(LaunchMode.RUN,
                 new Consumer<QuarkusBootstrap.Builder>() {
                     @Override
                     public void accept(QuarkusBootstrap.Builder builder) {
                         // we need this for dev services
-                        builder.setMode(QuarkusBootstrap.Mode.TEST);
+                        builder.setMode(QuarkusBootstrap.Mode.RUN);
                     }
                 })) {
             AugmentAction action = curatedApplication.createAugmentor();
@@ -92,22 +116,51 @@ public class RunMojo extends QuarkusBootstrapMojo {
                         throw new RuntimeException("Should never reach this!");
                     }
                     List<String> args = (List<String>) cmd.get(0);
+                    if (additionalSystemProperties != null) {
+                        String[] props = additionalSystemProperties.split(",");
+                        for (int i = props.length - 1; i >= 0; i--) {
+                            String prop = props[i];
+                            String[] parts = prop.split("=");
+                            if (parts.length == 2) {
+                                // we want to set the system property write after the command
+                                args.add(1, "-D" + prop);
+                            } else {
+                                throw new RuntimeException("Invalid system property: " + prop);
+                            }
+                        }
+                    }
+                    if (programArguments != null) {
+                        args.addAll(Arrays.asList(programArguments.split(",")));
+                    }
                     if (getLog().isInfoEnabled()) {
                         getLog().info("Executing \"" + String.join(" ", args) + "\"");
                     }
                     Path workingDirectory = (Path) cmd.get(1);
-                    try {
-                        ProcessBuilder builder = new ProcessBuilder()
-                                .command(args)
-                                .inheritIO();
-                        if (workingDirectory != null) {
-                            builder.directory(workingDirectory.toFile());
-                        }
-                        Process process = builder.start();
-                        int exit = process.waitFor();
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
+                    var pb = ProcessBuilder.newBuilder(args.get(0))
+                            .arguments(args.subList(1, args.size()))
+                            .output().inherited()
+                            .error().inherited();
+                    if (workingDirectory != null) {
+                        pb.directory(workingDirectory);
                     }
+                    if ((environmentVariables != null) && !environmentVariables.isEmpty()) {
+                        pb.environment(envVarsAsMap());
+                    }
+                    pb.run();
+                }
+
+                private Map<String, String> envVarsAsMap() {
+                    String[] envVars = environmentVariables.split(",");
+                    Map<String, String> env = new HashMap<>();
+                    for (String envVar : envVars) {
+                        String[] parts = envVar.split("=", 2);
+                        if (parts.length == 2) {
+                            env.put(parts[0], parts[1]);
+                        } else {
+                            throw new RuntimeException("Invalid environment variable: " + envVar);
+                        }
+                    }
+                    return env;
                 }
             },
                     RunCommandActionResultBuildItem.class.getName(), DevServicesLauncherConfigResultBuildItem.class.getName());

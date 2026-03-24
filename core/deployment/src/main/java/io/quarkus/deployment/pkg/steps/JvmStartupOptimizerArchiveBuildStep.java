@@ -1,6 +1,5 @@
 package io.quarkus.deployment.pkg.steps;
 
-import static io.quarkus.deployment.pkg.PackageConfig.JarConfig.JarType.FAST_JAR;
 import static io.quarkus.deployment.pkg.steps.LinuxIDUtil.getLinuxID;
 import static io.quarkus.deployment.util.ContainerRuntimeUtil.detectContainerRuntime;
 
@@ -20,6 +19,7 @@ import org.jboss.logging.Logger;
 import io.quarkus.bootstrap.util.IoUtils;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
+import io.quarkus.deployment.builditem.LaunchModeBuildItem;
 import io.quarkus.deployment.pkg.PackageConfig;
 import io.quarkus.deployment.pkg.builditem.ArtifactResultBuildItem;
 import io.quarkus.deployment.pkg.builditem.CompiledJavaVersionBuildItem;
@@ -29,30 +29,110 @@ import io.quarkus.deployment.pkg.builditem.JvmStartupOptimizerArchiveRequestedBu
 import io.quarkus.deployment.pkg.builditem.JvmStartupOptimizerArchiveResultBuildItem;
 import io.quarkus.deployment.pkg.builditem.JvmStartupOptimizerArchiveType;
 import io.quarkus.deployment.pkg.builditem.OutputTargetBuildItem;
+import io.quarkus.deployment.pkg.jar.FastJarFormat;
 import io.quarkus.deployment.steps.MainClassBuildStep;
 import io.quarkus.deployment.util.ContainerRuntimeUtil.ContainerRuntime;
 import io.quarkus.runtime.LaunchMode;
-import io.quarkus.utilities.JavaBinFinder;
+import io.smallrye.common.process.ProcessBuilder;
+import io.smallrye.common.process.ProcessUtil;
 
 public class JvmStartupOptimizerArchiveBuildStep {
 
     private static final Logger log = Logger.getLogger(JvmStartupOptimizerArchiveBuildStep.class);
 
+    @Deprecated(forRemoval = true, since = "3.31")
     public static final String CLASSES_LIST_FILE_NAME = "classes.lst";
     private static final String CONTAINER_IMAGE_BASE_BUILD_DIR = "/tmp/quarkus";
-    private static final String CONTAINER_IMAGE_APPCDS_DIR = CONTAINER_IMAGE_BASE_BUILD_DIR + "/appcds";
 
-    @BuildStep(onlyIf = AppCDSRequired.class)
-    public void requested(PackageConfig packageConfig, OutputTargetBuildItem outputTarget,
+    @BuildStep
+    public void requested(PackageConfig packageConfig,
+            LaunchModeBuildItem launchMode,
+            OutputTargetBuildItem outputTarget,
+            CompiledJavaVersionBuildItem compiledJavaVersion,
             BuildProducer<JvmStartupOptimizerArchiveRequestedBuildItem> producer)
             throws IOException {
+        JvmStartupOptimizerArchiveType type = determineType(packageConfig, compiledJavaVersion.getJavaVersion());
+        if (!shouldCreate(launchMode.getLaunchMode(), packageConfig, type)) {
+            return;
+        }
+
         Path archiveDir = outputTarget.getOutputDirectory().resolve("jvmstartuparchive");
         IoUtils.createOrEmptyDir(archiveDir);
 
         producer.produce(
                 new JvmStartupOptimizerArchiveRequestedBuildItem(outputTarget.getOutputDirectory().resolve("jvmstartuparchive"),
-                        packageConfig.jar().appcds().useAot() ? JvmStartupOptimizerArchiveType.AOT
-                                : JvmStartupOptimizerArchiveType.AppCDS));
+                        type));
+    }
+
+    public boolean shouldCreate(LaunchMode launchMode, PackageConfig packageConfig, JvmStartupOptimizerArchiveType type) {
+        if (launchMode != LaunchMode.NORMAL) {
+            return false;
+        }
+
+        PackageConfig.JarConfig jarConfig = packageConfig.jar();
+        if (!jarConfig.enabled()) {
+            return false;
+        }
+
+        // new config
+        if (jarConfig.aot().enabled()) {
+            var maybePhase = jarConfig.aot().phase();
+            if (maybePhase.isPresent()) {
+                var phase = maybePhase.get();
+                if ((type == JvmStartupOptimizerArchiveType.AppCDS)
+                        && (phase == PackageConfig.JarConfig.AotConfig.AotPhase.INTEGRATION_TESTS)) {
+                    log.warn("Building AppCDS file from integration tests is not supported");
+                    return false;
+                } else if (phase == PackageConfig.JarConfig.AotConfig.AotPhase.BUILD) {
+                    // when the phase was explicitly set to build, we build no matter what the archive type
+                    return true;
+                } else if (phase == PackageConfig.JarConfig.AotConfig.AotPhase.AUTO) {
+                    // when the phase is auto, then we default to creating the file only for AppCDS
+                    return type == JvmStartupOptimizerArchiveType.AppCDS;
+                }
+            } else {
+                // when the phase is not set, then we default to creating the file only for AppCDS
+                return type == JvmStartupOptimizerArchiveType.AppCDS;
+            }
+        }
+
+        // old config
+        //noinspection removal
+        return jarConfig.appcds().enabled();
+    }
+
+    private JvmStartupOptimizerArchiveType determineType(PackageConfig packageConfig,
+            CompiledJavaVersionBuildItem.JavaVersion javaVersion) {
+        PackageConfig.JarConfig jarConfig = packageConfig.jar();
+        // first check new config
+        PackageConfig.JarConfig.AotConfig aotConfig = jarConfig.aot();
+        if (aotConfig.enabled()) {
+            Optional<PackageConfig.JarConfig.AotConfig.AotType> typeOpt = aotConfig.type();
+            if (typeOpt.isPresent()) {
+                return switch (typeOpt.get()) {
+                    case AOT -> JvmStartupOptimizerArchiveType.AOT;
+                    case AppCDS -> JvmStartupOptimizerArchiveType.AppCDS;
+                    case AUTO -> determineTypeFromJavaVersion(javaVersion);
+                };
+            }
+            return determineTypeFromJavaVersion(javaVersion);
+        }
+        // now check the old config
+        PackageConfig.JarConfig.AppcdsConfig appcdsConfig = jarConfig.appcds();
+        return appcdsConfig.useAot() ? JvmStartupOptimizerArchiveType.AOT
+                : JvmStartupOptimizerArchiveType.AppCDS;
+    }
+
+    private JvmStartupOptimizerArchiveType determineTypeFromJavaVersion(
+            CompiledJavaVersionBuildItem.JavaVersion javaVersion) {
+        if (javaVersion.isJava25OrHigher() == CompiledJavaVersionBuildItem.JavaVersion.Status.TRUE) {
+            log.debugf("Selecting %s as the startup file optimizer type since the project is targeting JDK 25+",
+                    JvmStartupOptimizerArchiveType.AOT);
+            return JvmStartupOptimizerArchiveType.AOT;
+        }
+        log.debugf("Selecting %s as the startup file optimizer type since the project is not targeting JDK 25+",
+                JvmStartupOptimizerArchiveType.AppCDS);
+        return JvmStartupOptimizerArchiveType.AppCDS;
     }
 
     @BuildStep(onlyIfNot = NativeOrNativeSourcesBuild.class)
@@ -72,7 +152,7 @@ public class JvmStartupOptimizerArchiveBuildStep {
         String javaBinPath = null;
         if (containerImage == null) {
             javaBinPath = System.getProperty("java.home") + File.separator + "bin" + File.separator
-                    + JavaBinFinder.simpleBinaryName();
+                    + ProcessUtil.nameOfJava();
             if (!new File(javaBinPath).canExecute()) {
                 log.warnf(
                         "In order to create AppCDS the JDK used to build the Quarkus application must contain an executable named '%s' in its 'bin' directory.",
@@ -84,12 +164,20 @@ public class JvmStartupOptimizerArchiveBuildStep {
         Path archivePath;
         JvmStartupOptimizerArchiveType archiveType = requested.get().getType();
         log.infof("Launching %s creation process.", archiveType);
-        boolean isFastJar = packageConfig.jar().type() == FAST_JAR;
+        boolean isFastJar = packageConfig.jar().type().usesFastJarLayout();
         if (archiveType == JvmStartupOptimizerArchiveType.AppCDS) {
             archivePath = createAppCDSFromExit(jarResult, outputTarget, javaBinPath, containerImage,
                     isFastJar);
         } else if (archiveType == JvmStartupOptimizerArchiveType.AOT) {
-            archivePath = createAot(jarResult, outputTarget, javaBinPath, containerImage, isFastJar);
+            List<String> additionalJvmArguments = new ArrayList<>();
+            if (packageConfig.jar().aot().additionalRecordingArgs().isPresent()) {
+                additionalJvmArguments.addAll(packageConfig.jar().aot().additionalRecordingArgs().get());
+            }
+            if (jvmStartupOptimizerArchiveContainerImage.isPresent()
+                    && jvmStartupOptimizerArchiveContainerImage.get().getAdditionalJvmArgs().isPresent()) {
+                additionalJvmArguments.addAll(jvmStartupOptimizerArchiveContainerImage.get().getAdditionalJvmArgs().get());
+            }
+            archivePath = createAot(jarResult, outputTarget, javaBinPath, containerImage, isFastJar, additionalJvmArguments);
         } else {
             throw new IllegalStateException("Unsupported archive type: " + archiveType);
         }
@@ -118,7 +206,7 @@ public class JvmStartupOptimizerArchiveBuildStep {
             }
         }
 
-        jvmStartupOptimizerArchive.produce(new JvmStartupOptimizerArchiveResultBuildItem(archivePath));
+        jvmStartupOptimizerArchive.produce(new JvmStartupOptimizerArchiveResultBuildItem(archivePath, archiveType));
         artifactResult.produce(new ArtifactResultBuildItem(archivePath, "appCDS", Collections.emptyMap()));
     }
 
@@ -191,14 +279,14 @@ public class JvmStartupOptimizerArchiveBuildStep {
         List<String> command;
         if (containerImage != null) {
             List<String> dockerRunCommand = dockerRunCommands(outputTarget, containerImage,
-                    isFastJar ? CONTAINER_IMAGE_BASE_BUILD_DIR + "/" + JarResultBuildStep.DEFAULT_FAST_JAR_DIRECTORY_NAME
+                    isFastJar ? CONTAINER_IMAGE_BASE_BUILD_DIR + "/" + FastJarFormat.DEFAULT_FAST_JAR_DIRECTORY_NAME
                             : CONTAINER_IMAGE_BASE_BUILD_DIR + "/" + jarResult.getPath().getFileName().toString());
             command = new ArrayList<>(dockerRunCommand.size() + 1 + javaArgs.size());
             command.addAll(dockerRunCommand);
             command.add("java");
             command.addAll(javaArgs);
             if (isFastJar) {
-                command.add(JarResultBuildStep.QUARKUS_RUN_JAR);
+                command.add(FastJarFormat.QUARKUS_RUN_JAR);
             } else {
                 command.add(jarResult.getPath().getFileName().toString());
             }
@@ -208,7 +296,7 @@ public class JvmStartupOptimizerArchiveBuildStep {
             command.addAll(javaArgs);
             if (isFastJar) {
                 command
-                        .add(jarResult.getLibraryDir().getParent().resolve(JarResultBuildStep.QUARKUS_RUN_JAR)
+                        .add(jarResult.getLibraryDir().getParent().resolve(FastJarFormat.QUARKUS_RUN_JAR)
                                 .getFileName().toString());
             } else {
                 command.add(jarResult.getPath().getFileName().toString());
@@ -223,44 +311,38 @@ public class JvmStartupOptimizerArchiveBuildStep {
      */
     private Path createAot(JarBuildItem jarResult,
             OutputTargetBuildItem outputTarget, String javaBinPath, String containerImage,
-            boolean isFastJar) {
-        // first we run java -XX:AOTMode=record -XX:AOTConfiguration=app.aotconf -jar ...
-        ArchivePathsContainer aotConfigPathContainers = ArchivePathsContainer.aotConfFromQuarkusJar(jarResult.getPath());
-        Path aotConfPath = launchArchiveCreateCommand(aotConfigPathContainers.workingDirectory,
-                aotConfigPathContainers.resultingFile,
-                recordAotConfCommand(jarResult, outputTarget, javaBinPath, containerImage, isFastJar, aotConfigPathContainers));
-        if (aotConfPath == null) {
-            // something went wrong, bail as the issue has already been logged
-            return null;
+            boolean isFastJar, List<String> additionalRecordingArgs) {
+        if (Runtime.version().feature() < 25) {
+            throw new IllegalStateException(
+                    "AOT cache generation requires building with JDK 25 or newer (see JEP 514). ");
         }
-
-        // now we run java -XX:AOTMode=create -XX:AOTConfiguration=app.aotconf -jar ...
         ArchivePathsContainer aotPathContainers = ArchivePathsContainer.aotFromQuarkusJar(jarResult.getPath());
         return launchArchiveCreateCommand(aotPathContainers.workingDirectory, aotPathContainers.resultingFile,
-                createAotCommand(jarResult, outputTarget, javaBinPath, containerImage, isFastJar, aotConfPath));
+                createAotCommand(jarResult, outputTarget, javaBinPath, containerImage, isFastJar, additionalRecordingArgs,
+                        aotPathContainers));
 
     }
 
-    private List<String> recordAotConfCommand(JarBuildItem jarResult, OutputTargetBuildItem outputTarget, String javaBinPath,
-            String containerImage, boolean isFastJar,
-            ArchivePathsContainer aotConfigPathContainers) {
+    private List<String> createAotCommand(JarBuildItem jarResult, OutputTargetBuildItem outputTarget, String javaBinPath,
+            String containerImage, boolean isFastJar, List<String> additionalRecordingArgs,
+            ArchivePathsContainer aotPathContainers) {
         List<String> javaArgs = new ArrayList<>();
-        javaArgs.add("-XX:AOTMode=record");
-        javaArgs.add("-XX:AOTConfiguration=" + aotConfigPathContainers.resultingFile.getFileName().toString());
+        javaArgs.add("-XX:AOTCacheOutput=" + aotPathContainers.resultingFile.getFileName().toString());
+        javaArgs.addAll(additionalRecordingArgs);
         javaArgs.add(String.format("-D%s=true", MainClassBuildStep.GENERATE_APP_CDS_SYSTEM_PROPERTY));
         javaArgs.add("-jar");
 
         List<String> command;
         if (containerImage != null) {
             List<String> dockerRunCommand = dockerRunCommands(outputTarget, containerImage,
-                    isFastJar ? CONTAINER_IMAGE_BASE_BUILD_DIR + "/" + JarResultBuildStep.DEFAULT_FAST_JAR_DIRECTORY_NAME
+                    isFastJar ? CONTAINER_IMAGE_BASE_BUILD_DIR + "/" + FastJarFormat.DEFAULT_FAST_JAR_DIRECTORY_NAME
                             : CONTAINER_IMAGE_BASE_BUILD_DIR + "/" + jarResult.getPath().getFileName().toString());
             command = new ArrayList<>(dockerRunCommand.size() + 1 + javaArgs.size());
             command.addAll(dockerRunCommand);
             command.add("java");
             command.addAll(javaArgs);
             if (isFastJar) {
-                command.add(JarResultBuildStep.QUARKUS_RUN_JAR);
+                command.add(FastJarFormat.QUARKUS_RUN_JAR);
             } else {
                 command.add(jarResult.getPath().getFileName().toString());
             }
@@ -270,45 +352,7 @@ public class JvmStartupOptimizerArchiveBuildStep {
             command.addAll(javaArgs);
             if (isFastJar) {
                 command
-                        .add(jarResult.getLibraryDir().getParent().resolve(JarResultBuildStep.QUARKUS_RUN_JAR)
-                                .getFileName().toString());
-            } else {
-                command.add(jarResult.getPath().getFileName().toString());
-            }
-        }
-        return command;
-    }
-
-    private List<String> createAotCommand(JarBuildItem jarResult, OutputTargetBuildItem outputTarget, String javaBinPath,
-            String containerImage, boolean isFastJar,
-            Path aotConfPath) {
-        List<String> javaArgs = new ArrayList<>();
-        javaArgs.add("-XX:AOTMode=create");
-        javaArgs.add("-XX:AOTConfiguration=" + aotConfPath.getFileName().toString());
-        javaArgs.add("-XX:AOTCache=app.aot");
-        javaArgs.add("-jar");
-
-        List<String> command;
-        if (containerImage != null) {
-            List<String> dockerRunCommand = dockerRunCommands(outputTarget, containerImage,
-                    isFastJar ? CONTAINER_IMAGE_BASE_BUILD_DIR + "/" + JarResultBuildStep.DEFAULT_FAST_JAR_DIRECTORY_NAME
-                            : CONTAINER_IMAGE_BASE_BUILD_DIR + "/" + jarResult.getPath().getFileName().toString());
-            command = new ArrayList<>(dockerRunCommand.size() + 1 + javaArgs.size());
-            command.addAll(dockerRunCommand);
-            command.add("java");
-            command.addAll(javaArgs);
-            if (isFastJar) {
-                command.add(JarResultBuildStep.QUARKUS_RUN_JAR);
-            } else {
-                command.add(jarResult.getPath().getFileName().toString());
-            }
-        } else {
-            command = new ArrayList<>(2 + javaArgs.size());
-            command.add(javaBinPath);
-            command.addAll(javaArgs);
-            if (isFastJar) {
-                command
-                        .add(jarResult.getLibraryDir().getParent().resolve(JarResultBuildStep.QUARKUS_RUN_JAR)
+                        .add(jarResult.getLibraryDir().getParent().resolve(FastJarFormat.QUARKUS_RUN_JAR)
                                 .getFileName().toString());
             } else {
                 command.add(jarResult.getPath().getFileName().toString());
@@ -322,26 +366,19 @@ public class JvmStartupOptimizerArchiveBuildStep {
             log.debugf("Launching command: '%s'", String.join(" ", command));
         }
 
-        int exitCode;
         try {
-            ProcessBuilder processBuilder = new ProcessBuilder(command)
-                    .directory(workingDirectory.toFile());
+            var pb = ProcessBuilder.newBuilder(command.get(0))
+                    .arguments(command.subList(1, command.size()))
+                    .directory(workingDirectory);
+            pb.error().logOnSuccess(false);
             if (log.isDebugEnabled()) {
-                processBuilder.inheritIO();
-            } else {
-                processBuilder.redirectError(ProcessBuilder.Redirect.DISCARD).redirectOutput(ProcessBuilder.Redirect.DISCARD);
+                pb.output().consumeLinesWith(8192, log::debug)
+                        .error().consumeLinesWith(8192, log::debug);
             }
-            exitCode = processBuilder.start().waitFor();
+            pb.run();
         } catch (Exception e) {
-            log.debug("Failed to launch process used to create archive.", e);
-            return null;
+            log.debug("Failed to launch process used to create archive", e);
         }
-
-        if (exitCode != 0) {
-            log.debugf("The process that was supposed to create an archive exited with error code: %d.", exitCode);
-            return null;
-        }
-
         if (!archivePath.toFile().exists()) { // shouldn't happen, but let's avoid any surprises
             return null;
         }
@@ -349,12 +386,12 @@ public class JvmStartupOptimizerArchiveBuildStep {
         return archivePath;
     }
 
-    static class AppCDSRequired implements BooleanSupplier {
+    static class AotFileRequired implements BooleanSupplier {
 
         private final PackageConfig packageConfig;
         private final LaunchMode launchMode;
 
-        AppCDSRequired(PackageConfig packageConfig, LaunchMode launchMode) {
+        AotFileRequired(PackageConfig packageConfig, LaunchMode launchMode) {
             this.packageConfig = packageConfig;
             this.launchMode = launchMode;
         }
@@ -365,7 +402,23 @@ public class JvmStartupOptimizerArchiveBuildStep {
                 return false;
             }
 
-            return packageConfig.jar().appcds().enabled() && packageConfig.jar().enabled();
+            PackageConfig.JarConfig jarConfig = packageConfig.jar();
+            if (!jarConfig.enabled()) {
+                return false;
+            }
+
+            // new config
+            if (jarConfig.aot().enabled()) {
+                // Only generate during build phase if phase is explicitly set to BUILD.
+                // When phase is not set or set to AUTO/INTEGRATION_TESTS, the AOT file
+                // will be generated during integration tests instead.
+                Optional<PackageConfig.JarConfig.AotConfig.AotPhase> phase = jarConfig.aot().phase();
+                return phase.isPresent() && phase.get() == PackageConfig.JarConfig.AotConfig.AotPhase.BUILD;
+            }
+
+            // old config
+            //noinspection removal
+            return jarConfig.appcds().enabled();
         }
     }
 
@@ -373,10 +426,6 @@ public class JvmStartupOptimizerArchiveBuildStep {
 
         public static ArchivePathsContainer appCDSFromQuarkusJar(Path jar) {
             return doCreate(jar, "app-cds.jsa");
-        }
-
-        public static ArchivePathsContainer aotConfFromQuarkusJar(Path jar) {
-            return doCreate(jar, "app.aotconf");
         }
 
         public static ArchivePathsContainer aotFromQuarkusJar(Path jar) {

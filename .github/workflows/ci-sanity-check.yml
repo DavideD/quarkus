@@ -1,6 +1,9 @@
 # Create the CI Sanity Check entry even when we only have ignored files
 name: Quarkus CI Sanity Check
 
+permissions:
+  contents: read
+
 on:
   push:
     paths:
@@ -16,6 +19,7 @@ on:
       - '.github/*.java'
       - '.github/*.conf'
       - '.sdkmanrc'
+      - '.devcontainer/**'
   pull_request:
     paths:
       - '.gitignore'
@@ -30,6 +34,7 @@ on:
       - '.github/*.java'
       - '.github/*.conf'
       - '.sdkmanrc'
+      - '.devcontainer/**'
 
 jobs:
   ci-sanity-check:

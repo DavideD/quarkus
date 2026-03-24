@@ -153,7 +153,7 @@ public class OidcTenantConfigBuilderTest {
         assertTrue(authentication.allowMultipleCodeFlows());
         assertFalse(authentication.failOnMissingStateParam());
         assertTrue(authentication.userInfoRequired().isEmpty());
-        assertEquals(5, authentication.sessionAgeExtension().toMinutes());
+        assertTrue(authentication.sessionAgeExtension().isEmpty());
         assertEquals(5, authentication.stateCookieAge().toMinutes());
         assertTrue(authentication.javaScriptAutoRedirect());
         assertTrue(authentication.idTokenRequired().isEmpty());
@@ -161,6 +161,8 @@ public class OidcTenantConfigBuilderTest {
         assertTrue(authentication.pkceRequired().isEmpty());
         assertTrue(authentication.pkceSecret().isEmpty());
         assertTrue(authentication.stateSecret().isEmpty());
+        assertTrue(authentication.par().enabled().isEmpty());
+        assertTrue(authentication.par().path().isEmpty());
 
         var codeGrant = config.codeGrant();
         assertNotNull(codeGrant);
@@ -411,6 +413,8 @@ public class OidcTenantConfigBuilderTest {
                 .internalIdTokenLifespan(Duration.ofMinutes(357))
                 .pkceRequired()
                 .stateSecret("state-secret-auth-whatever")
+                .par("/as/par")
+                .rar("openid_credential", Map.of("credentials", "mine"), Map.of("locations", List.of("something")))
                 .end()
                 // OidcCommonConfig methods
                 .authServerUrl("we")
@@ -424,6 +428,7 @@ public class OidcTenantConfigBuilderTest {
                 .followRedirects(false)
                 .proxy("need", 55, "no", "education")
                 .tlsConfigurationName("Teacher!")
+                .proxyConfigurationName("Kreacher!")
                 .build();
 
         // OidcTenantConfig methods
@@ -552,7 +557,7 @@ public class OidcTenantConfigBuilderTest {
         assertFalse(authentication.allowMultipleCodeFlows());
         assertTrue(authentication.failOnMissingStateParam());
         assertTrue(authentication.userInfoRequired().orElseThrow());
-        assertEquals(77, authentication.sessionAgeExtension().toMinutes());
+        assertEquals(77, authentication.sessionAgeExtension().get().toMinutes());
         assertEquals(88, authentication.stateCookieAge().toMinutes());
         assertFalse(authentication.javaScriptAutoRedirect());
         assertFalse(authentication.idTokenRequired().orElseThrow());
@@ -560,6 +565,18 @@ public class OidcTenantConfigBuilderTest {
         assertTrue(authentication.pkceRequired().orElseThrow());
         assertTrue(authentication.pkceSecret().isEmpty());
         assertEquals("state-secret-auth-whatever", authentication.stateSecret().orElse(null));
+        var par = authentication.par();
+        assertTrue(par.enabled().orElse(false));
+        assertEquals("/as/par", par.path().orElse(null));
+        var rar = authentication.rar().orElse(null);
+        assertNotNull(rar);
+        assertEquals("openid_credential", rar.type());
+        assertNotNull(rar.array());
+        assertEquals(1, rar.array().size());
+        assertEquals(List.of("something"), rar.array().get("locations"));
+        assertNotNull(rar.simple());
+        assertEquals(1, rar.simple().size());
+        assertEquals("mine", rar.simple().get("credentials"));
 
         var codeGrant = config.codeGrant();
         assertNotNull(codeGrant);
@@ -652,6 +669,7 @@ public class OidcTenantConfigBuilderTest {
         assertEquals("education", config.proxy().password().orElse(null));
         assertNotNull(config.tls());
         assertEquals("Teacher!", config.tls().tlsConfigurationName().orElse(null));
+        assertEquals("Kreacher!", config.proxy().proxyConfigurationName().orElse(null));
         assertTrue(config.tls().verification().isEmpty());
         assertTrue(config.tls().keyStoreFile().isEmpty());
         assertTrue(config.tls().keyStoreFileType().isEmpty());
@@ -932,6 +950,7 @@ public class OidcTenantConfigBuilderTest {
                 .followRedirects(false)
                 .proxy("need", 55, "no", "education")
                 .tlsConfigurationName("Teacher!")
+                .proxyConfigurationName("Kreacher!")
                 .build();
         var newConfig = OidcTenantConfig.builder(previousConfig)
                 .discoveryEnabled(true)
@@ -958,6 +977,7 @@ public class OidcTenantConfigBuilderTest {
         assertEquals("boarder", newConfig.proxy().password().orElse(null));
         assertNotNull(newConfig.tls());
         assertEquals("Teacher!", newConfig.tls().tlsConfigurationName().orElse(null));
+        assertEquals("Kreacher!", newConfig.proxy().proxyConfigurationName().orElse(null));
         assertTrue(newConfig.tls().verification().isEmpty());
         assertTrue(newConfig.tls().keyStoreFile().isEmpty());
         assertTrue(newConfig.tls().keyStoreFileType().isEmpty());
@@ -1248,6 +1268,7 @@ public class OidcTenantConfigBuilderTest {
                 .internalIdTokenLifespan(Duration.ofMinutes(357))
                 .pkceRequired()
                 .stateSecret("state-secret-auth-whatever")
+                .par()
                 .build();
         var config1Builder = OidcTenantConfig.builder().tenantId("3").authentication(first);
         var config1 = config1Builder.build();
@@ -1288,13 +1309,15 @@ public class OidcTenantConfigBuilderTest {
         assertFalse(builtFirst.allowMultipleCodeFlows());
         assertTrue(builtFirst.failOnMissingStateParam());
         assertTrue(builtFirst.userInfoRequired().orElseThrow());
-        assertEquals(77, builtFirst.sessionAgeExtension().toMinutes());
+        assertEquals(77, builtFirst.sessionAgeExtension().get().toMinutes());
         assertEquals(88, builtFirst.stateCookieAge().toMinutes());
         assertFalse(builtFirst.javaScriptAutoRedirect());
         assertFalse(builtFirst.idTokenRequired().orElseThrow());
         assertEquals(357, builtFirst.internalIdTokenLifespan().orElseThrow().toMinutes());
         assertTrue(builtFirst.pkceRequired().orElseThrow());
         assertEquals("state-secret-auth-whatever", builtFirst.stateSecret().orElse(null));
+        assertTrue(builtFirst.par().enabled().orElse(false));
+        assertTrue(builtFirst.par().path().isEmpty());
 
         var second = new AuthenticationConfigBuilder(config1Builder).scopes("scope-four").responseMode(FORM_POST)
                 .extraParams(Map.of("ho", "hey")).stateSecret("my-state-secret");
@@ -1338,13 +1361,15 @@ public class OidcTenantConfigBuilderTest {
         assertFalse(builtSecond.allowMultipleCodeFlows());
         assertTrue(builtSecond.failOnMissingStateParam());
         assertTrue(builtSecond.userInfoRequired().orElseThrow());
-        assertEquals(77, builtSecond.sessionAgeExtension().toMinutes());
+        assertEquals(77, builtSecond.sessionAgeExtension().get().toMinutes());
         assertEquals(88, builtSecond.stateCookieAge().toMinutes());
         assertFalse(builtSecond.javaScriptAutoRedirect());
         assertFalse(builtSecond.idTokenRequired().orElseThrow());
         assertEquals(357, builtSecond.internalIdTokenLifespan().orElseThrow().toMinutes());
         assertTrue(builtSecond.pkceRequired().orElseThrow());
         assertEquals("my-state-secret", builtSecond.stateSecret().orElse(null));
+        assertTrue(builtSecond.par().enabled().orElse(false));
+        assertTrue(builtSecond.par().path().isEmpty());
     }
 
     @Test

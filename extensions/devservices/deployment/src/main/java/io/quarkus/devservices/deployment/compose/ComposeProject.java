@@ -139,6 +139,9 @@ public class ComposeProject {
                     // Add wait for log message
                     if (e.getKey().startsWith(COMPOSE_WAIT_FOR_LOGS)) {
                         int times = 1;
+                        if (COMPOSE_WAIT_FOR_LOGS_TIMEOUT.equals(e.getKey())) {
+                            continue;
+                        }
                         if (e.getKey().length() > COMPOSE_WAIT_FOR_LOGS.length()) {
                             try {
                                 times = Integer.parseInt(e.getKey().replace(COMPOSE_WAIT_FOR_LOGS + ".", ""));
@@ -146,7 +149,10 @@ public class ComposeProject {
                                 LOG.warnv("Cannot parse label `{}`", e.getKey());
                             }
                         }
-                        addWaitStrategy(waitStrategies, serviceName, Wait.forLogMessage((String) e.getValue(), times));
+                        String waitForTimeout = (String) labels.get(COMPOSE_WAIT_FOR_LOGS_TIMEOUT);
+                        Duration timeout = waitForTimeout != null ? Duration.parse("PT" + waitForTimeout) : startupTimeout;
+                        addWaitStrategy(waitStrategies, serviceName, Wait.forLogMessage((String) e.getValue(), times)
+                                .withStartupTimeout(timeout));
                     }
                 }
                 // Add wait for port availability
@@ -443,7 +449,7 @@ public class ComposeProject {
         return networks.stream()
                 .filter(n -> DEFAULT_NETWORK_NAME.equals(n.getLabels().get(DOCKER_COMPOSE_NETWORK)))
                 // multiple networks can have the default label, but only one can have containers
-                .filter(n -> !n.getContainers().isEmpty())
+                .filter(n -> n.getContainers() != null && !n.getContainers().isEmpty())
                 .findFirst()
                 .map(Network::getId)
                 // this is not an id, but a useful fallback

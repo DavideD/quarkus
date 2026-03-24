@@ -5,8 +5,8 @@ plugins{
 
 
 
-group 'io.quarkus.test.application'
-version '1.0-SNAPSHOT'
+group = 'io.quarkus.test.application'
+version = '1.0-SNAPSHOT'
 
 
 repositories {
@@ -19,7 +19,7 @@ dependencies {
     implementation 'io.quarkus:quarkus-rest'
     implementation ('org.acme.extensions:example-extension')
 
-    testImplementation 'io.quarkus:quarkus-junit5'
+    testImplementation 'io.quarkus:quarkus-junit'
     testImplementation 'io.rest-assured:rest-assured'
 }
 

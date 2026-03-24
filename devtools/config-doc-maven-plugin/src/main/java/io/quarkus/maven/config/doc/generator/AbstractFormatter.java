@@ -2,6 +2,9 @@ package io.quarkus.maven.config.doc.generator;
 
 import java.text.Normalizer;
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -16,6 +19,7 @@ import io.quarkus.annotation.processor.documentation.config.model.JavadocFormat;
 import io.quarkus.annotation.processor.documentation.config.util.Types;
 import io.quarkus.maven.config.doc.GenerateConfigDocMojo.Context;
 import io.quarkus.maven.config.doc.generator.GenerationReport.ConfigPropertyGenerationViolation;
+import io.smallrye.config.common.utils.StringUtil;
 
 abstract class AbstractFormatter implements Formatter {
 
@@ -62,6 +66,28 @@ abstract class AbstractFormatter implements Formatter {
     }
 
     @Override
+    public String formatDeprecatedReason(ConfigProperty configProperty, Extension extension, Context context) {
+        Optional<JavadocElement> javadocElement = javadocRepository.getElement(configProperty.getSourceType(),
+                configProperty.getSourceElementName());
+
+        if (javadocElement.isEmpty()) {
+            return null;
+        }
+
+        String deprecatedReason = JavadocTransformer.transform(javadocElement.get().deprecated(), JavadocFormat.JAVADOC,
+                javadocFormat());
+        if (deprecatedReason == null || deprecatedReason.isBlank()) {
+            return null;
+        }
+
+        if (deprecatedReason.endsWith(".")) {
+            return deprecatedReason.substring(0, deprecatedReason.length() - 1);
+        }
+
+        return deprecatedReason;
+    }
+
+    @Override
     public String formatTypeDescription(ConfigProperty configProperty, Context context) {
         String typeContent = "";
 
@@ -69,7 +95,8 @@ abstract class AbstractFormatter implements Formatter {
             if (enableEnumTooltips) {
                 typeContent = configProperty.getEnumAcceptedValues().values().entrySet().stream()
                         .map(e -> {
-                            Optional<JavadocElement> javadocElement = javadocRepository.getElement(configProperty.getType(),
+                            String enumQualifiedName = configProperty.getEnumAcceptedValues().qualifiedName();
+                            Optional<JavadocElement> javadocElement = javadocRepository.getElement(enumQualifiedName,
                                     e.getKey());
                             if (javadocElement.isEmpty()) {
                                 return "`" + e.getValue().configValue() + "`";
@@ -112,23 +139,14 @@ abstract class AbstractFormatter implements Formatter {
             return null;
         }
 
-        if (configProperty.isEnum() && enableEnumTooltips) {
-            Optional<String> enumConstant = configProperty.getEnumAcceptedValues().values().entrySet().stream()
-                    .filter(e -> e.getValue().configValue().equals(defaultValue))
-                    .map(e -> e.getKey())
-                    .findFirst();
-
-            if (enumConstant.isPresent()) {
-                Optional<JavadocElement> javadocElement = javadocRepository.getElement(configProperty.getType(),
-                        enumConstant.get());
-
-                if (javadocElement.isPresent()) {
-                    return tooltip(defaultValue, javadocElement.get().description());
-                }
-            }
+        List<String> defaultValues;
+        if (configProperty.isList()) {
+            defaultValues = Arrays.asList(StringUtil.split(defaultValue));
+        } else {
+            defaultValues = List.of(defaultValue);
         }
 
-        return "`" + defaultValue + "`";
+        return defaultValues.stream().map(v -> formatSingleDefaultValue(configProperty, v)).collect(Collectors.joining(", "));
     }
 
     @Override
@@ -240,6 +258,30 @@ abstract class AbstractFormatter implements Formatter {
         return extension.name();
     }
 
+    private String formatSingleDefaultValue(ConfigProperty configProperty, String defaultValue) {
+        if (configProperty.isEnum() && enableEnumTooltips) {
+            Optional<String> enumConstant = configProperty.getEnumAcceptedValues().values().entrySet().stream()
+                    .filter(e -> e.getValue().configValue().equals(defaultValue))
+                    .map(Entry::getKey)
+                    .findFirst();
+
+            if (enumConstant.isPresent()) {
+                Optional<JavadocElement> javadocElement = javadocRepository.getElement(configProperty.getType(),
+                        enumConstant.get());
+
+                if (javadocElement.isPresent()) {
+                    return tooltip(defaultValue, javadocElement.get().description());
+                }
+            }
+        }
+
+        if (configProperty.isEscapeDefaultValue()) {
+            return escapeDefaultValue(defaultValue);
+        } else {
+            return defaultValue;
+        }
+    }
+
     private static String trimFinalDot(String javadoc) {
         if (javadoc == null || javadoc.isBlank()) {
             return null;
@@ -262,4 +304,6 @@ abstract class AbstractFormatter implements Formatter {
     protected abstract String link(String href, String description);
 
     protected abstract String tooltip(String value, String javadocDescription);
+
+    protected abstract String escapeDefaultValue(String defaultValue);
 }

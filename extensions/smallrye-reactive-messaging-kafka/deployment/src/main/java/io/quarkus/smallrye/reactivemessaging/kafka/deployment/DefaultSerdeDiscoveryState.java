@@ -1,6 +1,6 @@
 package io.quarkus.smallrye.reactivemessaging.kafka.deployment;
 
-import static io.quarkus.smallrye.reactivemessaging.kafka.deployment.SmallRyeReactiveMessagingKafkaProcessor.getChannelPropertyKey;
+import static io.quarkus.smallrye.reactivemessaging.runtime.ReactiveMessagingConfiguration.getChannelPropertyName;
 
 import java.util.Comparator;
 import java.util.HashMap;
@@ -36,9 +36,9 @@ class DefaultSerdeDiscoveryState {
     private Boolean connectorHasValueDeserializer;
 
     private Boolean hasConfluent;
-    private Boolean hasApicurio1;
-    private Boolean hasApicurio2Avro;
+    private Boolean hasApicurioAvro;
     private Boolean hasJsonb;
+    private boolean apicurioVersionWarningLogged;
 
     DefaultSerdeDiscoveryState(IndexView index) {
         this.index = index;
@@ -60,7 +60,7 @@ class DefaultSerdeDiscoveryState {
 
         String channelType = incoming ? "incoming" : "outgoing";
         return isKafkaConnector.computeIfAbsent(channelType + "|" + channelName, ignored -> {
-            String connectorKey = getChannelPropertyKey(channelName, "connector", incoming);
+            String connectorKey = getChannelPropertyName(channelName, "connector", incoming);
             String connector = getConfig()
                     .getOptionalValue(connectorKey, String.class)
                     .orElse("ignored");
@@ -142,32 +142,30 @@ class DefaultSerdeDiscoveryState {
         return hasConfluent;
     }
 
-    boolean hasApicurio1() {
-        if (hasApicurio1 == null) {
-            try {
-                Class.forName("io.apicurio.registry.utils.serde.AvroKafkaDeserializer", false,
-                        Thread.currentThread().getContextClassLoader());
-                hasApicurio1 = true;
-            } catch (ClassNotFoundException e) {
-                hasApicurio1 = false;
-            }
-        }
-
-        return hasApicurio1;
-    }
-
-    boolean hasApicurio2Avro() {
-        if (hasApicurio2Avro == null) {
+    boolean hasApicurioAvro() {
+        if (hasApicurioAvro == null) {
             try {
                 Class.forName("io.apicurio.registry.serde.avro.AvroKafkaDeserializer", false,
                         Thread.currentThread().getContextClassLoader());
-                hasApicurio2Avro = true;
+                hasApicurioAvro = true;
             } catch (ClassNotFoundException e) {
-                hasApicurio2Avro = false;
+                hasApicurioAvro = false;
             }
         }
 
-        return hasApicurio2Avro;
+        return hasApicurioAvro;
+    }
+
+    /**
+     * Returns true if the Apicurio version warning should be logged (first call only).
+     * Subsequent calls return false to avoid duplicate warnings.
+     */
+    boolean shouldLogApicurioVersionWarning() {
+        if (!apicurioVersionWarningLogged && hasApicurioAvro()) {
+            apicurioVersionWarningLogged = true;
+            return true;
+        }
+        return false;
     }
 
     boolean hasJsonb() {

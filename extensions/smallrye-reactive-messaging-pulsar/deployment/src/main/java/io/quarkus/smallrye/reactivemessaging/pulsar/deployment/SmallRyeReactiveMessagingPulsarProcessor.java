@@ -29,6 +29,8 @@ import io.quarkus.deployment.builditem.RunTimeConfigurationDefaultBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageConfigBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
+import io.quarkus.deployment.builditem.nativeimage.RuntimeInitializedPackageBuildItem;
+import io.quarkus.deployment.pkg.steps.NativeImageFutureDefault;
 import io.quarkus.gizmo.Gizmo;
 import io.quarkus.pulsar.PulsarClientConfigCustomizer;
 import io.quarkus.pulsar.PulsarRuntimeConfigProducer;
@@ -190,7 +192,8 @@ public class SmallRyeReactiveMessagingPulsarProcessor {
                 .addRuntimeInitializedClass("org.asynchttpclient.RequestBuilder")
                 .addRuntimeInitializedClass("org.asynchttpclient.BoundRequestBuilder")
                 .addRuntimeInitializedClass("org.asynchttpclient.ntlm.NtlmEngine")
-                .addRuntimeInitializedClass("sun.awt.dnd.SunDropTargetContextPeer$EventDispatcher");
+                .addRuntimeInitializedClass("sun.awt.dnd.SunDropTargetContextPeer$EventDispatcher")
+                .addRuntimeInitializedClass("com.google.protobuf.JavaFeaturesProto");
         if (QuarkusClassLoader.isClassPresentAtRuntime("org.apache.pulsar.common.util.Backoff")) {
             nativeImageConfig
                     .addRuntimeInitializedClass("org.apache.pulsar.common.util.Backoff");
@@ -203,4 +206,8 @@ public class SmallRyeReactiveMessagingPulsarProcessor {
         return nativeImageConfig.build();
     }
 
+    @BuildStep(onlyIf = NativeImageFutureDefault.RunTimeInitializeSecurityProvider.class)
+    RuntimeInitializedPackageBuildItem runtimeInitializedClasses() {
+        return new RuntimeInitializedPackageBuildItem("org.apache.pulsar.common.util.SecurityUtility");
+    }
 }

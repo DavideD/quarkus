@@ -45,6 +45,7 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
         roles.addConfigMappingValues(mapping.roles());
         token.addConfigMappingValues(mapping.token());
         logout.addConfigMappingValues(mapping.logout());
+        resourceMetadata.addConfigMappingValues(mapping.resourceMetadata());
         certificateChain.addConfigMappingValues(mapping.certificateChain());
         authentication.addConfigMappingValues(mapping.authentication());
         codeGrant.addConfigMappingValues(mapping.codeGrant());
@@ -488,6 +489,8 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
          */
         Optional<Set<ClearSiteData>> clearSiteData = Optional.of(Set.of());
 
+        LogoutMode logoutMode = LogoutMode.QUERY;
+
         /**
          * Back-Channel Logout configuration
          */
@@ -552,6 +555,7 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
             postLogoutUriParam = mapping.postLogoutUriParam();
             extraParams = mapping.extraParams();
             clearSiteData = mapping.clearSiteData();
+            logoutMode = mapping.logoutMode();
             backchannel.addConfigMappingValues(mapping.backchannel());
             frontchannel.addConfigMappingValues(mapping.frontchannel());
         }
@@ -589,6 +593,11 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
         @Override
         public Optional<Set<ClearSiteData>> clearSiteData() {
             return clearSiteData;
+        }
+
+        @Override
+        public LogoutMode logoutMode() {
+            return logoutMode;
         }
     }
 
@@ -1423,6 +1432,13 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
         }
 
         @Override
+        public io.quarkus.oidc.runtime.OidcTenantConfig.Authentication.CookieSameSite stateCookieSameSite() {
+            return stateCookieSameSite == null ? null
+                    : io.quarkus.oidc.runtime.OidcTenantConfig.Authentication.CookieSameSite
+                            .valueOf(stateCookieSameSite.toString());
+        }
+
+        @Override
         public boolean allowMultipleCodeFlows() {
             return allowMultipleCodeFlows;
         }
@@ -1443,7 +1459,7 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
         }
 
         @Override
-        public Duration sessionAgeExtension() {
+        public Optional<Duration> sessionAgeExtension() {
             return sessionAgeExtension;
         }
 
@@ -1480,6 +1496,44 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
         @Override
         public Optional<String> stateSecret() {
             return stateSecret;
+        }
+
+        @Override
+        public PushedAuthorizationRequest par() {
+            return new PushedAuthorizationRequest() {
+                @Override
+                public Optional<Boolean> enabled() {
+                    return parEnabled;
+                }
+
+                @Override
+                public Optional<String> path() {
+                    return parEndpoint;
+                }
+            };
+        }
+
+        @Override
+        public Optional<RichAuthorizationRequests> rar() {
+            if (rarTypeField == null) {
+                return Optional.empty();
+            }
+            return Optional.of(new RichAuthorizationRequests() {
+                @Override
+                public Map<String, String> simple() {
+                    return rarStringTypeFields;
+                }
+
+                @Override
+                public Map<String, List<String>> array() {
+                    return rarArrayTypeFields;
+                }
+
+                @Override
+                public String type() {
+                    return rarTypeField;
+                }
+            });
         }
 
         /**
@@ -1667,6 +1721,11 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
         public CookieSameSite cookieSameSite = CookieSameSite.LAX;
 
         /**
+         * SameSite attribute for the state cookie.
+         */
+        public CookieSameSite stateCookieSameSite = CookieSameSite.LAX;
+
+        /**
          * If a state cookie is present, a `state` query parameter must also be present and both the state
          * cookie name suffix and state cookie value must match the value of the `state` query parameter when
          * the redirect path matches the current path.
@@ -1738,7 +1797,7 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
          * the session has expired.
          * This property is ignored if the `token.refresh-expired` property has not been enabled.
          */
-        public Duration sessionAgeExtension = Duration.ofMinutes(5);
+        public Optional<Duration> sessionAgeExtension = Optional.empty();
 
         /**
          * State cookie age in minutes.
@@ -1809,6 +1868,18 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
          * Error is reported if the secret length is less than 16 characters.
          */
         public Optional<String> stateSecret = Optional.empty();
+
+        public Optional<Set<CacheControl>> cacheControl = Optional.empty();
+
+        private Optional<Boolean> parEnabled = Optional.empty();
+
+        private Optional<String> parEndpoint = Optional.empty();
+
+        private Map<String, String> rarStringTypeFields = Map.of();
+
+        private Map<String, List<String>> rarArrayTypeFields = Map.of();
+
+        private String rarTypeField = null;
 
         public Optional<Duration> getInternalIdTokenLifespan() {
             return internalIdTokenLifespan;
@@ -1948,12 +2019,12 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
             this.verifyAccessToken = verifyAccessToken;
         }
 
-        public Duration getSessionAgeExtension() {
+        public Optional<Duration> getSessionAgeExtension() {
             return sessionAgeExtension;
         }
 
         public void setSessionAgeExtension(Duration sessionAgeExtension) {
-            this.sessionAgeExtension = sessionAgeExtension;
+            this.sessionAgeExtension = Optional.of(sessionAgeExtension);
         }
 
         public Optional<String> getCookiePathHeader() {
@@ -2052,6 +2123,11 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
             this.sessionExpiredPath = Optional.of(sessionExpiredPath);
         }
 
+        @Override
+        public Optional<Set<CacheControl>> cacheControl() {
+            return cacheControl;
+        }
+
         private void addConfigMappingValues(io.quarkus.oidc.runtime.OidcTenantConfig.Authentication mapping) {
             responseMode = mapping.responseMode().map(Enum::toString).map(ResponseMode::valueOf);
             redirectPath = mapping.redirectPath();
@@ -2073,6 +2149,7 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
             cookiePathHeader = mapping.cookiePathHeader();
             cookieDomain = mapping.cookieDomain();
             cookieSameSite = CookieSameSite.valueOf(mapping.cookieSameSite().toString());
+            stateCookieSameSite = CookieSameSite.valueOf(mapping.stateCookieSameSite().toString());
             allowMultipleCodeFlows = mapping.allowMultipleCodeFlows();
             failOnMissingStateParam = mapping.failOnMissingStateParam();
             failOnUnresolvedKid = mapping.failOnUnresolvedKid();
@@ -2085,6 +2162,15 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
             pkceRequired = mapping.pkceRequired();
             pkceSecret = mapping.pkceSecret();
             stateSecret = mapping.stateSecret();
+            cacheControl = mapping.cacheControl();
+            parEnabled = mapping.par().enabled();
+            parEndpoint = mapping.par().path();
+            var rar = mapping.rar().orElse(null);
+            if (rar != null) {
+                rarStringTypeFields = rar.simple();
+                rarArrayTypeFields = rar.array();
+                rarTypeField = rar.type();
+            }
         }
     }
 
@@ -2734,6 +2820,52 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
         }
     }
 
+    @Deprecated(since = "3.25", forRemoval = true)
+    ResourceMetadata resourceMetadata = new ResourceMetadata();
+
+    @Deprecated(since = "3.25", forRemoval = true)
+    public static class ResourceMetadata implements io.quarkus.oidc.runtime.OidcTenantConfig.ResourceMetadata {
+
+        public boolean enabled;
+        public Optional<String> resource = Optional.empty();
+        public Optional<Set<String>> scopes = Optional.empty();
+        public Optional<String> authorizationServer = Optional.empty();
+        public boolean forceHttpsScheme = true;
+
+        @Override
+        public boolean enabled() {
+            return enabled;
+        }
+
+        @Override
+        public Optional<String> resource() {
+            return resource;
+        }
+
+        @Override
+        public Optional<Set<String>> scopes() {
+            return scopes;
+        }
+
+        @Override
+        public Optional<String> authorizationServer() {
+            return authorizationServer;
+        }
+
+        @Override
+        public boolean forceHttpsScheme() {
+            return forceHttpsScheme;
+        }
+
+        private void addConfigMappingValues(io.quarkus.oidc.runtime.OidcTenantConfig.ResourceMetadata mapping) {
+            enabled = mapping.enabled();
+            resource = mapping.resource();
+            scopes = mapping.scopes();
+            authorizationServer = mapping.authorizationServer();
+            forceHttpsScheme = mapping.forceHttpsScheme();
+        }
+    }
+
     public static enum ApplicationType {
         /**
          * A {@code WEB_APP} is a client that serves pages, usually a front-end application. For this type of client the
@@ -2981,6 +3113,11 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
     }
 
     @Override
+    public io.quarkus.oidc.runtime.OidcTenantConfig.ResourceMetadata resourceMetadata() {
+        return resourceMetadata;
+    }
+
+    @Override
     public io.quarkus.oidc.runtime.OidcTenantConfig.CertificateChain certificateChain() {
         return certificateChain;
     }
@@ -3035,11 +3172,9 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
     }
 
     /**
-     * Creates {@link OidcTenantConfigBuilder} builder populated with {@code staticTenantMapping} values.
-     * You want to use this constructor when you have configured static tenant in the application.properties
-     * and your dynamic tenant only differ in a couple of the configuration properties.
+     * Creates {@link OidcTenantConfigBuilder} builder from the existing {@link io.quarkus.oidc.runtime.OidcTenantConfig}
      *
-     * @param mapping OidcTenantConfig created by the SmallRye Config; must not be null
+     * @param mapping existing io.quarkus.oidc.runtime.OidcTenantConfig
      */
     public static OidcTenantConfigBuilder builder(io.quarkus.oidc.runtime.OidcTenantConfig mapping) {
         return new OidcTenantConfigBuilder(mapping);
@@ -3049,7 +3184,7 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
      * Creates {@link OidcTenantConfig} from the {@code mapping}. This method is more efficient than
      * the {@link #builder()} method if you don't need to modify the {@code mapping}.
      *
-     * @param mapping tenant config as returned from the SmallRye Config; must not be null
+     * @param mapping existing io.quarkus.oidc.runtime.OidcTenantConfig
      * @return OidcTenantConfig
      */
     public static OidcTenantConfig of(io.quarkus.oidc.runtime.OidcTenantConfig mapping) {
@@ -3057,7 +3192,7 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
     }
 
     /**
-     * Creates {@link OidcTenantConfigBuilder} builder populated with documented default values.
+     * Creates {@link OidcTenantConfigBuilder} builder populated with documented default values and the provided base URL.
      *
      * @param authServerUrl {@link #authServerUrl()}
      * @return OidcTenantConfigBuilder builder
@@ -3067,7 +3202,8 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
     }
 
     /**
-     * Creates {@link OidcTenantConfigBuilder} builder populated with documented default values.
+     * Creates {@link OidcTenantConfigBuilder} builder populated with documented default values and the provided client
+     * registration path.
      *
      * @param registrationPath {@link #registrationPath()}
      * @return OidcTenantConfigBuilder builder
@@ -3077,7 +3213,7 @@ public class OidcTenantConfig extends OidcClientCommonConfig implements io.quark
     }
 
     /**
-     * Creates {@link OidcTenantConfigBuilder} builder populated with documented default values.
+     * Creates {@link OidcTenantConfigBuilder} builder populated with documented default values and the provided token path.
      *
      * @param tokenPath {@link #tokenPath()}
      * @return OidcTenantConfigBuilder builder

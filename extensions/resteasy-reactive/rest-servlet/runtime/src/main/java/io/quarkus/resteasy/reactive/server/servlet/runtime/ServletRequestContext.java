@@ -10,6 +10,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -46,6 +47,7 @@ import io.quarkus.arc.impl.LazyValue;
 import io.quarkus.resteasy.reactive.server.runtime.ResteasyReactiveSecurityContext;
 import io.quarkus.runtime.BlockingOperationControl;
 import io.quarkus.security.identity.SecurityIdentity;
+import io.quarkus.vertx.http.runtime.RoutingUtils;
 import io.quarkus.vertx.http.runtime.security.QuarkusHttpUser;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.server.ResponseCommitListener;
@@ -53,12 +55,14 @@ import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
 import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.http.HttpServerResponse;
+import io.vertx.core.net.HostAndPort;
 import io.vertx.core.net.impl.ConnectionBase;
 import io.vertx.ext.web.RoutingContext;
 
 public class ServletRequestContext extends ResteasyReactiveRequestContext
         implements ServerHttpRequest, ServerHttpResponse, ResponseCommitListener {
 
+    private static final String QUARKUS_REST_SERVLET_KEY = "quarkus-rest-servlet";
     private static final LazyValue<Event<SecurityIdentity>> SECURITY_IDENTITY_EVENT = new LazyValue<>(
             ServletRequestContext::createEvent);
     final RoutingContext context;
@@ -83,10 +87,12 @@ public class ServletRequestContext extends ResteasyReactiveRequestContext
         exchange.addResponseCommitListener(this);
     }
 
+    @Override
     protected boolean isRequestScopeManagementRequired() {
         return asyncContext != null;
     }
 
+    @Override
     protected void beginAsyncProcessing() {
         asyncContext = request.startAsync();
     }
@@ -129,12 +135,18 @@ public class ServletRequestContext extends ResteasyReactiveRequestContext
         }
     }
 
+    @Override
     protected void handleRequestScopeActivation() {
         super.handleRequestScopeActivation();
         QuarkusHttpUser user = (QuarkusHttpUser) context.user();
         if (user != null) {
             fireSecurityIdentity(user.getSecurityIdentity());
         }
+    }
+
+    @Override
+    protected void onPreRequestScopeActivation() {
+        RoutingUtils.assumeCdiRequestContext(context, QUARKUS_REST_SERVLET_KEY);
     }
 
     static void fireSecurityIdentity(SecurityIdentity identity) {
@@ -149,6 +161,7 @@ public class ServletRequestContext extends ResteasyReactiveRequestContext
         return Arc.container().beanManager().getEvent().select(SecurityIdentity.class);
     }
 
+    @Override
     protected SecurityContext createSecurityContext() {
         return new ResteasyReactiveSecurityContext(context);
     }
@@ -185,8 +198,8 @@ public class ServletRequestContext extends ResteasyReactiveRequestContext
         Enumeration<String> headerNames = request.getHeaderNames();
         while (headerNames.hasMoreElements()) {
             String name = headerNames.nextElement();
-            for (String v : new EnumerationIterable<>(request.getHeaders(name))) {
-                ret.add(new MapEntry<>(name, v));
+            for (Iterator<String> headers = request.getHeaders(name).asIterator(); headers.hasNext();) {
+                ret.add(new MapEntry<>(name, headers.next()));
             }
         }
         return ret;
@@ -240,8 +253,16 @@ public class ServletRequestContext extends ResteasyReactiveRequestContext
     }
 
     @Override
-    public String getRequestHost() {
-        return context.request().authority().toString();
+    public String getRequestHostAndPort() {
+        HostAndPort authority = context.request().authority();
+        if (authority == null) {
+            return null;
+        }
+        if (authority.port() >= 0) {
+            return authority.host() + ':' + authority.port();
+        } else {
+            return authority.host();
+        }
     }
 
     @Override
@@ -272,7 +293,7 @@ public class ServletRequestContext extends ResteasyReactiveRequestContext
      * {@link Map<String, List<String>>}, where the keys are parameter names
      * and the values are lists of parameter values. This allows parameters
      * to be extracted from the URL without knowing their names in advance.
-     *
+     * <p>
      * The method is used by {@link ParameterExtractor}, which works with characteristics
      * such as parameter name, single/multiple values, and encoding. Since it's
      * not always possible to distinguish between {@link Map} and {@link MultivaluedMap},
@@ -463,7 +484,7 @@ public class ServletRequestContext extends ResteasyReactiveRequestContext
     @Override
     public void removeResponseHeader(String name) {
         // Servlet API does not support this functionality
-        throw new UnsupportedOperationException();
+        log.debugf("Cannot remove header '%s' because the Servlet API does not support removing HTTP response headers");
     }
 
     @Override
@@ -722,5 +743,10 @@ public class ServletRequestContext extends ResteasyReactiveRequestContext
             }
         });
         return this;
+    }
+
+    @Override
+    public void reset() {
+        context.response().reset();
     }
 }

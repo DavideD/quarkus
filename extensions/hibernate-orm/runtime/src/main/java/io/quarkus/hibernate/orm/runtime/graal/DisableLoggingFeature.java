@@ -13,11 +13,11 @@ import org.graalvm.nativeimage.hosted.Feature;
 public class DisableLoggingFeature implements Feature {
 
     private static final String[] CATEGORIES = {
-            "org.hibernate.Version",
-            "org.hibernate.annotations.common.Version",
-            "SQL dialect",
-            "org.hibernate.cfg.Environment",
-            "org.hibernate.orm.connections.pooling"
+            "org.hibernate.orm.core",
+            "org.hibernate.statistics",
+            "org.hibernate.orm.jpa",
+            "org.hibernate.orm.connections.pooling",
+            "org.hibernate.spatial.integration.SpatialService",
     };
 
     private final Map<String, Level> categoryMap = new HashMap<>(CATEGORIES.length);

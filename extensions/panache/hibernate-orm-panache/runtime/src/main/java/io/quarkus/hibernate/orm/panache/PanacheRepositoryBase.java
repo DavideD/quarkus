@@ -88,7 +88,6 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @see #isPersistent(Object)
      * @see #delete(String, Object...)
      * @see #delete(String, Map)
-     * @see #delete(String, Parameters)
      * @see #deleteAll()
      */
     default void delete(Entity entity) {
@@ -124,7 +123,7 @@ public interface PanacheRepositoryBase<Entity, Id> {
      */
     @GenerateBridge(targetReturnTypeErased = true)
     default Entity findById(Id id) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -136,7 +135,7 @@ public interface PanacheRepositoryBase<Entity, Id> {
      */
     @GenerateBridge(targetReturnTypeErased = true)
     default Entity findById(Id id, LockModeType lockModeType) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -147,7 +146,7 @@ public interface PanacheRepositoryBase<Entity, Id> {
      */
     @GenerateBridge
     default Optional<Entity> findByIdOptional(Id id) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -158,6 +157,18 @@ public interface PanacheRepositoryBase<Entity, Id> {
      */
     @GenerateBridge
     default Optional<Entity> findByIdOptional(Id id, LockModeType lockModeType) {
+        throw implementationInjectionMissing();
+    }
+
+    /**
+     * Find entities of this type by their IDs.
+     *
+     * @param ids the IDs of the entities to find.
+     * @return a list containing the entities found, with null elements representing missing entities, with the list ordered by
+     *         the positions of their ids in the given list of identifiers.
+     */
+    @GenerateBridge
+    default <T extends PanacheEntityBase> List<T> findByIds(List<?> ids) {
         throw INSTANCE.implementationInjectionMissing();
     }
 
@@ -169,13 +180,12 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @return a new {@link PanacheQuery} instance for the given query
      * @see #find(String, Sort, Object...)
      * @see #find(String, Map)
-     * @see #find(String, Parameters)
      * @see #list(String, Object...)
      * @see #stream(String, Object...)
      */
     @GenerateBridge
     default PanacheQuery<Entity> find(String query, Object... params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -187,13 +197,12 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @return a new {@link PanacheQuery} instance for the given query
      * @see #find(String, Object...)
      * @see #find(String, Sort, Map)
-     * @see #find(String, Sort, Parameters)
      * @see #list(String, Sort, Object...)
      * @see #stream(String, Sort, Object...)
      */
     @GenerateBridge
     default PanacheQuery<Entity> find(String query, Sort sort, Object... params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -204,13 +213,12 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @return a new {@link PanacheQuery} instance for the given query
      * @see #find(String, Sort, Map)
      * @see #find(String, Object...)
-     * @see #find(String, Parameters)
      * @see #list(String, Map)
      * @see #stream(String, Map)
      */
     @GenerateBridge
     default PanacheQuery<Entity> find(String query, Map<String, Object> params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -222,13 +230,12 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @return a new {@link PanacheQuery} instance for the given query
      * @see #find(String, Map)
      * @see #find(String, Sort, Object...)
-     * @see #find(String, Sort, Parameters)
      * @see #list(String, Sort, Map)
      * @see #stream(String, Sort, Map)
      */
     @GenerateBridge
     default PanacheQuery<Entity> find(String query, Sort sort, Map<String, Object> params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -237,15 +244,13 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @param query a {@link io.quarkus.hibernate.orm.panache query string}
      * @param params {@link Parameters} of named parameters
      * @return a new {@link PanacheQuery} instance for the given query
-     * @see #find(String, Sort, Parameters)
      * @see #find(String, Map)
-     * @see #find(String, Parameters)
-     * @see #list(String, Parameters)
-     * @see #stream(String, Parameters)
+     * @deprecated Use {@link #find(String, Map)} with {@link Map#of()}
      */
+    @Deprecated(since = "3.34")
     @GenerateBridge
     default PanacheQuery<Entity> find(String query, Parameters params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -255,15 +260,13 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @param sort the sort strategy to use
      * @param params {@link Parameters} of indexed parameters
      * @return a new {@link PanacheQuery} instance for the given query
-     * @see #find(String, Parameters)
      * @see #find(String, Sort, Map)
-     * @see #find(String, Sort, Parameters)
-     * @see #list(String, Sort, Parameters)
-     * @see #stream(String, Sort, Parameters)
+     * @deprecated Use {@link #find(String, Sort, Map)} with {@link Map#of()}
      */
+    @Deprecated(since = "3.34")
     @GenerateBridge
     default PanacheQuery<Entity> find(String query, Sort sort, Parameters params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -276,7 +279,7 @@ public interface PanacheRepositoryBase<Entity, Id> {
      */
     @GenerateBridge
     default PanacheQuery<Entity> findAll() {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -290,7 +293,7 @@ public interface PanacheRepositoryBase<Entity, Id> {
      */
     @GenerateBridge
     default PanacheQuery<Entity> findAll(Sort sort) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -302,13 +305,12 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @return a {@link List} containing all results, without paging
      * @see #list(String, Sort, Object...)
      * @see #list(String, Map)
-     * @see #list(String, Parameters)
      * @see #find(String, Object...)
      * @see #stream(String, Object...)
      */
     @GenerateBridge
     default List<Entity> list(String query, Object... params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -321,13 +323,12 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @return a {@link List} containing all results, without paging
      * @see #list(String, Object...)
      * @see #list(String, Sort, Map)
-     * @see #list(String, Sort, Parameters)
      * @see #find(String, Sort, Object...)
      * @see #stream(String, Sort, Object...)
      */
     @GenerateBridge
     default List<Entity> list(String query, Sort sort, Object... params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -339,13 +340,12 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @return a {@link List} containing all results, without paging
      * @see #list(String, Sort, Map)
      * @see #list(String, Object...)
-     * @see #list(String, Parameters)
      * @see #find(String, Map)
      * @see #stream(String, Map)
      */
     @GenerateBridge
     default List<Entity> list(String query, Map<String, Object> params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -358,13 +358,12 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @return a {@link List} containing all results, without paging
      * @see #list(String, Map)
      * @see #list(String, Sort, Object...)
-     * @see #list(String, Sort, Parameters)
      * @see #find(String, Sort, Map)
      * @see #stream(String, Sort, Map)
      */
     @GenerateBridge
     default List<Entity> list(String query, Sort sort, Map<String, Object> params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -374,15 +373,14 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @param query a {@link io.quarkus.hibernate.orm.panache query string}
      * @param params {@link Parameters} of named parameters
      * @return a {@link List} containing all results, without paging
-     * @see #list(String, Sort, Parameters)
      * @see #list(String, Object...)
      * @see #list(String, Map)
-     * @see #find(String, Parameters)
-     * @see #stream(String, Parameters)
+     * @deprecated Use {@link #list(String, Map)} with {@link Map#of()}
      */
+    @Deprecated(since = "3.34")
     @GenerateBridge
     default List<Entity> list(String query, Parameters params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -393,15 +391,14 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @param sort the sort strategy to use
      * @param params {@link Parameters} of indexed parameters
      * @return a {@link List} containing all results, without paging
-     * @see #list(String, Parameters)
      * @see #list(String, Sort, Object...)
      * @see #list(String, Sort, Map)
-     * @see #find(String, Sort, Parameters)
-     * @see #stream(String, Sort, Parameters)
+     * @deprecated Use {@link #list(String, Sort, Map)} with {@link Map#of()}
      */
+    @Deprecated(since = "3.34")
     @GenerateBridge
     default List<Entity> list(String query, Sort sort, Parameters params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -415,7 +412,7 @@ public interface PanacheRepositoryBase<Entity, Id> {
      */
     @GenerateBridge
     default List<Entity> listAll() {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -430,7 +427,7 @@ public interface PanacheRepositoryBase<Entity, Id> {
      */
     @GenerateBridge
     default List<Entity> listAll(Sort sort) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -444,13 +441,12 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @return a {@link Stream} containing all results, without paging
      * @see #stream(String, Sort, Object...)
      * @see #stream(String, Map)
-     * @see #stream(String, Parameters)
      * @see #find(String, Object...)
      * @see #list(String, Object...)
      */
     @GenerateBridge
     default Stream<Entity> stream(String query, Object... params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -465,13 +461,12 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @return a {@link Stream} containing all results, without paging
      * @see #stream(String, Object...)
      * @see #stream(String, Sort, Map)
-     * @see #stream(String, Sort, Parameters)
      * @see #find(String, Sort, Object...)
      * @see #list(String, Sort, Object...)
      */
     @GenerateBridge
     default Stream<Entity> stream(String query, Sort sort, Object... params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -485,13 +480,12 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @return a {@link Stream} containing all results, without paging
      * @see #stream(String, Sort, Map)
      * @see #stream(String, Object...)
-     * @see #stream(String, Parameters)
      * @see #find(String, Map)
      * @see #list(String, Map)
      */
     @GenerateBridge
     default Stream<Entity> stream(String query, Map<String, Object> params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -506,13 +500,12 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @return a {@link Stream} containing all results, without paging
      * @see #stream(String, Map)
      * @see #stream(String, Sort, Object...)
-     * @see #stream(String, Sort, Parameters)
      * @see #find(String, Sort, Map)
      * @see #list(String, Sort, Map)
      */
     @GenerateBridge
     default Stream<Entity> stream(String query, Sort sort, Map<String, Object> params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -524,15 +517,14 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @param query a {@link io.quarkus.hibernate.orm.panache query string}
      * @param params {@link Parameters} of named parameters
      * @return a {@link Stream} containing all results, without paging
-     * @see #stream(String, Sort, Parameters)
      * @see #stream(String, Object...)
      * @see #stream(String, Map)
-     * @see #find(String, Parameters)
-     * @see #list(String, Parameters)
+     * @deprecated Use {@link #stream(String, Map)} with {@link Map#of()}
      */
+    @Deprecated(since = "3.34")
     @GenerateBridge
     default Stream<Entity> stream(String query, Parameters params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -545,15 +537,14 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @param sort the sort strategy to use
      * @param params {@link Parameters} of indexed parameters
      * @return a {@link Stream} containing all results, without paging
-     * @see #stream(String, Parameters)
      * @see #stream(String, Sort, Object...)
      * @see #stream(String, Sort, Map)
-     * @see #find(String, Sort, Parameters)
-     * @see #list(String, Sort, Parameters)
+     * @deprecated Use {@link #stream(String, Sort, Map)} with {@link Map#of()}
      */
+    @Deprecated(since = "3.34")
     @GenerateBridge
     default Stream<Entity> stream(String query, Sort sort, Parameters params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -569,7 +560,7 @@ public interface PanacheRepositoryBase<Entity, Id> {
      */
     @GenerateBridge
     default Stream<Entity> streamAll(Sort sort) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -585,7 +576,7 @@ public interface PanacheRepositoryBase<Entity, Id> {
      */
     @GenerateBridge
     default Stream<Entity> streamAll() {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -594,11 +585,10 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @return the number of this type of entity in the database.
      * @see #count(String, Object...)
      * @see #count(String, Map)
-     * @see #count(String, Parameters)
      */
     @GenerateBridge
     default long count() {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -609,11 +599,10 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @return the number of entities counted.
      * @see #count()
      * @see #count(String, Map)
-     * @see #count(String, Parameters)
      */
     @GenerateBridge
     default long count(String query, Object... params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -624,11 +613,10 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @return the number of entities counted.
      * @see #count()
      * @see #count(String, Object...)
-     * @see #count(String, Parameters)
      */
     @GenerateBridge
     default long count(String query, Map<String, Object> params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -640,10 +628,12 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @see #count()
      * @see #count(String, Object...)
      * @see #count(String, Map)
+     * @deprecated Use {@link #count(String, Map)} with {@link Map#of()}
      */
+    @Deprecated(since = "3.34")
     @GenerateBridge
     default long count(String query, Parameters params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -655,11 +645,10 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @return the number of entities deleted.
      * @see #delete(String, Object...)
      * @see #delete(String, Map)
-     * @see #delete(String, Parameters)
      */
     @GenerateBridge
     default long deleteAll() {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -670,7 +659,7 @@ public interface PanacheRepositoryBase<Entity, Id> {
      */
     @GenerateBridge
     default boolean deleteById(Id id) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -684,11 +673,10 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @return the number of entities deleted.
      * @see #deleteAll()
      * @see #delete(String, Map)
-     * @see #delete(String, Parameters)
      */
     @GenerateBridge
     default long delete(String query, Object... params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -702,11 +690,10 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @return the number of entities deleted.
      * @see #deleteAll()
      * @see #delete(String, Object...)
-     * @see #delete(String, Parameters)
      */
     @GenerateBridge
     default long delete(String query, Map<String, Object> params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -721,10 +708,12 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @see #deleteAll()
      * @see #delete(String, Object...)
      * @see #delete(String, Map)
+     * @deprecated Use {@link #delete(String, Map)} with {@link Map#of()}
      */
+    @Deprecated(since = "3.34")
     @GenerateBridge
     default long delete(String query, Parameters params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -770,11 +759,10 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @param params optional sequence of indexed parameters
      * @return the number of entities updated.
      * @see #update(String, Map)
-     * @see #update(String, Parameters)
      */
     @GenerateBridge
     default int update(String query, Object... params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -784,11 +772,10 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @param params {@link Map} of named parameters
      * @return the number of entities updated.
      * @see #update(String, Object...)
-     * @see #update(String, Parameters)
      */
     @GenerateBridge
     default int update(String query, Map<String, Object> params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 
     /**
@@ -799,9 +786,11 @@ public interface PanacheRepositoryBase<Entity, Id> {
      * @return the number of entities updated.
      * @see #update(String, Object...)
      * @see #update(String, Map)
+     * @deprecated Use {@link #update(String, Map)} with {@link Map#of()}
      */
+    @Deprecated(since = "3.34")
     @GenerateBridge
     default int update(String query, Parameters params) {
-        throw INSTANCE.implementationInjectionMissing();
+        throw implementationInjectionMissing();
     }
 }

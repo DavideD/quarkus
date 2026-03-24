@@ -28,6 +28,10 @@ public class CustomTenantResolver implements TenantResolver {
             return "tenant-query";
         }
 
+        if (path.contains("tenant-restore-query-keep-redirect-params")) {
+            return "tenant-restore-query-keep-redirect-params";
+        }
+
         if (path.contains("tenant-listener")) {
             return "tenant-listener";
         }
@@ -74,6 +78,15 @@ public class CustomTenantResolver implements TenantResolver {
             }
         }
 
+        if (path.endsWith("tenant-absolute-redirect") || path.endsWith("tenant-absolute-redirect/callback")) {
+            return "tenant-absolute-redirect";
+        }
+
+        if (path.endsWith("tenant-restore-path-absolute-redirect")
+                || path.endsWith("tenant-restore-path-absolute-redirect/callback")) {
+            return "tenant-restore-path-absolute-redirect";
+        }
+
         if (path.contains("tenant-xhr")) {
             return "tenant-xhr";
         }
@@ -100,6 +113,22 @@ public class CustomTenantResolver implements TenantResolver {
 
         if (path.contains("/web-app2")) {
             return "tenant-2";
+        }
+
+        if (path.contains("pushed-authorization-request/tenant-jwt")) {
+            return "par-tenant-jwt";
+        }
+
+        if (path.contains("pushed-authorization-request/disabled-par-tenant-jwt")) {
+            return "par-disabled-tenant-jwt";
+        }
+
+        if (path.contains("pushed-authorization-request/tenant-client-secret")) {
+            return "par-tenant-client-secret";
+        }
+
+        if (path.contains("pushed-authorization-request/disabled-par-tenant-client-secret")) {
+            return "disabled-par-tenant-client-secret";
         }
 
         return OidcUtils.DEFAULT_TENANT_ID;

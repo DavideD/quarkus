@@ -27,8 +27,12 @@
             <artifactId>jandex</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.smallrye</groupId>
+            <artifactId>jandex-gizmo2</artifactId>
+        </dependency>
+        <dependency>
             <groupId>io.quarkus.gizmo</groupId>
-            <artifactId>gizmo</artifactId>
+            <artifactId>gizmo2</artifactId>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -42,4 +46,14 @@
         </dependency>
     </dependencies>
 
+    <build>
+        <plugins>
+            <plugin>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>--add-opens=io.quarkus.qute/io.quarkus.qute=io.quarkus.qute.generator</argLine>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

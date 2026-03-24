@@ -5,6 +5,7 @@
   <groupId>org.acme</groupId>
   <artifactId>acme</artifactId>
   <version>1.0-SNAPSHOT</version>
+  <packaging>quarkus</packaging>
   <properties>
     <quarkus.platform.group-id>io.quarkus</quarkus.platform.group-id>
     <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
@@ -46,7 +47,7 @@
     </dependency>
     <dependency>
       <groupId>io.quarkus</groupId>
-      <artifactId>quarkus-junit5</artifactId>
+      <artifactId>quarkus-junit</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>
@@ -64,7 +65,7 @@
 		  <annotationProcessorPaths>
 		    <path>
               <groupId>org.hibernate.orm</groupId>
-              <artifactId>hibernate-jpamodelgen</artifactId>
+              <artifactId>hibernate-processor</artifactId>
 		    </path>
 		    <path>
               <groupId>com.querydsl</groupId>
@@ -79,15 +80,7 @@
         <groupId>io.quarkus</groupId>
         <artifactId>quarkus-maven-plugin</artifactId>
         <version>\${quarkus-plugin.version}</version>
-        <executions>
-          <execution>
-            <goals>
-              <goal>generate-code</goal>
-              <goal>generate-code-tests</goal>
-              <goal>build</goal>
-            </goals>
-          </execution>
-        </executions>
+        <extensions>true</extensions>
       </plugin>
     </plugins>
   </build>

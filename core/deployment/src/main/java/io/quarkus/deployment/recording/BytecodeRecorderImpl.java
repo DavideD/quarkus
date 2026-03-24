@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -98,6 +99,8 @@ import io.smallrye.common.constraint.Assert;
  * - Objects with a constructor annotated with @RecordableConstructor with parameter names that match field names
  * - Any arbitrary object via the {@link #registerSubstitution(Class, Class, Class)} mechanism
  * - arrays, lists and maps of the above
+ * <p>
+ * We instantiate one instance of this class per recording build step method.
  */
 public class BytecodeRecorderImpl implements RecorderContext {
 
@@ -105,10 +108,17 @@ public class BytecodeRecorderImpl implements RecorderContext {
     private static final Class<?> SINGLETON_SET_CLASS = Collections.singleton(1).getClass();
     private static final Class<?> SINGLETON_MAP_CLASS = Collections.singletonMap(1, 1).getClass();
 
+    // Global counter for proxy class name suffixes. These are build time artifacts
+    // that don't affect the generated output bytecode, so non-deterministic ordering is fine.
     private static final AtomicInteger COUNT = new AtomicInteger();
     private static final String BASE_PACKAGE = "io.quarkus.runner.recorded.";
 
-    private static final String PROXY_KEY = "proxykey";
+    private static final String PROXY_KEY = "proxykey:";
+    // Per-instance counter for deterministic proxy keys. Since each BytecodeRecorderImpl
+    // corresponds to a single build step method running on a single thread, the sequence
+    // of increments within an instance is deterministic. Combined with the unique className,
+    // this produces globally unique and reproducible proxy keys.
+    private final AtomicInteger proxyKeyCount = new AtomicInteger();
 
     private static final MethodDescriptor COLLECTION_ADD = ofMethod(Collection.class, "add", boolean.class, Object.class);
     private static final MethodDescriptor MAP_PUT = ofMethod(Map.class, "put", Object.class, Object.class, Object.class);
@@ -417,7 +427,12 @@ public class BytecodeRecorderImpl implements RecorderContext {
             returnValueProxy.put(returnType, proxyFactory = new ProxyFactory<>(proxyConfiguration));
         }
 
-        String key = PROXY_KEY + COUNT.incrementAndGet();
+        // we will generate classes using className e.g. io.quarkus.runner.recorded.FooProcessor$buildStepMethod12345
+        // the simple class name makes for a good identifier e.g. FooProcessor$buildStepMethod12345
+        // as long as we record the method calls in order, we will have a stable ordering
+        int lastDot = className.lastIndexOf('.');
+        String simpleClassName = lastDot >= 0 ? className.substring(lastDot + 1) : className;
+        String key = PROXY_KEY + simpleClassName + ":" + proxyKeyCount.incrementAndGet();
         Object proxyInstance = proxyFactory.newInstance(new ReturnValueProxyInvocationHandler(key, returnType, staticInit));
         return new ProxyInstance(proxyInstance, key);
     }
@@ -493,7 +508,8 @@ public class BytecodeRecorderImpl implements RecorderContext {
                 }
             }
         }
-        for (var e : existingRecorderValues.entrySet()) {
+        for (var e : existingRecorderValues.entrySet().stream()
+                .sorted(Comparator.comparing(re -> re.getKey().getName())).toList()) {
             e.getValue().preWrite(parameterMap);
         }
 
@@ -510,7 +526,8 @@ public class BytecodeRecorderImpl implements RecorderContext {
         //allocates a new method
         SplitMethodContext context = new SplitMethodContext(array, mainMethod, file);
 
-        for (var i : this.existingRecorderValues.values()) {
+        for (var i : this.existingRecorderValues.values().stream()
+                .sorted(Comparator.comparing(newRecorder -> newRecorder.theClass.getName())).toList()) {
             i.prepare(context);
         }
         //now we invoke the actual method call
@@ -1417,7 +1434,12 @@ public class BytecodeRecorderImpl implements RecorderContext {
                     } catch (Exception e) {
                         throw new RuntimeException(
                                 "Couldn't load object of type " + i.propertyType.getName() + " for property '" + i.getName()
-                                        + "' on object '" + param + "'.");
+                                        + "' on object '" + param
+                                        + "'. Please, check the Bytecode Recording documentation " +
+                                        "https://quarkus.io/guides/writing-extensions#bytecode-recording to be sure this type "
+                                        +
+                                        "is supported to be passed to @Record classes.",
+                                e);
                     }
                     if (ctorParamIndex != null) {
                         nonDefaultConstructorHandles[ctorParamIndex] = val;
@@ -1459,8 +1481,10 @@ public class BytecodeRecorderImpl implements RecorderContext {
             }
         }
 
-        //now handle accessible fields
-        for (Field field : param.getClass().getFields()) {
+        //now handle accessible fields, in a deterministic order
+        Field[] fields = param.getClass().getFields();
+        Arrays.sort(fields, Comparator.comparing(Field::getName));
+        for (Field field : fields) {
             // check if the field is ignored
             if (ignoreField(field)) {
                 continue;

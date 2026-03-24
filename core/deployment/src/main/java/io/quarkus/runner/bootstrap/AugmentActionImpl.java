@@ -3,7 +3,6 @@ package io.quarkus.runner.bootstrap;
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -13,6 +12,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -20,6 +20,7 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import org.jboss.logging.Logger;
 
@@ -36,6 +37,7 @@ import io.quarkus.bootstrap.classloading.ClassLoaderEventListener;
 import io.quarkus.bootstrap.classloading.QuarkusClassLoader;
 import io.quarkus.bootstrap.util.PropertyUtils;
 import io.quarkus.builder.BuildChainBuilder;
+import io.quarkus.builder.BuildExecutionBuilder;
 import io.quarkus.builder.BuildResult;
 import io.quarkus.builder.item.BuildItem;
 import io.quarkus.deployment.QuarkusAugmentor;
@@ -46,11 +48,13 @@ import io.quarkus.deployment.builditem.GeneratedResourceBuildItem;
 import io.quarkus.deployment.builditem.LiveReloadBuildItem;
 import io.quarkus.deployment.builditem.MainClassBuildItem;
 import io.quarkus.deployment.builditem.TransformedClassesBuildItem;
+import io.quarkus.deployment.jvm.ResolvedJVMRequirements;
 import io.quarkus.deployment.pkg.builditem.ArtifactResultBuildItem;
 import io.quarkus.deployment.pkg.builditem.BuildSystemTargetBuildItem;
 import io.quarkus.deployment.pkg.builditem.DeploymentResultBuildItem;
 import io.quarkus.deployment.pkg.builditem.JarBuildItem;
 import io.quarkus.deployment.pkg.builditem.NativeImageBuildItem;
+import io.quarkus.deployment.pkg.steps.NativeImageBuildStep;
 import io.quarkus.deployment.sbom.SbomBuildItem;
 import io.quarkus.dev.spi.DevModeType;
 import io.quarkus.runtime.LaunchMode;
@@ -65,13 +69,14 @@ public class AugmentActionImpl implements AugmentAction {
     private static final Class[] NON_NORMAL_MODE_OUTPUTS = { GeneratedClassBuildItem.class,
             GeneratedResourceBuildItem.class, ApplicationClassNameBuildItem.class,
             MainClassBuildItem.class, GeneratedFileSystemResourceHandledBuildItem.class,
-            TransformedClassesBuildItem.class };
+            TransformedClassesBuildItem.class, ResolvedJVMRequirements.class };
 
     private final QuarkusBootstrap quarkusBootstrap;
     private final CuratedApplication curatedApplication;
     private final LaunchMode launchMode;
     private final DevModeType devModeType;
     private final List<Consumer<BuildChainBuilder>> chainCustomizers;
+    private final List<Consumer<BuildExecutionBuilder>> executionCustomizers;
     private final List<ClassLoaderEventListener> classLoadListeners;
 
     /**
@@ -97,9 +102,17 @@ public class AugmentActionImpl implements AugmentAction {
 
     public AugmentActionImpl(CuratedApplication curatedApplication, List<Consumer<BuildChainBuilder>> chainCustomizers,
             List<ClassLoaderEventListener> classLoadListeners) {
+        this(curatedApplication, chainCustomizers, Collections.emptyList(), classLoadListeners);
+    }
+
+    public AugmentActionImpl(CuratedApplication curatedApplication,
+            List<Consumer<BuildChainBuilder>> chainCustomizers,
+            List<Consumer<BuildExecutionBuilder>> executionCustomizers,
+            List<ClassLoaderEventListener> classLoadListeners) {
         this.quarkusBootstrap = curatedApplication.getQuarkusBootstrap();
         this.curatedApplication = curatedApplication;
         this.chainCustomizers = chainCustomizers;
+        this.executionCustomizers = executionCustomizers;
         this.classLoadListeners = classLoadListeners;
         LaunchMode launchMode;
         DevModeType devModeType;
@@ -110,6 +123,10 @@ public class AugmentActionImpl implements AugmentAction {
                 break;
             case PROD:
                 launchMode = LaunchMode.NORMAL;
+                devModeType = null;
+                break;
+            case RUN:
+                launchMode = LaunchMode.RUN;
                 devModeType = null;
                 break;
             case TEST:
@@ -226,7 +243,7 @@ public class AugmentActionImpl implements AugmentAction {
                         }
                         File sourceFile = new File(debugPath, i.getName() + ".zig");
                         sourceFile.getParentFile().mkdirs();
-                        Files.write(sourceFile.toPath(), i.getSource().getBytes(StandardCharsets.UTF_8),
+                        Files.writeString(sourceFile.toPath(), i.getSource(),
                                 StandardOpenOption.CREATE);
                         log.infof("Wrote source: %s", sourceFile.getAbsolutePath());
                     } else {
@@ -241,27 +258,33 @@ public class AugmentActionImpl implements AugmentAction {
 
     private void writeArtifactResultMetadataFile(BuildSystemTargetBuildItem outputTargetBuildItem,
             List<ArtifactResultBuildItem> artifactResultBuildItems) {
-        ArtifactResultBuildItem lastArtifact = artifactResultBuildItems.get(artifactResultBuildItems.size() - 1);
+        ArtifactResultBuildItem effectiveArtifact = effectiveArtifact(artifactResultBuildItems);
         Path quarkusArtifactMetadataPath = outputTargetBuildItem.getOutputDirectory().resolve("quarkus-artifact.properties");
         Properties properties = new Properties();
-        properties.put("type", lastArtifact.getType());
-        if (lastArtifact.getPath() != null) {
-            properties.put("path", artifactPathForResultMetadata(outputTargetBuildItem, lastArtifact));
+        properties.put("type", effectiveArtifact.getType());
+        if (effectiveArtifact.getPath() != null) {
+            properties.put("path", artifactPathForResultMetadata(outputTargetBuildItem, effectiveArtifact));
         } else {
-            if (lastArtifact.getType().endsWith("-container")) {
-                // in this case we write "path" as to contain the path to the artifact from which the container was built
-                try {
-                    ArtifactResultBuildItem baseArtifact = artifactResultBuildItems.get(artifactResultBuildItems.size() - 2);
-                    if (baseArtifact.getPath() != null) {
-                        properties.put("path", artifactPathForResultMetadata(outputTargetBuildItem, baseArtifact));
+            if (effectiveArtifact.getType().endsWith("-container")) {
+                List<PrioritizedArtifactResultBuildItem> list = toSortedPrioritizedArtifactResultStream(
+                        artifactResultBuildItems).toList();
+                boolean pathSet = false;
+                if (list.size() >= 2) {
+                    for (int i = list.size() - 1; i >= 0; i--) {
+                        ArtifactResultBuildItem baseArtifact = list.get(i).bi();
+                        if (baseArtifact.getPath() != null) {
+                            properties.put("path", artifactPathForResultMetadata(outputTargetBuildItem, baseArtifact));
+                            pathSet = true;
+                            break;
+                        }
                     }
-                } catch (IndexOutOfBoundsException e) {
-                    // this should never happen really as a container is always built from some other artifact
-                    log.debug(e);
+                }
+                if (!pathSet) {
+                    log.warn("Unable to set `path` on artifact metadata. This can cause problems for integration tests");
                 }
             }
         }
-        Map<String, String> metadata = lastArtifact.getMetadata();
+        Map<String, String> metadata = effectiveArtifact.getMetadata();
         if (metadata != null) {
             for (Map.Entry<String, String> entry : metadata.entrySet()) {
                 properties.put("metadata." + entry.getKey(), entry.getValue());
@@ -271,6 +294,49 @@ public class AugmentActionImpl implements AugmentAction {
             PropertyUtils.store(properties, quarkusArtifactMetadataPath, "Generated by Quarkus - Do not edit manually");
         } catch (IOException e) {
             log.debug("Unable to write artifact result metadata file", e);
+        }
+    }
+
+    private ArtifactResultBuildItem effectiveArtifact(List<ArtifactResultBuildItem> artifactResultBuildItems) {
+
+        Optional<PrioritizedArtifactResultBuildItem> first = toSortedPrioritizedArtifactResultStream(artifactResultBuildItems)
+                .filter(bi -> bi.getPriority() > 0).findFirst();
+
+        if (first.isEmpty()) {
+            throw new IllegalStateException("Unable to locate effective artifact");
+        }
+
+        return first.get().bi();
+    }
+
+    private Stream<PrioritizedArtifactResultBuildItem> toSortedPrioritizedArtifactResultStream(
+            List<ArtifactResultBuildItem> artifactResultBuildItems) {
+        return artifactResultBuildItems.stream()
+                .map(PrioritizedArtifactResultBuildItem::new)
+                .sorted(((o1, o2) -> Integer.compare(o2.getPriority(), o1.getPriority())));
+    }
+
+    private record PrioritizedArtifactResultBuildItem(ArtifactResultBuildItem bi) {
+
+        public int getPriority() {
+            String type = bi.getType();
+            // max priority
+            if (type.endsWith("container")) {
+                return 1000;
+            }
+
+            // native takes priority over jars
+            if (type.equals(NativeImageBuildStep.ARTIFACT_RESULT_TYPE)) {
+                return 100;
+            }
+
+            // least priority
+            if (type.equals("appCDS")) {
+                return 0;
+            }
+
+            // default
+            return 10;
         }
     }
 
@@ -359,6 +425,9 @@ public class AugmentActionImpl implements AugmentAction {
             builder.excludeFromIndexing(quarkusBootstrap.getExcludeFromClassPath());
             for (Consumer<BuildChainBuilder> i : chainCustomizers) {
                 builder.addBuildChainCustomizer(i);
+            }
+            for (Consumer<BuildExecutionBuilder> i : executionCustomizers) {
+                builder.addBuildExecutionCustomizer(i);
             }
             for (Class<? extends BuildItem> i : finalOutputs) {
                 builder.addFinal(i);

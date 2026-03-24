@@ -10,7 +10,8 @@ public final class DevServicesDatasourceProviderBuildItem extends MultiBuildItem
     private final String database;
     private final DevServicesDatasourceProvider devDBProvider;
 
-    public DevServicesDatasourceProviderBuildItem(String database, DevServicesDatasourceProvider devDBProvider) {
+    public DevServicesDatasourceProviderBuildItem(String database,
+            DevServicesDatasourceProvider devDBProvider) {
         this.database = database;
         this.devDBProvider = devDBProvider;
     }
@@ -22,4 +23,5 @@ public final class DevServicesDatasourceProviderBuildItem extends MultiBuildItem
     public DevServicesDatasourceProvider getDevServicesProvider() {
         return devDBProvider;
     }
+
 }

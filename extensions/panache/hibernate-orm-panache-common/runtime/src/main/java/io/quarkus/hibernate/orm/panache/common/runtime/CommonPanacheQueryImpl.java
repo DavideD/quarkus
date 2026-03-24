@@ -10,17 +10,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import jakarta.persistence.LockModeType;
 
 import org.hibernate.Filter;
-import org.hibernate.Session;
+import org.hibernate.SharedSessionContract;
 import org.hibernate.query.SelectionQuery;
 import org.hibernate.query.spi.SqmQuery;
 
 import io.quarkus.hibernate.orm.panache.common.NestedProjectedClass;
+import io.quarkus.hibernate.orm.panache.common.ProjectedConstructor;
 import io.quarkus.hibernate.orm.panache.common.ProjectedFieldName;
 import io.quarkus.panache.common.Page;
 import io.quarkus.panache.common.Range;
@@ -28,6 +30,21 @@ import io.quarkus.panache.common.exception.PanacheQueryException;
 import io.quarkus.panache.hibernate.common.runtime.PanacheJpaUtil;
 
 public class CommonPanacheQueryImpl<Entity> {
+
+    /*
+     * We use this complex caching mechanism to avoid recalculating projection queries
+     * for recurring classes. In theory this gets stored in the Class object itself so
+     * it is GCed when the class is disposed, so it auto-cleans itself. The extra
+     * AtomicReference is as per Franz's advice, for a reason I did not understand.
+     * We did verify that this improves allocation and cpu a lot, as it avoids
+     * repeated usage of reflection and string building.
+     */
+    private final static ClassValue<AtomicReference<String>> ProjectionQueryCache = new ClassValue<>() {
+        @Override
+        protected AtomicReference<String> computeValue(Class<?> type) {
+            return new AtomicReference<>();
+        }
+    };
 
     private interface NonThrowingCloseable extends AutoCloseable {
         @Override
@@ -56,7 +73,7 @@ public class CommonPanacheQueryImpl<Entity> {
      */
     protected String customCountQueryForSpring;
     private String orderBy;
-    private Session session;
+    private SharedSessionContract session;
 
     private Page page;
     private Long count;
@@ -69,7 +86,7 @@ public class CommonPanacheQueryImpl<Entity> {
     private Map<String, Map<String, Object>> filters;
     private Class<?> projectionType;
 
-    public CommonPanacheQueryImpl(Session session, String query, String originalQuery, String orderBy,
+    public CommonPanacheQueryImpl(SharedSessionContract session, String query, String originalQuery, String orderBy,
             Object paramsArrayOrMap) {
         this.session = session;
         this.query = query;
@@ -119,18 +136,19 @@ public class CommonPanacheQueryImpl<Entity> {
         // FIXME: this assumes the query starts with "FROM " probably?
 
         // build select clause with a constructor expression
-        String selectClause = "SELECT " + getParametersFromClass(type, null);
+        AtomicReference<String> cachedProjection = ProjectionQueryCache.get(type);
+        if (cachedProjection.get() == null) {
+            cachedProjection.set("SELECT " + getParametersFromClass(type, null));
+        }
+        String selectClause = cachedProjection.get();
         // I think projections do not change the result count, so we can keep the custom count query
         return new CommonPanacheQueryImpl<>(this, selectClause + selectQuery, customCountQueryForSpring, null);
     }
 
-    private StringBuilder getParametersFromClass(Class<?> type, String parentParameter) {
+    private static StringBuilder getParametersFromClass(Class<?> type, String parentParameter) {
         StringBuilder selectClause = new StringBuilder();
-        // We use the first constructor that we found and use the parameter names,
-        // so the projection class must have only one constructor,
-        // and the application must be built with parameter names.
-        // TODO: Maybe this should be improved some days ...
-        Constructor<?> constructor = getConstructor(type); //type.getDeclaredConstructors()[0];
+        Constructor<?> constructor = getConstructor(type);
+
         selectClause.append("new ").append(type.getName()).append(" (");
         String parametersListStr = Stream.of(constructor.getParameters())
                 .map(parameter -> getParameterName(type, parentParameter, parameter))
@@ -140,11 +158,41 @@ public class CommonPanacheQueryImpl<Entity> {
         return selectClause;
     }
 
-    private Constructor<?> getConstructor(Class<?> type) {
-        return type.getDeclaredConstructors()[0];
+    private static Constructor<?> getConstructor(Class<?> type) {
+        Constructor<?>[] typeConstructors = type.getDeclaredConstructors();
+
+        //We start to look for constructors with @ProjectedConstructor
+        for (Constructor<?> typeConstructor : typeConstructors) {
+            if (typeConstructor.isAnnotationPresent(ProjectedConstructor.class)) {
+                return typeConstructor;
+            }
+        }
+
+        //If didn't find anything early,
+        //we try to find a constructor with parameters annotated with @ProjectedFieldName
+        for (Constructor<?> typeConstructor : typeConstructors) {
+            for (Parameter parameter : typeConstructor.getParameters()) {
+                if (parameter.isAnnotationPresent(ProjectedFieldName.class)) {
+                    return typeConstructor;
+                }
+            }
+        }
+
+        //We fall back to the first constructor that has parameters
+        for (Constructor<?> typeConstructor : typeConstructors) {
+            Parameter[] parameters = typeConstructor.getParameters();
+            if (parameters.length == 0) {
+                continue;
+            }
+
+            return typeConstructor;
+        }
+
+        //If everything fails, we return the first available constructor
+        return typeConstructors[0];
     }
 
-    private String getParameterName(Class<?> parentType, String parentParameter, Parameter parameter) {
+    private static String getParameterName(Class<?> parentType, String parentParameter, Parameter parameter) {
         String parameterName;
         // Check if constructor param is annotated with ProjectedFieldName
         if (hasProjectedFieldName(parameter)) {
@@ -173,11 +221,11 @@ public class CommonPanacheQueryImpl<Entity> {
         }
     }
 
-    private boolean hasProjectedFieldName(AnnotatedElement annotatedElement) {
+    private static boolean hasProjectedFieldName(AnnotatedElement annotatedElement) {
         return annotatedElement.isAnnotationPresent(ProjectedFieldName.class);
     }
 
-    private String getNameFromProjectedFieldName(AnnotatedElement annotatedElement) {
+    private static String getNameFromProjectedFieldName(AnnotatedElement annotatedElement) {
         final String name = annotatedElement.getAnnotation(ProjectedFieldName.class).value();
         if (name.isEmpty()) {
             throw new PanacheQueryException("The annotation ProjectedFieldName must have a non-empty value.");

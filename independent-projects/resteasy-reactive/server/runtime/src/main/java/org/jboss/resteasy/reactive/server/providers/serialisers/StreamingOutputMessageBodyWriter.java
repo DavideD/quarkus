@@ -10,11 +10,13 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.MultivaluedMap;
 import jakarta.ws.rs.core.StreamingOutput;
 
+import org.jboss.resteasy.reactive.server.core.ResteasyReactiveRequestContext;
 import org.jboss.resteasy.reactive.server.spi.ResteasyReactiveResourceInfo;
 import org.jboss.resteasy.reactive.server.spi.ServerMessageBodyWriter;
 import org.jboss.resteasy.reactive.server.spi.ServerRequestContext;
 
 public class StreamingOutputMessageBodyWriter implements ServerMessageBodyWriter<StreamingOutput> {
+
     @Override
     public boolean isWriteable(Class<?> type, Type genericType, Annotation[] annotations, MediaType mediaType) {
         return doIsWriteable(type);
@@ -46,6 +48,16 @@ public class StreamingOutputMessageBodyWriter implements ServerMessageBodyWriter
     @Override
     public void writeResponse(StreamingOutput o, Type genericType, ServerRequestContext context)
             throws WebApplicationException, IOException {
-        o.write(context.getOrCreateOutputStream());
+        ResteasyReactiveRequestContext rrContext = (ResteasyReactiveRequestContext) context;
+        try {
+            o.write(context.getOrCreateOutputStream());
+        } catch (Throwable t) {
+            if (context.serverResponse().headWritten()) {
+                context.serverResponse().reset();
+                rrContext.resume(t);
+            } else {
+                throw t;
+            }
+        }
     }
 }

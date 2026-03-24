@@ -1,15 +1,16 @@
 package io.quarkus.oidc.client.registration.deployment.devservices.keycloak;
 
 import java.util.List;
-import java.util.Map;
+import java.util.Set;
 
 import org.eclipse.microprofile.config.ConfigProvider;
 import org.keycloak.common.util.MultivaluedHashMap;
 import org.keycloak.representations.idm.ComponentExportRepresentation;
 import org.keycloak.representations.idm.RealmRepresentation;
 
+import io.quarkus.deployment.Feature;
+import io.quarkus.deployment.IsDevServicesSupportedByLaunchMode;
 import io.quarkus.deployment.IsDevelopment;
-import io.quarkus.deployment.IsNormal;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.BuildSteps;
 import io.quarkus.deployment.dev.devservices.DevServicesConfig;
@@ -19,7 +20,7 @@ import io.quarkus.devservices.keycloak.KeycloakDevServicesRequiredBuildItem;
 import io.quarkus.devui.spi.page.CardPageBuildItem;
 import io.quarkus.oidc.client.registration.deployment.OidcClientRegistrationBuildStep;
 
-@BuildSteps(onlyIfNot = IsNormal.class, onlyIf = { OidcClientRegistrationBuildStep.IsEnabled.class,
+@BuildSteps(onlyIf = { IsDevServicesSupportedByLaunchMode.class, OidcClientRegistrationBuildStep.IsEnabled.class,
         DevServicesConfig.Enabled.class })
 public class KeycloakDevServiceRequiredBuildStep {
 
@@ -30,8 +31,16 @@ public class KeycloakDevServiceRequiredBuildStep {
         var devServicesConfigurator = new KeycloakDevServicesConfigurator() {
 
             @Override
-            public Map<String, String> createProperties(ConfigPropertiesContext ctx) {
-                return Map.of(OIDC_CLIENT_REG_AUTH_SERVER_URL_CONFIG_KEY, ctx.authServerInternalUrl());
+            public Set<String> getLazyConfigKeys() {
+                return Set.of(OIDC_CLIENT_REG_AUTH_SERVER_URL_CONFIG_KEY);
+            }
+
+            @Override
+            public String getLazyConfigValue(String configKey, ConfigPropertiesContext context) {
+                if (OIDC_CLIENT_REG_AUTH_SERVER_URL_CONFIG_KEY.equals(configKey)) {
+                    return context.authServerInternalUrl();
+                }
+                return "";
             }
 
             @Override
@@ -53,7 +62,8 @@ public class KeycloakDevServiceRequiredBuildStep {
             }
         };
 
-        return KeycloakDevServicesRequiredBuildItem.of(devServicesConfigurator, OIDC_CLIENT_REG_AUTH_SERVER_URL_CONFIG_KEY);
+        return KeycloakDevServicesRequiredBuildItem.of(Feature.OIDC_CLIENT_REGISTRATION, devServicesConfigurator,
+                OIDC_CLIENT_REG_AUTH_SERVER_URL_CONFIG_KEY);
     }
 
     @BuildStep(onlyIf = IsDevelopment.class)

@@ -586,7 +586,7 @@ You can begin testing by adding the following dependencies to your test project:
 </dependency>
 <dependency>
     <groupId>io.quarkus</groupId>
-    <artifactId>quarkus-junit5</artifactId>
+    <artifactId>quarkus-junit</artifactId>
     <scope>test</scope>
 </dependency>
 ----
@@ -595,7 +595,7 @@ You can begin testing by adding the following dependencies to your test project:
 .build.gradle
 ----
 testImplementation("io.rest-assured:rest-assured")
-testImplementation("io.quarkus:quarkus-junit5")
+testImplementation("io.quarkus:quarkus-junit")
 ----
 
 [[bearer-token-integration-testing-keycloak-devservices]]
@@ -603,7 +603,7 @@ testImplementation("io.quarkus:quarkus-junit5")
 
 The preferred approach for integration testing against Keycloak is xref:security-openid-connect-dev-services.adoc[Dev Services for Keycloak].
 `Dev Services for Keycloak` will start and initialize a test container.
-Then, it will create a `quarkus` realm and a `quarkus-app` client (`secret` secret) and add `alice` (`admin` and `user` roles) and `bob` (`user` role) users, where all of these properties can be customized.
+Then, it will create a `quarkus` realm and a `quarkus-app` client with `secret` as the client secret. It will also add two users: `alice` with both `admin` and `user` roles, and `bob` with the `user` role. All of these properties can be customized.
 
 First, add the following dependency, which provides a utility class `io.quarkus.test.keycloak.client.KeycloakTestClient` that you can use in tests for acquiring the access tokens:
 
@@ -626,7 +626,7 @@ testImplementation("io.quarkus:quarkus-test-keycloak-server")
 Next, prepare your `application.properties` configuration file.
 You can start with an empty `application.properties` file because `Dev Services for Keycloak` registers `quarkus.oidc.auth-server-url` and points it to the running test container, `quarkus.oidc.client-id=quarkus-app`, and `quarkus.oidc.credentials.secret=secret`.
 
-However, if you have already configured the required `quarkus-oidc` properties, then you only need to associate `quarkus.oidc.auth-server-url` with the `prod` profile for `Dev Services for Keycloak`to start a container, as shown in the following example:
+However, if you have already configured the required `quarkus-oidc` properties, then you only need to associate `quarkus.oidc.auth-server-url` with the `prod` profile for `Dev Services for Keycloak` to start a container, as shown in the following example:
 
 [source,properties]
 ----
@@ -1311,6 +1311,7 @@ Quarkus `web-app` applications always require the `quarkus.oidc.client-id` prope
 
 == Sender-constraining access tokens
 
+[[demonstrating-proof-of-possession-dpop]]
 === Demonstrating Proof of Possession (DPoP)
 
 https://datatracker.ietf.org/doc/html/rfc9449[RFC9449] describes a Demonstrating Proof of Possession (DPoP) mechanism for cryprographically binding an access token to the current client, preventing the access token loss and replay.
@@ -1330,7 +1331,8 @@ quarkus.oidc.token.authorization-scheme=dpop <1>
 
 After accepting such tokens, Quarkus will go through the full https://datatracker.ietf.org/doc/html/rfc9449#name-checking-dpop-proofs[DPoP token verification process].
 
-Support for custom DPoP nonce providers may be offered in the future.
+You can define a link:https://www.rfc-editor.org/rfc/rfc9449.html#name-resource-server-provided-no[custom DPoP nonce provider] by implementing the `io.quarkus.oidc.DPoPNonceProvider` interface as a CDI bean.
+If the DPoP proof nonce is missing or invalid, Quarkus responds with the `401 Unauthorized` status and attaches the expected nonce as the `DPoP-Nonce` header value.
 
 === Mutual TLS token binding
 
@@ -1527,6 +1529,7 @@ import io.quarkus.logging.Log;
 import io.quarkus.oidc.common.OidcEndpoint;
 import io.quarkus.oidc.common.OidcEndpoint.Type;
 import io.quarkus.oidc.common.OidcResponseFilter;
+import io.smallrye.mutiny.Uni;
 import io.quarkus.oidc.common.runtime.OidcConstants;
 import io.quarkus.oidc.runtime.OidcUtils;
 
@@ -1536,13 +1539,14 @@ import io.quarkus.oidc.runtime.OidcUtils;
 public class DiscoveryEndpointResponseFilter implements OidcResponseFilter {
 
     @Override
-    public void filter(OidcResponseContext rc) {
+    public Uni<Void> filter(OidcResponseFilterContext rc) {
         String contentType = rc.responseHeaders().get("Content-Type"); <2>
         if (contentType.equals("application/json") {
             String tenantId = rc.requestProperties().get(OidcUtils.TENANT_ID_ATTRIBUTE); <3>
             String metadata = rc.responseBody().toString(); <4>
             Log.debugf("Tenant %s OIDC metadata: %s", tenantId, metadata);
         }
+        return Uni.createFrom().voidItem();
     }
 }
 
@@ -1551,6 +1555,36 @@ public class DiscoveryEndpointResponseFilter implements OidcResponseFilter {
 <2> Check the response `Content-Type` header.
 <3> Use `OidcRequestContextProperties` request properties to get the tenant id.
 <4> Get the response data as String.
+
+[[restrict-oidc-filter-to-bearer-auth-flow]]
+=== Restricting OIDC request and response filters to bearer token flow
+
+When you have both the bearer access token and xref:security-oidc-code-flow-authentication.adoc[authorization code] flows supported by xref:security-openid-connect-multitenancy.adoc[multiple OIDC tenants] and the filters have to deal with a flow specific logic, you can instead have them restricted to the bearer token flow with the `io.quarkus.oidc.BearerTokenAuthentication` annotation and xref:security-oidc-code-flow-authentication.adoc#restrict-oidc-filter-to-code-flow[the authorization code flow with the 'io.quarkus.oidc.AuthorizationCodeFlow' annotation].
+
+For example:
+
+[source,java]
+----
+package io.quarkus.it.keycloak;
+
+import io.quarkus.arc.Unremovable;
+import io.quarkus.oidc.BearerTokenAuthentication;
+import io.quarkus.oidc.common.OidcRequestFilter;
+import io.smallrye.mutiny.Uni;
+import jakarta.enterprise.context.ApplicationScoped;
+
+@BearerTokenAuthentication
+@ApplicationScoped
+@Unremovable
+public class CustomOidcRequestFilter implements OidcRequestFilter {
+
+    @Override
+    public Uni<Void> filter(OidcRequestFilterContext requestContext) {
+        requestContext.request().putHeader("custom-header-name", "custom-header-value");
+        return Uni.createFrom().voidItem();
+    }
+}
+----
 
 == Programmatic OIDC start-up
 
@@ -1649,6 +1683,7 @@ quarkus.http.auth.proactive=false <1>
 
 If the bearer access token claim `acr` does not contain `myACR`, Quarkus returns an authentication requirements challenge indicating required `acr_values`:
 
+[source,text]
 ----
 HTTP/1.1 401 Unauthorized
 WWW-Authenticate: Bearer error="insufficient_user_authentication",
@@ -1678,10 +1713,13 @@ Or, if you need more flexibility, write a <<jose4j-validator-bearer>>:
 ----
 package io.quarkus.it.oidc;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 
 import jakarta.enterprise.context.ApplicationScoped;
 
+import org.eclipse.microprofile.jwt.Claims;
 import org.jose4j.jwt.MalformedClaimException;
 import org.jose4j.jwt.consumer.JwtContext;
 import org.jose4j.jwt.consumer.Validator;
@@ -1699,9 +1737,19 @@ public class AcrValueValidator implements Validator {
     @Override
     public String validate(JwtContext jwtContext) throws MalformedClaimException {
         var jwtClaims = jwtContext.getJwtClaims();
-        if (jwtClaims.hasClaim("acr")) {
-            var acrClaim = jwtClaims.getStringListClaimValue("acr");
-            if (acrClaim.contains("myACR") && acrClaim.contains("yourACR")) {
+        var acrClaimName = Claims.acr.name();
+
+        if (jwtClaims.hasClaim(acrClaimName)) {
+            // The claim 'acr' could be a String or a list
+            List<String> acrClaimValues;
+            if (jwtClaims.isClaimValueStringList(acrClaimName)) {
+               acrClaimValues = jwtClaims.getStringListClaimValue(acrClaimName);
+            } else if (jwtClaims.isClaimValueString(acrClaimName)) {
+               acrClaimValues = List.of(jwtClaims.getStringClaimValue(acrClaimName));
+            } else {
+                throw new MalformedClaimException("Claim '" + acrClaimName + "' is not a String or List of Strings.");
+            }
+            if (acrClaimValues.contains("myACR") && acrClaimValues.contains("yourACR")) {
                 return null;
             }
         }

@@ -18,10 +18,10 @@
 
 package io.quarkus.vertx.http.runtime.filters.accesslog;
 
+import java.io.BufferedWriter;
 import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
-import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -55,6 +55,8 @@ public class DefaultAccessLogReceiver implements AccessLogReceiver, Runnable, Cl
 
     private static final String DEFAULT_LOG_SUFFIX = "log";
 
+    private static final String DOT = ".";
+
     private final Executor logWriteExecutor;
 
     private final Deque<String> pendingMessages;
@@ -78,7 +80,7 @@ public class DefaultAccessLogReceiver implements AccessLogReceiver, Runnable, Cl
     private final String logBaseName;
     private final String logNameSuffix; // always starts with a '.' character
 
-    private Writer writer = null;
+    private BufferedWriter writer = null;
 
     private volatile boolean closed = false;
     private boolean initialRun = true;
@@ -117,13 +119,25 @@ public class DefaultAccessLogReceiver implements AccessLogReceiver, Runnable, Cl
             final String logNameSuffix, boolean rotate, LogFileHeaderGenerator fileHeader) {
         this.logWriteExecutor = logWriteExecutor;
         this.outputDirectory = outputDirectory;
-        this.logBaseName = logBaseName;
+        this.logBaseName = effectiveLogBaseName(logBaseName);
         this.rotate = rotate;
         this.fileHeaderGenerator = fileHeader;
         this.logNameSuffix = effectiveLogNameSuffix(logNameSuffix);
         this.pendingMessages = new ConcurrentLinkedDeque<>();
-        this.defaultLogFile = outputDirectory.resolve(logBaseName + this.logNameSuffix);
+        this.defaultLogFile = outputDirectory.resolve(this.logBaseName + this.logNameSuffix);
         calculateChangeOverPoint();
+    }
+
+    private String effectiveLogBaseName(String logBaseName) {
+        if (logBaseName == null) {
+            return "";
+        }
+
+        if (!logBaseName.endsWith(DOT)) {
+            return logBaseName;
+        }
+
+        return logBaseName.substring(0, logBaseName.length() - 1);
     }
 
     private static String effectiveLogNameSuffix(String logNameSuffix) {
@@ -254,14 +268,14 @@ public class DefaultAccessLogReceiver implements AccessLogReceiver, Runnable, Cl
                     String header = fileHeaderGenerator.generateHeader();
                     if (header != null) {
                         writer.write(header);
-                        writer.write("\n");
+                        writer.newLine();
                         writer.flush();
                     }
                 }
             }
             for (String message : messages) {
                 writer.write(message);
-                writer.write('\n');
+                writer.newLine();
             }
             writer.flush();
         } catch (IOException e) {
@@ -283,11 +297,11 @@ public class DefaultAccessLogReceiver implements AccessLogReceiver, Runnable, Cl
             if (!Files.exists(defaultLogFile)) {
                 return;
             }
-            Path newFile = outputDirectory.resolve(logBaseName + currentDateString + logNameSuffix);
+            Path newFile = outputDirectory.resolve(logBaseName + DOT + currentDateString + logNameSuffix);
             int count = 0;
             while (Files.exists(newFile)) {
                 ++count;
-                newFile = outputDirectory.resolve(logBaseName + currentDateString + "-" + count + logNameSuffix);
+                newFile = outputDirectory.resolve(logBaseName + DOT + currentDateString + "-" + count + logNameSuffix);
             }
             Files.move(defaultLogFile, newFile);
         } catch (IOException e) {

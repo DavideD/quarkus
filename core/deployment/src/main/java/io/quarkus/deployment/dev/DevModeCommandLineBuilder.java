@@ -7,6 +7,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.ObjectOutputStream;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
@@ -37,8 +38,7 @@ import io.quarkus.bootstrap.model.JvmOptions;
 import io.quarkus.bootstrap.model.JvmOptionsBuilder;
 import io.quarkus.deployment.util.CommandLineUtil;
 import io.quarkus.maven.dependency.ArtifactKey;
-import io.quarkus.runtime.logging.JBossVersion;
-import io.quarkus.utilities.JavaBinFinder;
+import io.smallrye.common.process.ProcessUtil;
 
 public class DevModeCommandLineBuilder {
 
@@ -131,7 +131,7 @@ public class DevModeCommandLineBuilder {
     private ExtensionDevModeJvmOptionFilter extDevModeJvmOptionFilter;
 
     protected DevModeCommandLineBuilder(String java) {
-        final String javaTool = java == null ? JavaBinFinder.findBin() : java;
+        final String javaTool = java == null ? ProcessUtil.pathOfJava().toString() : java;
         log.debugf("Using javaTool: %s", javaTool);
         args.add(javaTool);
     }
@@ -348,8 +348,6 @@ public class DevModeCommandLineBuilder {
     }
 
     public DevModeCommandLine build() throws Exception {
-        JBossVersion.disableVersionLogging();
-
         //build a class-path string for the base platform
         //this stuff does not change
         // Do not include URIs in the manifest, because some JVMs do not like that
@@ -401,8 +399,13 @@ public class DevModeCommandLineBuilder {
             jvmOptionsBuilder.add("enable-preview");
         }
 
+        //Useful for AgentBasedModulesReconfigurer; should we use -agent and load it explicitly?
+        jvmOptionsBuilder.addXxOption("EnableDynamicAgentLoading", "true");
+
         setJvmOptions();
         args.add("-Djava.util.logging.manager=org.jboss.logmanager.LogManager");
+        args.add("--add-opens=java.base/java.lang.invoke=ALL-UNNAMED");
+        args.add("--add-exports=java.base/jdk.internal.module=ALL-UNNAMED");
 
         outputDir.mkdirs();
 
@@ -559,7 +562,8 @@ public class DevModeCommandLineBuilder {
                 int tries = 0;
                 while (true) {
                     boolean isPortUsed;
-                    try (Socket socket = new Socket(getInetAddress(debugHost), port)) {
+                    try (Socket socket = new Socket()) {
+                        socket.connect(new InetSocketAddress(getInetAddress(debugHost), port), 500);
                         // we can make a connection, that means the port is in use
                         isPortUsed = true;
                         warnAboutChange = warnAboutChange || (originalPort != 0); // we only want to warn if the user had not configured a random port

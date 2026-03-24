@@ -4,11 +4,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 
-import io.quarkus.runtime.annotations.ConfigDocMapKey;
-import io.quarkus.runtime.annotations.ConfigDocSection;
-import io.quarkus.runtime.annotations.ConfigGroup;
-import io.quarkus.runtime.annotations.ConfigPhase;
-import io.quarkus.runtime.annotations.ConfigRoot;
+import io.quarkus.runtime.annotations.*;
 import io.smallrye.config.ConfigMapping;
 import io.smallrye.config.WithDefault;
 
@@ -44,11 +40,11 @@ public interface ApicurioRegistryBuildTimeConfig {
 
         /**
          * The Apicurio Registry image to use.
-         * Note that only Apicurio Registry 2.x images are supported.
-         * Specifically, the image repository must end with {@code apicurio/apicurio-registry-mem}.
+         * Note that only Apicurio Registry 3.x images are supported.
+         * Specifically, the image repository must end with {@code apicurio/apicurio-registry}.
          */
-        @WithDefault("quay.io/apicurio/apicurio-registry-mem:2.4.2.Final")
-        String imageName();
+        @ConfigDocDefault(value = "`{apicurio-registry-image}`", escape = false)
+        Optional<String> imageName();
 
         /**
          * Indicates if the Apicurio Registry instance managed by Quarkus Dev Services is shared.

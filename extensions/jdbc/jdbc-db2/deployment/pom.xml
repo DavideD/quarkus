@@ -44,7 +44,7 @@
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-junit5-internal</artifactId>
+            <artifactId>quarkus-junit-internal</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -109,26 +109,6 @@
                                 <!-- force the default, overriding the DevServices exclude -->
                                 <exclude>**/*$*</exclude>
                             </excludes>
-                        </configuration>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-        <!-- Disabled pending fix of #33104 -->
-        <profile>
-            <id>podman</id>
-            <activation>
-                <property>
-                    <name>env.IS_PODMAN</name>
-                    <value>true</value>
-                </property>
-            </activation>
-            <build>
-                <plugins>
-                    <plugin>
-                        <artifactId>maven-surefire-plugin</artifactId>
-                        <configuration>
-                            <skip>true</skip>
                         </configuration>
                     </plugin>
                 </plugins>

@@ -25,15 +25,12 @@ import jakarta.ws.rs.core.Application;
 import jakarta.ws.rs.core.MediaType;
 
 import org.eclipse.microprofile.config.ConfigProvider;
+import org.jboss.resteasy.reactive.common.core.BlockingOperationSupport;
 import org.jboss.resteasy.reactive.common.core.SingletonBeanFactory;
-import org.jboss.resteasy.reactive.common.model.ResourceContextResolver;
-import org.jboss.resteasy.reactive.common.model.ResourceExceptionMapper;
 import org.jboss.resteasy.reactive.common.util.ServerMediaType;
-import org.jboss.resteasy.reactive.server.core.BlockingOperationSupport;
 import org.jboss.resteasy.reactive.server.core.CurrentRequestManager;
 import org.jboss.resteasy.reactive.server.core.Deployment;
 import org.jboss.resteasy.reactive.server.core.DeploymentInfo;
-import org.jboss.resteasy.reactive.server.core.ExceptionMapping;
 import org.jboss.resteasy.reactive.server.core.RequestContextFactory;
 import org.jboss.resteasy.reactive.server.core.ResteasyReactiveRequestContext;
 import org.jboss.resteasy.reactive.server.core.ServerSerialisers;
@@ -41,7 +38,6 @@ import org.jboss.resteasy.reactive.server.core.startup.RuntimeDeploymentManager;
 import org.jboss.resteasy.reactive.server.handlers.RestInitialHandler;
 import org.jboss.resteasy.reactive.server.mapping.RequestMapper;
 import org.jboss.resteasy.reactive.server.mapping.RuntimeResource;
-import org.jboss.resteasy.reactive.server.model.ContextResolvers;
 import org.jboss.resteasy.reactive.server.spi.EndpointInvoker;
 import org.jboss.resteasy.reactive.server.spi.EndpointInvokerFactory;
 import org.jboss.resteasy.reactive.server.spi.ServerRestHandler;
@@ -303,17 +299,6 @@ public class ResteasyReactiveRecorder extends ResteasyReactiveCommonRecorder imp
         return applicationSupplier;
     }
 
-    @SuppressWarnings("unchecked")
-    public void registerExceptionMapper(ExceptionMapping exceptionMapping, String string,
-            ResourceExceptionMapper<Throwable> mapper) {
-        exceptionMapping.addExceptionMapper(string, mapper);
-    }
-
-    public void registerContextResolver(ContextResolvers contextResolvers, String string,
-            ResourceContextResolver resolver) {
-        contextResolvers.addContextResolver(loadClass(string), resolver);
-    }
-
     @Override
     public Supplier<EndpointInvoker> invoker(String invokerClassName) {
         return new Supplier<>() {
@@ -321,6 +306,7 @@ public class ResteasyReactiveRecorder extends ResteasyReactiveCommonRecorder imp
             public EndpointInvoker get() {
                 try {
                     Class<Object> invokerClass = loadClass(invokerClassName);
+                    ResteasyReactiveRecorder.class.getModule().addReads(invokerClass.getModule());
                     return (EndpointInvoker) LOOKUP.findConstructor(invokerClass, VOID_TYPE).invoke();
                 } catch (RuntimeException | Error e) {
                     throw e;
@@ -365,7 +351,7 @@ public class ResteasyReactiveRecorder extends ResteasyReactiveCommonRecorder imp
 
     public Handler<RoutingContext> defaultAuthFailureHandler(
             RuntimeValue<Deployment> deployment, boolean setTemplatePath) {
-        return new Handler<RoutingContext>() {
+        return new Handler<>() {
             @Override
             public void handle(RoutingContext event) {
                 if (event.get(QuarkusHttpUser.AUTH_FAILURE_HANDLER) instanceof DefaultAuthFailureHandler) {
